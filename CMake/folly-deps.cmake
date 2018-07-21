@@ -2,7 +2,7 @@ include(CheckCXXSourceCompiles)
 include(CheckIncludeFileCXX)
 include(CheckFunctionExists)
 
-find_package(Boost 1.51.0 MODULE
+find_package(Boost 1.67.0 MODULE
   COMPONENTS
     context
     chrono
