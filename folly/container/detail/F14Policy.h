@@ -25,13 +25,19 @@
 #include <folly/Unit.h>
 #include <folly/container/detail/F14Table.h>
 #include <folly/hash/Hash.h>
+#include <folly/lang/Align.h>
 #include <folly/lang/SafeAssert.h>
+#include <folly/memory/Malloc.h>
 
 #if FOLLY_F14_VECTOR_INTRINSICS_AVAILABLE
 
 namespace folly {
 namespace f14 {
 namespace detail {
+
+template <typename Ptr>
+using NonConstPtr = typename std::pointer_traits<Ptr>::template rebind<
+    std::remove_const_t<typename std::pointer_traits<Ptr>::element_type>>;
 
 template <typename KeyType, typename MappedType>
 using MapValueType = std::pair<KeyType const, MappedType>;
@@ -86,6 +92,10 @@ struct BasePolicy
   using KeyEqual = Defaulted<KeyEqualOrVoid, DefaultKeyEqual<Key>>;
   using Alloc = Defaulted<AllocOrVoid, DefaultAlloc<Value>>;
   using AllocTraits = std::allocator_traits<Alloc>;
+
+  using ByteAlloc = typename AllocTraits::template rebind_alloc<uint8_t>;
+  using ByteAllocTraits = typename std::allocator_traits<ByteAlloc>;
+  using BytePtr = typename ByteAllocTraits::pointer;
 
   //////// info about user-supplied types
 
@@ -218,6 +228,10 @@ struct BasePolicy
   std::size_t computeKeyHash(K const& key) const {
     static_assert(
         isAvalanchingHasher() == IsAvalanchingHasher<Hasher, K>::value, "");
+    static_assert(
+        !isAvalanchingHasher() ||
+            sizeof(decltype(hasher()(key))) >= sizeof(std::size_t),
+        "hasher is not avalanching if it doesn't return enough bits");
     return hasher()(key);
   }
 
@@ -264,10 +278,24 @@ struct BasePolicy
       std::size_t /*capacity*/,
       P&& /*rhs*/) {}
 
+  std::size_t alignedAllocSize(std::size_t n) const {
+    if (kRequiredVectorAlignment <= alignof(max_align_t) ||
+        std::is_same<ByteAlloc, std::allocator<uint8_t>>::value) {
+      return n;
+    } else {
+      return n + kRequiredVectorAlignment;
+    }
+  }
+
   bool beforeRehash(
       std::size_t /*size*/,
       std::size_t /*oldCapacity*/,
-      std::size_t /*newCapacity*/) {
+      std::size_t /*newCapacity*/,
+      std::size_t chunkAllocSize,
+      BytePtr& outChunkAllocation) {
+    outChunkAllocation =
+        allocateOverAligned<ByteAlloc, kRequiredVectorAlignment>(
+            ByteAlloc{alloc()}, chunkAllocSize);
     return false;
   }
 
@@ -276,17 +304,32 @@ struct BasePolicy
       bool /*success*/,
       std::size_t /*size*/,
       std::size_t /*oldCapacity*/,
-      std::size_t /*newCapacity*/) {}
+      std::size_t /*newCapacity*/,
+      BytePtr chunkAllocation,
+      std::size_t chunkAllocSize) {
+    // on success, this will be the old allocation, on failure the new one
+    if (chunkAllocation != nullptr) {
+      deallocateOverAligned<ByteAlloc, kRequiredVectorAlignment>(
+          ByteAlloc{alloc()}, chunkAllocation, chunkAllocSize);
+    }
+  }
 
-  void beforeClear(std::size_t /*size*/, std::size_t) {}
+  void beforeClear(std::size_t /*size*/, std::size_t /*capacity*/) {}
 
-  void afterClear(std::size_t /*capacity*/) {}
+  void afterClear(std::size_t /*size*/, std::size_t /*capacity*/) {}
 
-  void beforeReset(std::size_t /*size*/, std::size_t) {}
+  void beforeReset(std::size_t /*size*/, std::size_t /*capacity*/) {}
 
-  void afterReset() {}
+  void afterReset(
+      std::size_t /*size*/,
+      std::size_t /*capacity*/,
+      BytePtr chunkAllocation,
+      std::size_t chunkAllocSize) {
+    deallocateOverAligned<ByteAlloc, kRequiredVectorAlignment>(
+        ByteAlloc{alloc()}, chunkAllocation, chunkAllocSize);
+  }
 
-  void prefetchValue(Item const&) {
+  void prefetchValue(Item const&) const {
     // Subclass should disable with prefetchBeforeRehash(),
     // prefetchBeforeCopy(), and prefetchBeforeDestroy().  if they don't
     // override this method, because neither gcc nor clang can figure
@@ -418,6 +461,8 @@ class ValueContainerPolicy : public BasePolicy<
   using typename Super::Value;
 
  private:
+  using typename Super::ByteAlloc;
+
   using Super::kIsMap;
 
  public:
@@ -443,7 +488,7 @@ class ValueContainerPolicy : public BasePolicy<
 
   static constexpr bool destroyItemOnClear() {
     return !std::is_trivially_destructible<Item>::value ||
-        !folly::AllocatorHasDefaultObjectDestroy<Alloc, Item>::value;
+        !AllocatorHasDefaultObjectDestroy<Alloc, Item>::value;
   }
 
   // inherit constructors
@@ -484,7 +529,14 @@ class ValueContainerPolicy : public BasePolicy<
   void
   constructValueAtItem(std::size_t /*size*/, Item* itemAddr, Args&&... args) {
     Alloc& a = this->alloc();
-    folly::assume(itemAddr != nullptr);
+    // GCC < 6 doesn't use the fact that itemAddr came from a reference
+    // to avoid a null-check in the placement new.  folly::assume-ing it
+    // here gets rid of that branch.  The branch is very predictable,
+    // but spoils some further optimizations.  All clang versions that
+    // compile folly seem to be okay.
+    //
+    // TODO(T31574848): clean up assume-s used to optimize placement new
+    assume(itemAddr != nullptr);
     AllocTraits::construct(a, itemAddr, std::forward<Args>(args)...);
   }
 
@@ -511,7 +563,7 @@ class ValueContainerPolicy : public BasePolicy<
         // location), but it seems highly likely that it will also cause
         // the compiler to drop such assumptions that are violated due
         // to our UB const_cast in moveValue.
-        destroyItem(*folly::launder(std::addressof(src)));
+        destroyItem(*launder(std::addressof(src)));
       } else {
         destroyItem(src);
       }
@@ -525,9 +577,17 @@ class ValueContainerPolicy : public BasePolicy<
 
   template <typename V>
   void visitPolicyAllocationClasses(
+      std::size_t chunkAllocSize,
       std::size_t /*size*/,
       std::size_t /*capacity*/,
-      V&& /*visitor*/) const {}
+      V&& visitor) const {
+    if (chunkAllocSize > 0) {
+      visitor(
+          allocationBytesForOverAligned<ByteAlloc, kRequiredVectorAlignment>(
+              chunkAllocSize),
+          1);
+    }
+  }
 
   //////// F14BasicMap/Set policy
 
@@ -652,6 +712,8 @@ class NodeContainerPolicy
   using typename Super::Value;
 
  private:
+  using typename Super::ByteAlloc;
+
   using Super::kIsMap;
 
  public:
@@ -714,23 +776,26 @@ class NodeContainerPolicy
   void
   constructValueAtItem(std::size_t /*size*/, Item* itemAddr, Args&&... args) {
     Alloc& a = this->alloc();
-    folly::assume(itemAddr != nullptr);
+    // TODO(T31574848): clean up assume-s used to optimize placement new
+    assume(itemAddr != nullptr);
     new (itemAddr) Item{AllocTraits::allocate(a, 1)};
     auto p = std::addressof(**itemAddr);
-    folly::assume(p != nullptr);
+    // TODO(T31574848): clean up assume-s used to optimize placement new
+    assume(p != nullptr);
     AllocTraits::construct(a, p, std::forward<Args>(args)...);
   }
 
   void moveItemDuringRehash(Item* itemAddr, Item& src) {
     // This is basically *itemAddr = src; src = nullptr, but allowing
     // for fancy pointers.
-    folly::assume(itemAddr != nullptr);
+    // TODO(T31574848): clean up assume-s used to optimize placement new
+    assume(itemAddr != nullptr);
     new (itemAddr) Item{std::move(src)};
     src = nullptr;
     src.~Item();
   }
 
-  void prefetchValue(Item const& item) {
+  void prefetchValue(Item const& item) const {
     prefetchAddr(std::addressof(*item));
   }
 
@@ -745,10 +810,19 @@ class NodeContainerPolicy
 
   template <typename V>
   void visitPolicyAllocationClasses(
+      std::size_t chunkAllocSize,
       std::size_t size,
       std::size_t /*capacity*/,
       V&& visitor) const {
-    visitor(sizeof(Value), size);
+    if (chunkAllocSize > 0) {
+      visitor(
+          allocationBytesForOverAligned<ByteAlloc, kRequiredVectorAlignment>(
+              chunkAllocSize),
+          1);
+    }
+    if (size > 0) {
+      visitor(sizeof(Value), size);
+    }
   }
 
   //////// F14BasicMap/Set policy
@@ -870,6 +944,9 @@ class VectorContainerPolicy : public BasePolicy<
       uint32_t>;
   using typename Super::Alloc;
   using typename Super::AllocTraits;
+  using typename Super::ByteAlloc;
+  using typename Super::ByteAllocTraits;
+  using typename Super::BytePtr;
   using typename Super::Hasher;
   using typename Super::Item;
   using typename Super::ItemIter;
@@ -918,10 +995,9 @@ class VectorContainerPolicy : public BasePolicy<
 
  private:
   static constexpr bool valueIsTriviallyCopyable() {
-    return folly::AllocatorHasDefaultObjectConstruct<Alloc, Value, Value>::
-               value &&
-        folly::AllocatorHasDefaultObjectDestroy<Alloc, Value>::value &&
-        folly::is_trivially_copyable<Value>::value;
+    return AllocatorHasDefaultObjectConstruct<Alloc, Value, Value>::value &&
+        AllocatorHasDefaultObjectDestroy<Alloc, Value>::value &&
+        is_trivially_copyable<Value>::value;
   }
 
  public:
@@ -1040,15 +1116,17 @@ class VectorContainerPolicy : public BasePolicy<
   void constructValueAtItem(std::size_t size, Item* itemAddr, Args&&... args) {
     Alloc& a = this->alloc();
     *itemAddr = size;
-    AllocTraits::construct(
-        a, std::addressof(values_[size]), std::forward<Args>(args)...);
+    auto dst = std::addressof(values_[size]);
+    // TODO(T31574848): clean up assume-s used to optimize placement new
+    assume(dst != nullptr);
+    AllocTraits::construct(a, dst, std::forward<Args>(args)...);
   }
 
   void moveItemDuringRehash(Item* itemAddr, Item& src) {
     *itemAddr = src;
   }
 
-  void prefetchValue(Item const& item) {
+  void prefetchValue(Item const& item) const {
     prefetchAddr(std::addressof(values_[item]));
   }
 
@@ -1072,10 +1150,11 @@ class VectorContainerPolicy : public BasePolicy<
       std::memcpy(dst, src, n * sizeof(Value));
     } else {
       for (std::size_t i = 0; i < n; ++i, ++src, ++dst) {
-        folly::assume(dst != nullptr);
+        // TODO(T31574848): clean up assume-s used to optimize placement new
+        assume(dst != nullptr);
         AllocTraits::construct(a, dst, Super::moveValue(*src));
         if (kIsMap) {
-          AllocTraits::destroy(a, folly::launder(src));
+          AllocTraits::destroy(a, launder(src));
         } else {
           AllocTraits::destroy(a, src);
         }
@@ -1097,7 +1176,8 @@ class VectorContainerPolicy : public BasePolicy<
     } else {
       for (std::size_t i = 0; i < size; ++i, ++src, ++dst) {
         try {
-          folly::assume(dst != nullptr);
+          // TODO(T31574848): clean up assume-s used to optimize placement new
+          assume(dst != nullptr);
           AllocTraits::construct(a, dst, constructorArgFor(*src));
         } catch (...) {
           for (Value* cleanup = std::addressof(values_[0]); cleanup != dst;
@@ -1138,21 +1218,52 @@ class VectorContainerPolicy : public BasePolicy<
     FOLLY_SAFE_DCHECK(success, "");
   }
 
+ private:
+  // Returns the byte offset of the first Value in a unified allocation
+  // that first holds prefixBytes of data, where prefixBytes comes from
+  // Chunk storage and hence must be at least 8-byte aligned (sub-Chunk
+  // allocations always have an even capacity and sizeof(Item) == 4).
+  static std::size_t valuesOffset(std::size_t prefixBytes) {
+    FOLLY_SAFE_DCHECK((prefixBytes % 8) == 0, "");
+    if (alignof(Value) > 8) {
+      prefixBytes = -(-prefixBytes & ~(alignof(Value) - 1));
+    }
+    FOLLY_SAFE_DCHECK((prefixBytes % alignof(Value)) == 0, "");
+    return prefixBytes;
+  }
+
+  // Returns the total number of bytes that should be allocated to store
+  // prefixBytes of Chunks and valueCapacity values.
+  static std::size_t allocSize(
+      std::size_t prefixBytes,
+      std::size_t valueCapacity) {
+    return valuesOffset(prefixBytes) + sizeof(Value) * valueCapacity;
+  }
+
+ public:
   ValuePtr beforeRehash(
       std::size_t size,
       std::size_t oldCapacity,
-      std::size_t newCapacity) {
+      std::size_t newCapacity,
+      std::size_t chunkAllocSize,
+      BytePtr& outChunkAllocation) {
     FOLLY_SAFE_DCHECK(
         size <= oldCapacity && ((values_ == nullptr) == (oldCapacity == 0)) &&
             newCapacity > 0 &&
             newCapacity <= (std::numeric_limits<Item>::max)(),
         "");
 
-    Alloc& a = this->alloc();
+    outChunkAllocation =
+        allocateOverAligned<ByteAlloc, kRequiredVectorAlignment>(
+            ByteAlloc{Super::alloc()}, allocSize(chunkAllocSize, newCapacity));
+
     ValuePtr before = values_;
-    ValuePtr after = AllocTraits::allocate(a, newCapacity);
+    ValuePtr after = std::pointer_traits<ValuePtr>::pointer_to(
+        *static_cast<Value*>(static_cast<void*>(
+            &*outChunkAllocation + valuesOffset(chunkAllocSize))));
 
     if (size > 0) {
+      Alloc& a{this->alloc()};
       transfer(a, std::addressof(before[0]), std::addressof(after[0]), size);
     }
 
@@ -1160,14 +1271,12 @@ class VectorContainerPolicy : public BasePolicy<
     return before;
   }
 
-  FOLLY_NOINLINE void
-  afterFailedRehash(ValuePtr state, std::size_t size, std::size_t newCapacity) {
+  FOLLY_NOINLINE void afterFailedRehash(ValuePtr state, std::size_t size) {
     // state holds the old storage
     Alloc& a = this->alloc();
     if (size > 0) {
       transfer(a, std::addressof(values_[0]), std::addressof(state[0]), size);
     }
-    AllocTraits::deallocate(a, values_, newCapacity);
     values_ = state;
   }
 
@@ -1176,12 +1285,20 @@ class VectorContainerPolicy : public BasePolicy<
       bool success,
       std::size_t size,
       std::size_t oldCapacity,
-      std::size_t newCapacity) {
+      std::size_t newCapacity,
+      BytePtr chunkAllocation,
+      std::size_t chunkAllocSize) {
     if (!success) {
-      afterFailedRehash(state, size, newCapacity);
-    } else if (state != nullptr) {
-      Alloc& a = this->alloc();
-      AllocTraits::deallocate(a, state, oldCapacity);
+      afterFailedRehash(state, size);
+    }
+
+    // on success, chunkAllocation is the old allocation, on failure it is the
+    // new one
+    if (chunkAllocation != nullptr) {
+      deallocateOverAligned<ByteAlloc, kRequiredVectorAlignment>(
+          ByteAlloc{Super::alloc()},
+          chunkAllocation,
+          allocSize(chunkAllocSize, (success ? oldCapacity : newCapacity)));
     }
   }
 
@@ -1195,23 +1312,35 @@ class VectorContainerPolicy : public BasePolicy<
   }
 
   void beforeReset(std::size_t size, std::size_t capacity) {
-    FOLLY_SAFE_DCHECK(
-        size <= capacity && ((values_ == nullptr) == (capacity == 0)), "");
-    if (capacity > 0) {
-      beforeClear(size, capacity);
-      Alloc& a = this->alloc();
-      AllocTraits::deallocate(a, values_, capacity);
+    beforeClear(size, capacity);
+  }
+
+  void afterReset(
+      std::size_t /*size*/,
+      std::size_t capacity,
+      BytePtr chunkAllocation,
+      std::size_t chunkAllocSize) {
+    if (chunkAllocation != nullptr) {
+      deallocateOverAligned<ByteAlloc, kRequiredVectorAlignment>(
+          ByteAlloc{Super::alloc()},
+          chunkAllocation,
+          allocSize(chunkAllocSize, capacity));
       values_ = nullptr;
     }
   }
 
   template <typename V>
   void visitPolicyAllocationClasses(
+      std::size_t chunkAllocSize,
       std::size_t /*size*/,
       std::size_t capacity,
       V&& visitor) const {
-    if (capacity > 0) {
-      visitor(sizeof(Value) * capacity, 1);
+    FOLLY_SAFE_DCHECK((chunkAllocSize == 0) == (capacity == 0), "");
+    if (chunkAllocSize > 0) {
+      visitor(
+          allocationBytesForOverAligned<ByteAlloc, kRequiredVectorAlignment>(
+              allocSize(chunkAllocSize, capacity)),
+          1);
     }
   }
 
@@ -1231,8 +1360,8 @@ class VectorContainerPolicy : public BasePolicy<
     if (underlying.atEnd()) {
       return linearEnd();
     } else {
-      folly::assume(values_ + underlying.item() != nullptr);
-      folly::assume(values_ != nullptr);
+      assume(values_ + underlying.item() != nullptr);
+      assume(values_ != nullptr);
       return Iter{values_ + underlying.item(), values_};
     }
   }
@@ -1243,7 +1372,7 @@ class VectorContainerPolicy : public BasePolicy<
 
   Item iterToIndex(ConstIter const& iter) const {
     auto n = iter.index();
-    folly::assume(n <= std::numeric_limits<Item>::max());
+    assume(n <= std::numeric_limits<Item>::max());
     return static_cast<Item>(n);
   }
 

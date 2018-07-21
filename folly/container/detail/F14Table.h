@@ -30,6 +30,7 @@
 #include <vector>
 
 #include <folly/Bits.h>
+#include <folly/ConstexprMath.h>
 #include <folly/Likely.h>
 #include <folly/Portability.h>
 #include <folly/ScopeGuard.h>
@@ -45,11 +46,10 @@
 
 #include <folly/container/detail/F14Defaults.h>
 #include <folly/container/detail/F14IntrinsicsAvailability.h>
-#include <folly/container/detail/F14Memory.h>
 
 #if FOLLY_F14_VECTOR_INTRINSICS_AVAILABLE
-#if FOLLY_AARCH64
-#if __ARM_FEATURE_CRC32
+#if FOLLY_NEON
+#ifdef __ARM_FEATURE_CRC32
 #include <arm_acle.h> // __crc32cd
 #endif
 #include <arm_neon.h> // uint8x16t intrinsics
@@ -132,8 +132,7 @@ struct StdNodeReplica<
     V,
     H,
     std::enable_if_t<
-        !StdIsFastHash<H>::value ||
-        !folly::is_nothrow_invocable<H, K>::value>> {
+        !StdIsFastHash<H>::value || !is_nothrow_invocable<H, K>::value>> {
   void* next;
   V value;
   std::size_t hash;
@@ -200,9 +199,8 @@ struct EligibleForHeterogeneousFind<
     Hasher,
     KeyEqual,
     ArgKey,
-    folly::void_t<
-        typename Hasher::is_transparent,
-        typename KeyEqual::is_transparent>> : std::true_type {};
+    void_t<typename Hasher::is_transparent, typename KeyEqual::is_transparent>>
+    : std::true_type {};
 
 template <
     typename TableKey,
@@ -221,7 +219,7 @@ template <
     typename... KeyArgs>
 using KeyTypeForEmplaceHelper = std::conditional_t<
     sizeof...(KeyArgs) == 1 &&
-        (std::is_same<folly::remove_cvref_t<KeyArg0OrBool>, TableKey>::value ||
+        (std::is_same<remove_cvref_t<KeyArg0OrBool>, TableKey>::value ||
          EligibleForHeterogeneousFind<
              TableKey,
              Hasher,
@@ -246,126 +244,154 @@ using KeyTypeForEmplace = KeyTypeForEmplaceHelper<
 
 template <typename T>
 FOLLY_ALWAYS_INLINE static void prefetchAddr(T const* ptr) {
-#if FOLLY_AARCH64
+#ifndef _WIN32
   __builtin_prefetch(static_cast<void const*>(ptr));
+#elif FOLLY_NEON
+  __prefetch(static_cast<void const*>(ptr));
 #else
-  // _mm_prefetch is x86_64-specific and comes from xmmintrin.h.
-  // It seems to compile to the same thing as __builtin_prefetch, but
-  // also works on windows.
   _mm_prefetch(
       static_cast<char const*>(static_cast<void const*>(ptr)), _MM_HINT_T0);
 #endif
 }
 
-#if FOLLY_AARCH64
+template <typename T>
+FOLLY_ALWAYS_INLINE static unsigned findFirstSetNonZero(T mask) {
+  assume(mask != 0);
+  if (sizeof(mask) == sizeof(unsigned)) {
+    return __builtin_ctz(static_cast<unsigned>(mask));
+  } else {
+    return __builtin_ctzll(mask);
+  }
+}
+
+#if FOLLY_NEON
 using TagVector = uint8x16_t;
-#else
+
+using MaskType = uint64_t;
+
+constexpr unsigned kMaskSpacing = 4;
+#else // SSE2
 using TagVector = __m128i;
+
+using MaskType = uint32_t;
+
+constexpr unsigned kMaskSpacing = 1;
 #endif
 
-extern TagVector kEmptyTagVector;
+// We could use unaligned loads to relax this requirement, but that
+// would be both a performance penalty and require a bulkier packed
+// ItemIter format
+constexpr std::size_t kRequiredVectorAlignment =
+    constexpr_max(std::size_t{16}, alignof(max_align_t));
 
-// Iterates a 64-bit mask where elements are strided by 8 and the elements
-// at indexes 8 and higher are layered back over the bottom 64-bits with
-// a 4-bit offset.
-//
-// bitIndex = ((tagIndex * 8) % 64) + (tagIndex >= 8 ? 4 : 0)
-//
-// Iteration occurs in bitIndex order, not tagIndex.  That should be fine
-// for a sparse iterator, where we expect either 0 or 1 tag.
-class Sparse8Interleaved4MaskIter {
-  uint64_t mask_;
+using EmptyTagVectorType = std::aligned_storage_t<
+    sizeof(TagVector) + kRequiredVectorAlignment,
+    alignof(max_align_t)>;
 
- public:
-  explicit Sparse8Interleaved4MaskIter(uint64_t mask) : mask_{mask} {}
+extern EmptyTagVectorType kEmptyTagVector;
 
-  bool hasNext() {
-    return mask_ != 0;
-  }
-
-  unsigned next() {
-    FOLLY_SAFE_DCHECK(hasNext(), "");
-    unsigned mixed = __builtin_ctzll(mask_);
-    FOLLY_SAFE_DCHECK((mixed % 4) == 0, "");
-    mask_ &= (mask_ - 1);
-
-    // mixed >> 3 has the bottom 3 bits of the result (no masking needed
-    // because all of the higher bits will be empty).  mixed & 4 holds the
-    // bit that should be result & 8.  We can merge it in either before or
-    // after sliding.  Merging it before means we need to shift it left 4
-    // (so that the right shift 3 turns it into a left 1), which happens
-    // to be the same as multiplication by 17.
-    return ((mixed * 0x11) >> 3) & 0xf;
-  }
+template <unsigned BitCount>
+struct FullMask {
+  static constexpr MaskType value =
+      (FullMask<BitCount - 1>::value << kMaskSpacing) + 1;
 };
 
-// Iterates downward on occupied indexes by just checking tags[i] instead
-// of using a mask
-class TagCheckingIter {
-  uint8_t const* tags_;
-  int nextIndex_;
+template <>
+struct FullMask<1> : std::integral_constant<MaskType, 1> {};
 
- public:
-  explicit TagCheckingIter(uint8_t const* tags, int maxIndex)
-      : tags_{tags}, nextIndex_{maxIndex} {}
-
-  bool hasNext() {
-    return nextIndex_ >= 0;
-  }
-
-  unsigned next() {
-    auto rv = static_cast<unsigned>(nextIndex_);
-    do {
-      --nextIndex_;
-    } while (nextIndex_ >= 0 && tags_[nextIndex_] == 0);
-    return rv;
-  }
-};
-
-// Holds the result of an index query that has an optional result,
-// interpreting an index of -1 to be the empty answer
-class IndexHolder {
-  int index_;
-
- public:
-  explicit IndexHolder(int index) : index_{index} {}
-
-  bool hasIndex() const {
-    return index_ >= 0;
-  }
-
-  unsigned index() const {
-    FOLLY_SAFE_DCHECK(hasIndex(), "");
-    return static_cast<unsigned>(index_);
-  }
-};
+#if FOLLY_ARM
+// Mask iteration is different for ARM because that is the only platform
+// for which the mask is bigger than a register.
 
 // Iterates a mask, optimized for the case that only a few bits are set
 class SparseMaskIter {
-  unsigned mask_;
+  static_assert(kMaskSpacing == 4, "");
+
+  uint32_t interleavedMask_;
 
  public:
-  explicit SparseMaskIter(unsigned mask) : mask_{mask} {}
+  explicit SparseMaskIter(MaskType mask)
+      : interleavedMask_{static_cast<uint32_t>(((mask >> 32) << 2) | mask)} {}
 
   bool hasNext() {
-    return mask_ != 0;
+    return interleavedMask_ != 0;
   }
 
   unsigned next() {
     FOLLY_SAFE_DCHECK(hasNext(), "");
-    unsigned i = __builtin_ctz(mask_);
-    mask_ &= (mask_ - 1);
-    return i;
+    unsigned i = findFirstSetNonZero(interleavedMask_);
+    interleavedMask_ &= (interleavedMask_ - 1);
+    return ((i >> 2) | (i << 2)) & 0xf;
   }
 };
 
 // Iterates a mask, optimized for the case that most bits are set
 class DenseMaskIter {
-  unsigned mask_;
+  static_assert(kMaskSpacing == 4, "");
+
+  std::size_t count_;
+  unsigned index_;
+  uint8_t const* tags_;
+
+ public:
+  explicit DenseMaskIter(uint8_t const* tags, MaskType mask) {
+    if (mask == 0) {
+      count_ = 0;
+    } else {
+      count_ = popcount(static_cast<uint32_t>(((mask >> 32) << 2) | mask));
+      if (LIKELY((mask & 1) != 0)) {
+        index_ = 0;
+      } else {
+        index_ = findFirstSetNonZero(mask) / kMaskSpacing;
+      }
+      tags_ = tags;
+    }
+  }
+
+  bool hasNext() {
+    return count_ > 0;
+  }
+
+  unsigned next() {
+    auto rv = index_;
+    --count_;
+    if (count_ > 0) {
+      do {
+        ++index_;
+      } while ((tags_[index_] & 0x80) == 0);
+    }
+    FOLLY_SAFE_DCHECK(index_ < 16, "");
+    return rv;
+  }
+};
+
+#else
+// Iterates a mask, optimized for the case that only a few bits are set
+class SparseMaskIter {
+  MaskType mask_;
+
+ public:
+  explicit SparseMaskIter(MaskType mask) : mask_{mask} {}
+
+  bool hasNext() {
+    return mask_ != 0;
+  }
+
+  unsigned next() {
+    FOLLY_SAFE_DCHECK(hasNext(), "");
+    unsigned i = findFirstSetNonZero(mask_);
+    mask_ &= (mask_ - 1);
+    return i / kMaskSpacing;
+  }
+};
+
+// Iterates a mask, optimized for the case that most bits are set
+class DenseMaskIter {
+  MaskType mask_;
   unsigned index_{0};
 
  public:
-  explicit DenseMaskIter(unsigned mask) : mask_{mask} {}
+  explicit DenseMaskIter(uint8_t const*, MaskType mask) : mask_{mask} {}
 
   bool hasNext() {
     return mask_ != 0;
@@ -374,15 +400,44 @@ class DenseMaskIter {
   unsigned next() {
     FOLLY_SAFE_DCHECK(hasNext(), "");
     if (LIKELY((mask_ & 1) != 0)) {
-      mask_ >>= 1;
+      mask_ >>= kMaskSpacing;
       return index_++;
     } else {
-      unsigned s = __builtin_ctz(mask_);
-      unsigned rv = index_ + s;
-      mask_ >>= (s + 1);
+      unsigned s = findFirstSetNonZero(mask_);
+      unsigned rv = index_ + (s / kMaskSpacing);
+      mask_ >>= (s + kMaskSpacing);
       index_ = rv + 1;
       return rv;
     }
+  }
+};
+#endif
+
+// Iterates a mask, returning pairs of [begin,end) index covering blocks
+// of set bits
+class MaskRangeIter {
+  MaskType mask_;
+  unsigned shift_{0};
+
+ public:
+  explicit MaskRangeIter(MaskType mask) {
+    // If kMaskSpacing is > 1 then there will be empty bits even for
+    // contiguous ranges.  Fill them in.
+    mask_ = mask * ((1 << kMaskSpacing) - 1);
+  }
+
+  bool hasNext() {
+    return mask_ != 0;
+  }
+
+  std::pair<unsigned, unsigned> next() {
+    FOLLY_SAFE_DCHECK(hasNext(), "");
+    auto s = shift_;
+    unsigned b = findFirstSetNonZero(mask_);
+    unsigned e = findFirstSetNonZero(~(mask_ | (mask_ - 1)));
+    mask_ >>= e;
+    shift_ = s + e;
+    return std::make_pair((s + b) / kMaskSpacing, (s + e) / kMaskSpacing);
   }
 };
 
@@ -390,18 +445,18 @@ class DenseMaskIter {
 // interpreting a mask of 0 to be the empty answer and the index of the
 // last set bit to be the non-empty answer
 class LastOccupiedInMask {
-  unsigned mask_;
+  MaskType mask_;
 
  public:
-  explicit LastOccupiedInMask(unsigned mask) : mask_{mask} {}
+  explicit LastOccupiedInMask(MaskType mask) : mask_{mask} {}
 
   bool hasIndex() const {
     return mask_ != 0;
   }
 
   unsigned index() const {
-    folly::assume(mask_ != 0);
-    return folly::findLastSet(mask_) - 1;
+    assume(mask_ != 0);
+    return (findLastSet(mask_) - 1) / kMaskSpacing;
   }
 };
 
@@ -409,10 +464,10 @@ class LastOccupiedInMask {
 // interpreting a mask of 0 to be the empty answer and the index of the
 // first set bit to be the non-empty answer
 class FirstEmptyInMask {
-  unsigned mask_;
+  MaskType mask_;
 
  public:
-  explicit FirstEmptyInMask(unsigned mask) : mask_{mask} {}
+  explicit FirstEmptyInMask(MaskType mask) : mask_{mask} {}
 
   bool hasIndex() const {
     return mask_ != 0;
@@ -420,15 +475,15 @@ class FirstEmptyInMask {
 
   unsigned index() const {
     FOLLY_SAFE_DCHECK(mask_ != 0, "");
-    return __builtin_ctz(mask_);
+    return findFirstSetNonZero(mask_) / kMaskSpacing;
   }
 };
 
 template <typename ItemType>
-struct alignas(max_align_t) F14Chunk {
+struct alignas(kRequiredVectorAlignment) F14Chunk {
   using Item = ItemType;
 
-  // Assuming alignof(max_align_t) == 16 (and assuming alignof(Item) >=
+  // For our 16 byte vector alignment (and assuming alignof(Item) >=
   // 4) kCapacity of 14 is the most space efficient.  Slightly smaller
   // or larger capacities can help with cache alignment in a couple of
   // cases without wasting too much space, but once the items are larger
@@ -443,11 +498,11 @@ struct alignas(max_align_t) F14Chunk {
   static constexpr unsigned kAllocatedCapacity =
       kCapacity + (sizeof(Item) == 16 ? 1 : 0);
 
-  static constexpr unsigned kFullMask =
-      static_cast<unsigned>(~(~uint64_t{0} << kCapacity));
+  static constexpr MaskType kFullMask = FullMask<kCapacity>::value;
 
-  // Non-empty tags have their top bit set
-  std::array<uint8_t, kCapacity> tags_;
+  // Non-empty tags have their top bit set.  tags_ array might be bigger
+  // than kCapacity to keep alignment of first item.
+  std::array<uint8_t, 14> tags_;
 
   // Bits 0..3 record the actual capacity of the chunk if this is chunk
   // zero, or hold 0000 for other chunks.  Bits 4-7 are a 4-bit counter
@@ -467,11 +522,15 @@ struct alignas(max_align_t) F14Chunk {
       rawItems_;
 
   static F14Chunk* emptyInstance() {
-    auto rv = static_cast<F14Chunk*>(static_cast<void*>(&kEmptyTagVector));
+    auto raw = reinterpret_cast<char*>(&kEmptyTagVector);
+    if (kRequiredVectorAlignment > alignof(max_align_t)) {
+      auto delta = kRequiredVectorAlignment -
+          (reinterpret_cast<uintptr_t>(raw) % kRequiredVectorAlignment);
+      raw += delta;
+    }
+    auto rv = reinterpret_cast<F14Chunk*>(raw);
     FOLLY_SAFE_DCHECK(
-        !rv->occupied(0) && rv->chunk0Capacity() == 0 &&
-            rv->outboundOverflowCount() == 0,
-        "");
+        (reinterpret_cast<uintptr_t>(rv) % kRequiredVectorAlignment) == 0, "");
     return rv;
   }
 
@@ -554,72 +613,33 @@ struct alignas(max_align_t) F14Chunk {
     tags_[index] = 0;
   }
 
-#if FOLLY_AARCH64
+#if FOLLY_NEON
   ////////
-  // Tag filtering using AArch64 Advanced SIMD (NEON) intrinsics
+  // Tag filtering using NEON intrinsics
 
-  Sparse8Interleaved4MaskIter tagMatchIter(uint8_t needle) const {
+  SparseMaskIter tagMatchIter(uint8_t needle) const {
     FOLLY_SAFE_DCHECK((needle & 0x80) != 0, "");
     uint8x16_t tagV = vld1q_u8(&tags_[0]);
     auto needleV = vdupq_n_u8(needle);
     auto eqV = vceqq_u8(tagV, needleV);
-    auto bitsV = vreinterpretq_u64_u8(vshrq_n_u8(eqV, 7));
-    auto hi = vgetq_lane_u64(bitsV, 1);
-    auto lo = vgetq_lane_u64(bitsV, 0);
-    static_assert(kCapacity >= 8, "");
-    hi &= ((uint64_t{1} << (8 * (kCapacity - 8))) - 1);
-    auto mixed = (hi << 4) | lo;
-    return Sparse8Interleaved4MaskIter{mixed};
+    // get info from every byte into the bottom half of every uint16_t
+    // by shifting right 4, then round to get it into a 64-bit vector
+    uint8x8_t maskV = vshrn_n_u16(vreinterpretq_u16_u8(eqV), 4);
+    uint64_t mask = vget_lane_u64(vreinterpret_u64_u8(maskV), 0) & kFullMask;
+    return SparseMaskIter(mask);
   }
 
-  template <typename F, std::size_t... I>
-  static constexpr uint8x16_t fixedVectorHelper(
-      F const& func,
-      index_sequence<I...>) {
-    return uint8x16_t{func(I)...};
-  }
-
-  template <typename F>
-  static constexpr uint8x16_t fixedVector(F const& func) {
-    return fixedVectorHelper(
-        [&](std::size_t i) { return i < kCapacity ? func(i) : uint8_t{0}; },
-        make_index_sequence<16>{});
-  }
-
-  int lastOccupiedIndex() const {
+  MaskType occupiedMask() const {
     uint8x16_t tagV = vld1q_u8(&tags_[0]);
     // signed shift extends top bit to all bits
     auto occupiedV =
         vreinterpretq_u8_s8(vshrq_n_s8(vreinterpretq_s8_u8(tagV), 7));
-    auto indexV =
-        fixedVector([](std::size_t i) { return static_cast<uint8_t>(i + 1); });
-    auto occupiedIndexV = vandq_u8(occupiedV, indexV);
-    return vmaxvq_u8(occupiedIndexV) - 1;
-  }
-
-  TagCheckingIter occupiedIter() const {
-    return TagCheckingIter{&tags_[0], lastOccupiedIndex()};
-  }
-
-  IndexHolder lastOccupied() const {
-    return IndexHolder{lastOccupiedIndex()};
-  }
-
-  IndexHolder firstEmpty() const {
-    uint8x16_t tagV = vld1q_u8(&tags_[0]);
-    // occupied tags have sign bit set when interpreted as int8_t, so
-    // empty ones are non-negative
-    auto emptyV = vcgeq_s8(vreinterpretq_s8_u8(tagV), vdupq_n_s8(0));
-    auto indexV =
-        fixedVector([](std::size_t i) { return static_cast<uint8_t>(~i); });
-    auto emptyIndexV = vandq_u8(emptyV, indexV);
-    // none empty -> i == 0xff == int8_t{-1}
-    int8_t i = static_cast<int8_t>(~vmaxvq_u8(emptyIndexV));
-    return IndexHolder{i};
+    uint8x8_t maskV = vshrn_n_u16(vreinterpretq_u16_u8(occupiedV), 4);
+    return vget_lane_u64(vreinterpret_u64_u8(maskV), 0) & kFullMask;
   }
 #else
   ////////
-  // Tag filtering using x86_64 SSE2 intrinsics
+  // Tag filtering using SSE2 intrinsics
 
   TagVector const* tagVector() const {
     return static_cast<TagVector const*>(static_cast<void const*>(&tags_[0]));
@@ -634,13 +654,18 @@ struct alignas(max_align_t) F14Chunk {
     return SparseMaskIter{mask};
   }
 
-  unsigned occupiedMask() const {
+  MaskType occupiedMask() const {
     auto tagV = _mm_load_si128(tagVector());
     return _mm_movemask_epi8(tagV) & kFullMask;
   }
+#endif
 
   DenseMaskIter occupiedIter() const {
-    return DenseMaskIter{occupiedMask()};
+    return DenseMaskIter{&tags_[0], occupiedMask()};
+  }
+
+  MaskRangeIter occupiedRangeIter() const {
+    return MaskRangeIter{occupiedMask()};
   }
 
   LastOccupiedInMask lastOccupied() const {
@@ -650,7 +675,6 @@ struct alignas(max_align_t) F14Chunk {
   FirstEmptyInMask firstEmpty() const {
     return FirstEmptyInMask{occupiedMask() ^ kFullMask};
   }
-#endif
 
   bool occupied(std::size_t index) const {
     FOLLY_SAFE_DCHECK(tags_[index] == 0 || (tags_[index] & 0x80) != 0, "");
@@ -664,12 +688,12 @@ struct alignas(max_align_t) F14Chunk {
 
   Item& item(std::size_t i) {
     FOLLY_SAFE_DCHECK(this->occupied(i), "");
-    return *folly::launder(itemAddr(i));
+    return *launder(itemAddr(i));
   }
 
   Item const& citem(std::size_t i) const {
     FOLLY_SAFE_DCHECK(this->occupied(i), "");
-    return *folly::launder(itemAddr(i));
+    return *launder(itemAddr(i));
   }
 
   static F14Chunk& owner(Item& item, std::size_t index) {
@@ -684,6 +708,148 @@ struct alignas(max_align_t) F14Chunk {
 
 ////////////////
 
+// PackedChunkItemPtr points to an Item in an F14Chunk, allowing both the
+// Item& and its index to be recovered.  It sorts by the address of the
+// item, and it only works for items that are in a properly-aligned chunk.
+
+// generic form, not actually packed
+template <typename Ptr>
+class PackedChunkItemPtr {
+ public:
+  PackedChunkItemPtr(Ptr p, std::size_t i) noexcept : ptr_{p}, index_{i} {
+    FOLLY_SAFE_DCHECK(ptr_ != nullptr || index_ == 0, "");
+  }
+
+  Ptr ptr() const {
+    return ptr_;
+  }
+
+  std::size_t index() const {
+    return index_;
+  }
+
+  bool operator<(PackedChunkItemPtr const& rhs) const {
+    FOLLY_SAFE_DCHECK(ptr_ != rhs.ptr_ || index_ == rhs.index_, "");
+    return ptr_ < rhs.ptr_;
+  }
+
+  bool operator==(PackedChunkItemPtr const& rhs) const {
+    FOLLY_SAFE_DCHECK(ptr_ != rhs.ptr_ || index_ == rhs.index_, "");
+    return ptr_ == rhs.ptr_;
+  }
+
+  bool operator!=(PackedChunkItemPtr const& rhs) const {
+    return !(*this == rhs);
+  }
+
+ private:
+  Ptr ptr_;
+  std::size_t index_;
+};
+
+// Bare pointer form, packed into a uintptr_t.  Uses only bits wasted by
+// alignment, so it works on 32-bit and 64-bit platforms
+template <typename T>
+class PackedChunkItemPtr<T*> {
+  static_assert((alignof(F14Chunk<T>) % 16) == 0, "");
+
+  // Chunks are 16-byte aligned, so we can maintain a packed pointer to a
+  // chunk item by packing the 4-bit item index into the least significant
+  // bits of a pointer to the chunk itself.  This makes ItemIter::pack
+  // more expensive, however, since it has to compute the chunk address.
+  //
+  // Chunk items have varying alignment constraints, so it would seem
+  // to be that we can't do a similar trick while using only bit masking
+  // operations on the Item* itself.  It happens to be, however, that if
+  // sizeof(Item) is not a multiple of 16 then we can recover a portion
+  // of the index bits from the knowledge that the Item-s are stored in
+  // an array that is itself 16-byte aligned.
+  //
+  // If kAlignBits is the number of trailing zero bits in sizeof(Item)
+  // (up to 4), then we can borrow those bits to store kAlignBits of the
+  // index directly.  We can recover (4 - kAlignBits) bits of the index
+  // from the item pointer itself, by defining/observing that
+  //
+  // A = kAlignBits                  (A <= 4)
+  //
+  // S = (sizeof(Item) % 16) >> A    (shifted-away bits are all zero)
+  //
+  // R = (itemPtr % 16) >> A         (shifted-away bits are all zero)
+  //
+  // M = 16 >> A
+  //
+  // itemPtr % 16   = (index * sizeof(Item)) % 16
+  //
+  // (R * 2^A) % 16 = (index * (sizeof(Item) % 16)) % 16
+  //
+  // (R * 2^A) % 16 = (index * 2^A * S) % 16
+  //
+  // R % M          = (index * S) % M
+  //
+  // S is relatively prime with M, so a multiplicative inverse is easy
+  // to compute
+  //
+  // Sinv = S^(M - 1) % M
+  //
+  // (R * Sinv) % M = index % M
+  //
+  // This lets us recover the bottom bits of the index.  When sizeof(T)
+  // is 8-byte aligned kSizeInverse will always be 1.  When sizeof(T)
+  // is 4-byte aligned kSizeInverse will be either 1 or 3.
+
+  // returns pow(x, y) % m
+  static constexpr uintptr_t powerMod(uintptr_t x, uintptr_t y, uintptr_t m) {
+    return y == 0 ? 1 : (x * powerMod(x, y - 1, m)) % m;
+  }
+
+  static constexpr uintptr_t kIndexBits = 4;
+  static constexpr uintptr_t kIndexMask = (uintptr_t{1} << kIndexBits) - 1;
+
+  static constexpr uintptr_t kAlignBits = constexpr_min(
+      uintptr_t{4},
+      constexpr_find_first_set(uintptr_t{sizeof(T)}) - 1);
+
+  static constexpr uintptr_t kAlignMask = (uintptr_t{1} << kAlignBits) - 1;
+
+  static constexpr uintptr_t kModulus = uintptr_t{1}
+      << (kIndexBits - kAlignBits);
+  static constexpr uintptr_t kSizeInverse =
+      powerMod(sizeof(T) >> kAlignBits, kModulus - 1, kModulus);
+
+ public:
+  PackedChunkItemPtr(T* p, std::size_t i) noexcept {
+    uintptr_t encoded = i >> (kIndexBits - kAlignBits);
+    assume((encoded & ~kAlignMask) == 0);
+    raw_ = reinterpret_cast<uintptr_t>(p) | encoded;
+    FOLLY_SAFE_DCHECK(p == ptr(), "");
+    FOLLY_SAFE_DCHECK(i == index(), "");
+  }
+
+  T* ptr() const {
+    return reinterpret_cast<T*>(raw_ & ~kAlignMask);
+  }
+
+  std::size_t index() const {
+    auto encoded = (raw_ & kAlignMask) << (kIndexBits - kAlignBits);
+    auto deduced =
+        ((raw_ >> kAlignBits) * kSizeInverse) & (kIndexMask >> kAlignBits);
+    return encoded | deduced;
+  }
+
+  bool operator<(PackedChunkItemPtr const& rhs) const {
+    return raw_ < rhs.raw_;
+  }
+  bool operator==(PackedChunkItemPtr const& rhs) const {
+    return raw_ == rhs.raw_;
+  }
+  bool operator!=(PackedChunkItemPtr const& rhs) const {
+    return !(*this == rhs);
+  }
+
+ private:
+  uintptr_t raw_;
+};
+
 template <typename ChunkPtr>
 class F14ItemIter {
  private:
@@ -695,7 +861,7 @@ class F14ItemIter {
   using ItemConstPtr =
       typename std::pointer_traits<ChunkPtr>::template rebind<Item const>;
 
-  using Packed = TaggedPtr<ItemPtr>;
+  using Packed = PackedChunkItemPtr<ItemPtr>;
 
   //// PUBLIC
 
@@ -704,19 +870,19 @@ class F14ItemIter {
   // default copy and move constructors and assignment operators are correct
 
   explicit F14ItemIter(Packed const& packed)
-      : itemPtr_{packed.ptr()}, index_{packed.extra()} {}
+      : itemPtr_{packed.ptr()}, index_{packed.index()} {}
 
   F14ItemIter(ChunkPtr chunk, std::size_t index)
       : itemPtr_{std::pointer_traits<ItemPtr>::pointer_to(chunk->item(index))},
         index_{index} {
     FOLLY_SAFE_DCHECK(index < Chunk::kCapacity, "");
-    folly::assume(
+    assume(
         std::pointer_traits<ItemPtr>::pointer_to(chunk->item(index)) !=
         nullptr);
-    folly::assume(itemPtr_ != nullptr);
+    assume(itemPtr_ != nullptr);
   }
 
-  FOLLY_ALWAYS_INLINE void advance() {
+  FOLLY_ALWAYS_INLINE void advanceImpl(bool checkEof, bool likelyDead) {
     auto c = chunk();
 
     // common case is packed entries
@@ -749,15 +915,22 @@ class F14ItemIter {
     //
     // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=82776 has the bug we
     // filed about the issue.  while (true) {
-    for (std::size_t i = 1; i != 0; ++i) {
-      // exhausted the current chunk
-      if (UNLIKELY(c->eof())) {
-        FOLLY_SAFE_DCHECK(index_ == 0, "");
-        itemPtr_ = nullptr;
-        return;
+    for (std::size_t i = 1; !likelyDead || i != 0; ++i) {
+      if (checkEof) {
+        // exhausted the current chunk
+        if (UNLIKELY(c->eof())) {
+          FOLLY_SAFE_DCHECK(index_ == 0, "");
+          itemPtr_ = nullptr;
+          return;
+        }
+      } else {
+        FOLLY_SAFE_DCHECK(!c->eof(), "");
       }
       --c;
       auto last = c->lastOccupied();
+      if (checkEof && !likelyDead) {
+        prefetchAddr(&*c - 1);
+      }
       if (LIKELY(last.hasIndex())) {
         index_ = last.index();
         itemPtr_ = std::pointer_traits<ItemPtr>::pointer_to(c->item(index_));
@@ -766,31 +939,16 @@ class F14ItemIter {
     }
   }
 
-  // precheckedAdvance requires knowledge that the current iterator
-  // position isn't the last item
   void precheckedAdvance() {
-    auto c = chunk();
+    advanceImpl(false, false);
+  }
 
-    // common case is packed entries
-    while (index_ > 0) {
-      --index_;
-      --itemPtr_;
-      if (LIKELY(c->occupied(index_))) {
-        return;
-      }
-    }
+  FOLLY_ALWAYS_INLINE void advance() {
+    advanceImpl(true, false);
+  }
 
-    while (true) {
-      // exhausted the current chunk
-      FOLLY_SAFE_DCHECK(!c->eof(), "");
-      --c;
-      auto last = c->lastOccupied();
-      if (LIKELY(last.hasIndex())) {
-        index_ = last.index();
-        itemPtr_ = std::pointer_traits<ItemPtr>::pointer_to(c->item(index_));
-        return;
-      }
-    }
+  FOLLY_ALWAYS_INLINE void advanceLikelyDead() {
+    advanceImpl(true, true);
   }
 
   ChunkPtr chunk() const {
@@ -859,11 +1017,11 @@ struct SizeAndPackedBegin<SizeType, ItemIter, false> {
   SizeType size_{0};
 
   [[noreturn]] typename ItemIter::Packed& packedBegin() {
-    folly::assume_unreachable();
+    assume_unreachable();
   }
 
   [[noreturn]] typename ItemIter::Packed const& packedBegin() const {
-    folly::assume_unreachable();
+    assume_unreachable();
   }
 };
 
@@ -1042,17 +1200,19 @@ class F14Table : public Policy {
   // For hash functions we don't trust to avalanche, we repair things by
   // applying a bit mixer to the user-supplied hash.
 
+#if FOLLY_X64 || FOLLY_AARCH64
+  // 64-bit
   static HashPair splitHash(std::size_t hash) {
+    static_assert(sizeof(std::size_t) == sizeof(uint64_t), "");
     uint8_t tag;
     if (!Policy::isAvalanchingHasher()) {
-#if FOLLY_SSE > 4 || (FOLLY_SSE == 4 && FOLLY_SSE_MINOR >= 2)
+#if FOLLY_SSE_PREREQ(4, 2)
       // SSE4.2 CRC
       auto c = _mm_crc32_u64(0, hash);
       tag = static_cast<uint8_t>(~(c >> 25));
       hash += c;
-#elif FOLLY_AARCH64 && __ARM_FEATURE_CRC32
-      // AARCH64 CRC is Optional on armv8 (-march=armv8-a+crc), standard
-      // on armv8.1
+#elif __ARM_FEATURE_CRC32
+      // CRC is optional on armv8 (-march=armv8-a+crc), standard on armv8.1
       auto c = __crc32cd(0, hash);
       tag = static_cast<uint8_t>(~(c >> 25));
       hash += c;
@@ -1089,47 +1249,61 @@ class F14Table : public Policy {
     }
     return std::make_pair(hash, tag);
   }
+#else
+  // 32-bit
+  static HashPair splitHash(std::size_t hash) {
+    static_assert(sizeof(std::size_t) == sizeof(uint32_t), "");
+    uint8_t tag;
+    if (!Policy::isAvalanchingHasher()) {
+#if FOLLY_SSE_PREREQ(4, 2)
+      // SSE4.2 CRC
+      auto c = _mm_crc32_u32(0, hash);
+      tag = static_cast<uint8_t>(~(c >> 25));
+      hash += c;
+#elif __ARM_FEATURE_CRC32
+      auto c = __crc32cw(0, hash);
+      tag = static_cast<uint8_t>(~(c >> 25));
+      hash += c;
+#else
+      // finalizer for 32-bit murmur2
+      hash ^= hash >> 13;
+      hash *= 0x5bd1e995;
+      hash ^= hash >> 15;
+      tag = static_cast<uint8_t>(~(hash >> 25));
+#endif
+    } else {
+      // we don't trust the top bit
+      tag = (hash >> 24) | 0x80;
+    }
+    return std::make_pair(hash, tag);
+  }
+#endif
 
   //////// memory management helpers
 
-  static std::size_t allocSize(
+  static std::size_t chunkAllocSize(
       std::size_t chunkCount,
       std::size_t maxSizeWithoutRehash) {
     if (chunkCount == 1) {
-      auto n = offsetof(Chunk, rawItems_) + maxSizeWithoutRehash * sizeof(Item);
       FOLLY_SAFE_DCHECK((maxSizeWithoutRehash % 2) == 0, "");
-      if ((sizeof(Item) % 8) != 0) {
-        n = ((n - 1) | 15) + 1;
-      }
-      FOLLY_SAFE_DCHECK((n % 16) == 0, "");
-      return n;
+      static_assert(offsetof(Chunk, rawItems_) == 16, "");
+      return 16 + sizeof(Item) * maxSizeWithoutRehash;
     } else {
       return sizeof(Chunk) * chunkCount;
     }
   }
 
-  ChunkPtr newChunks(std::size_t chunkCount, std::size_t maxSizeWithoutRehash) {
-    ByteAlloc a{this->alloc()};
-    uint8_t* raw = &*std::allocator_traits<ByteAlloc>::allocate(
-        a, allocSize(chunkCount, maxSizeWithoutRehash));
+  ChunkPtr initializeChunks(
+      BytePtr raw,
+      std::size_t chunkCount,
+      std::size_t maxSizeWithoutRehash) {
     static_assert(std::is_trivial<Chunk>::value, "F14Chunk should be POD");
-    auto chunks = static_cast<Chunk*>(static_cast<void*>(raw));
+    auto chunks = static_cast<Chunk*>(static_cast<void*>(&*raw));
     for (std::size_t i = 0; i < chunkCount; ++i) {
       chunks[i].clear();
     }
     chunks[0].markEof(chunkCount == 1 ? maxSizeWithoutRehash : 1);
     return std::pointer_traits<ChunkPtr>::pointer_to(*chunks);
-  }
-
-  void deleteChunks(
-      ChunkPtr chunks,
-      std::size_t chunkCount,
-      std::size_t maxSizeWithoutRehash) {
-    ByteAlloc a{this->alloc()};
-    BytePtr bp = std::pointer_traits<BytePtr>::pointer_to(
-        *static_cast<uint8_t*>(static_cast<void*>(&*chunks)));
-    std::allocator_traits<ByteAlloc>::deallocate(
-        a, bp, allocSize(chunkCount, maxSizeWithoutRehash));
   }
 
  public:
@@ -1352,7 +1526,6 @@ class F14Table : public Policy {
   void insertAtBlank(ItemIter pos, HashPair hp, Args&&... args) {
     try {
       auto dst = pos.itemAddr();
-      folly::assume(dst != nullptr);
       this->constructValueAtItem(size(), dst, std::forward<Args>(args)...);
     } catch (...) {
       eraseBlank(pos, hp);
@@ -1384,6 +1557,7 @@ class F14Table : public Policy {
   }
 
   ChunkPtr lastOccupiedChunk() const {
+    FOLLY_SAFE_DCHECK(size() > 0, "");
     if (Policy::kEnableItemIteration) {
       return begin().chunk();
     } else {
@@ -1418,10 +1592,10 @@ class F14Table : public Policy {
     // partial failure should not occur.  Sorry for the subtle invariants
     // in the Policy API.
 
-    if (folly::is_trivially_copyable<Item>::value &&
-        !this->destroyItemOnClear() && bucket_count() == src.bucket_count()) {
+    if (is_trivially_copyable<Item>::value && !this->destroyItemOnClear() &&
+        bucket_count() == src.bucket_count()) {
       // most happy path
-      auto n = allocSize(chunkMask_ + 1, bucket_count());
+      auto n = chunkAllocSize(chunkMask_ + 1, bucket_count());
       std::memcpy(&chunks_[0], &src.chunks_[0], n);
       sizeAndPackedBegin_.size_ = src.size();
       if (Policy::kEnableItemIteration) {
@@ -1454,7 +1628,6 @@ class F14Table : public Policy {
           auto&& srcArg =
               std::forward<T>(src).buildArgForItem(srcChunk->item(srcI));
           auto dst = dstChunk->itemAddr(dstI);
-          folly::assume(dst != nullptr);
           this->constructValueAtItem(
               0, dst, std::forward<decltype(srcArg)>(srcArg));
           dstChunk->setTag(dstI, srcChunk->tag(srcI));
@@ -1592,28 +1765,82 @@ class F14Table : public Policy {
   }
 
   FOLLY_NOINLINE void rehashImpl(
-      std::size_t newChunkCount,
-      std::size_t newMaxSizeWithoutRehash) {
-    FOLLY_SAFE_DCHECK(newMaxSizeWithoutRehash > 0, "");
+      std::size_t capacity,
+      std::size_t origChunkCount,
+      std::size_t origMaxSizeWithoutRehash) {
+    FOLLY_SAFE_DCHECK(capacity >= size(), "");
 
     auto origChunks = chunks_;
-    const auto origChunkCount = chunkMask_ + 1;
-    const auto origMaxSizeWithoutRehash = bucket_count();
 
+    // compute new size
+    std::size_t const kInitialCapacity = 2;
+    std::size_t const kHalfChunkCapacity =
+        (Chunk::kDesiredCapacity / 2) & ~std::size_t{1};
+    std::size_t newMaxSizeWithoutRehash;
+    std::size_t newChunkCount;
+    if (capacity <= kHalfChunkCapacity) {
+      newChunkCount = 1;
+      newMaxSizeWithoutRehash =
+          (capacity < kInitialCapacity) ? kInitialCapacity : kHalfChunkCapacity;
+    } else {
+      newChunkCount = nextPowTwo(
+          (capacity + Chunk::kDesiredCapacity - 1) / Chunk::kDesiredCapacity);
+      newMaxSizeWithoutRehash = newChunkCount * Chunk::kDesiredCapacity;
+
+      constexpr std::size_t kMaxChunksWithoutCapacityOverflow =
+          (std::numeric_limits<std::size_t>::max)() / Chunk::kDesiredCapacity;
+
+      if (newChunkCount > kMaxChunksWithoutCapacityOverflow ||
+          newMaxSizeWithoutRehash > max_size()) {
+        throw_exception<std::bad_alloc>();
+      }
+    }
+
+    // is rehash needed?
+    if (origMaxSizeWithoutRehash == newMaxSizeWithoutRehash) {
+      return;
+    }
+
+    BytePtr rawAllocation;
     auto undoState = this->beforeRehash(
-        size(), origMaxSizeWithoutRehash, newMaxSizeWithoutRehash);
+        size(),
+        origMaxSizeWithoutRehash,
+        newMaxSizeWithoutRehash,
+        chunkAllocSize(newChunkCount, newMaxSizeWithoutRehash),
+        rawAllocation);
+    chunks_ =
+        initializeChunks(rawAllocation, newChunkCount, newMaxSizeWithoutRehash);
+    chunkMask_ = newChunkCount - 1;
+
     bool success = false;
     SCOPE_EXIT {
+      // this SCOPE_EXIT reverts chunks_ and chunkMask_ if necessary
+      BytePtr finishedRawAllocation = nullptr;
+      std::size_t finishedAllocSize = 0;
+      if (LIKELY(success)) {
+        if (origMaxSizeWithoutRehash > 0) {
+          finishedRawAllocation = std::pointer_traits<BytePtr>::pointer_to(
+              *static_cast<uint8_t*>(static_cast<void*>(&*origChunks)));
+          finishedAllocSize =
+              chunkAllocSize(origChunkCount, origMaxSizeWithoutRehash);
+        }
+      } else {
+        finishedRawAllocation = rawAllocation;
+        finishedAllocSize =
+            chunkAllocSize(newChunkCount, newMaxSizeWithoutRehash);
+        chunks_ = origChunks;
+        chunkMask_ = origChunkCount - 1;
+      }
+
       this->afterRehash(
           std::move(undoState),
           success,
           size(),
           origMaxSizeWithoutRehash,
-          newMaxSizeWithoutRehash);
+          newMaxSizeWithoutRehash,
+          finishedRawAllocation,
+          finishedAllocSize);
     };
-
-    chunks_ = newChunks(newChunkCount, newMaxSizeWithoutRehash);
-    chunkMask_ = newChunkCount - 1;
 
     if (size() == 0) {
       // nothing to do
@@ -1642,16 +1869,10 @@ class F14Table : public Policy {
       if (newChunkCount <= stackBuf.size()) {
         fullness = stackBuf.data();
       } else {
-        try {
-          ByteAlloc a{this->alloc()};
-          fullness =
-              &*std::allocator_traits<ByteAlloc>::allocate(a, newChunkCount);
-        } catch (...) {
-          deleteChunks(chunks_, newChunkCount, newMaxSizeWithoutRehash);
-          chunks_ = origChunks;
-          chunkMask_ = origChunkCount - 1;
-          throw;
-        }
+        ByteAlloc a{this->alloc()};
+        // may throw
+        fullness =
+            &*std::allocator_traits<ByteAlloc>::allocate(a, newChunkCount);
       }
       std::memset(fullness, '\0', newChunkCount);
       SCOPE_EXIT {
@@ -1699,9 +1920,6 @@ class F14Table : public Policy {
       }
     }
 
-    if (origMaxSizeWithoutRehash != 0) {
-      deleteChunks(origChunks, origChunkCount, origMaxSizeWithoutRehash);
-    }
     success = true;
   }
 
@@ -1709,40 +1927,10 @@ class F14Table : public Policy {
   // user has no control over max_load_factor
 
   void rehash(std::size_t capacity) {
-    if (capacity < size()) {
-      capacity = size();
-    }
-
-    auto unroundedLimit = max_size();
-    std::size_t exactLimit = Chunk::kDesiredCapacity;
-    while (exactLimit <= unroundedLimit / 2) {
-      exactLimit *= 2;
-    }
-    if (UNLIKELY(capacity > exactLimit)) {
-      throw_exception<std::bad_alloc>();
-    }
-
-    std::size_t const kInitialCapacity = 2;
-    std::size_t const kHalfChunkCapacity =
-        (Chunk::kDesiredCapacity / 2) & ~std::size_t{1};
-    std::size_t maxSizeWithoutRehash;
-    std::size_t chunkCount;
-    if (capacity <= kInitialCapacity) {
-      chunkCount = 1;
-      maxSizeWithoutRehash = kInitialCapacity;
-    } else if (capacity <= kHalfChunkCapacity) {
-      chunkCount = 1;
-      maxSizeWithoutRehash = kHalfChunkCapacity;
-    } else {
-      chunkCount = 1;
-      while (chunkCount * Chunk::kDesiredCapacity < capacity) {
-        chunkCount *= 2;
-      }
-      maxSizeWithoutRehash = chunkCount * Chunk::kDesiredCapacity;
-    }
-    if (bucket_count() != maxSizeWithoutRehash) {
-      rehashImpl(chunkCount, maxSizeWithoutRehash);
-    }
+    rehashImpl(
+        std::max<std::size_t>(capacity, size()),
+        chunkMask_ + 1,
+        bucket_count());
   }
 
   void reserve(std::size_t capacity) {
@@ -1751,13 +1939,11 @@ class F14Table : public Policy {
 
   // Returns true iff a rehash was performed
   void reserveForInsert(size_t incoming = 1) {
-    if (size() + incoming - 1 >= bucket_count()) {
-      reserveForInsertImpl(incoming);
+    auto capacity = size() + incoming;
+    auto bc = bucket_count();
+    if (capacity - 1 >= bc) {
+      rehashImpl(capacity, chunkMask_ + 1, bc);
     }
-  }
-
-  FOLLY_NOINLINE void reserveForInsertImpl(size_t incoming) {
-    rehash(size() + incoming);
   }
 
   // Returns pos,true if construct, pos,false if found.  key is only used
@@ -1767,9 +1953,11 @@ class F14Table : public Policy {
   std::pair<ItemIter, bool> tryEmplaceValue(K const& key, Args&&... args) {
     const auto hp = splitHash(this->computeKeyHash(key));
 
-    auto existing = findImpl(hp, key);
-    if (!existing.atEnd()) {
-      return std::make_pair(existing, false);
+    if (size() > 0) {
+      auto existing = findImpl(hp, key);
+      if (!existing.atEnd()) {
+        return std::make_pair(existing, false);
+      }
     }
 
     reserveForInsert();
@@ -1789,6 +1977,7 @@ class F14Table : public Policy {
       chunk->adjustHostedOverflowCount(Chunk::kIncrHostedOverflowCount);
     }
     std::size_t itemIndex = firstEmpty.index();
+    FOLLY_SAFE_DCHECK(!chunk->occupied(itemIndex), "");
 
     chunk->setTag(itemIndex, hp.second);
     ItemIter iter{chunk, itemIndex};
@@ -1810,10 +1999,12 @@ class F14Table : public Policy {
     // we don't get too low a load factor
     bool willReset = Reset || chunkMask_ + 1 >= 16;
 
+    auto origSize = size();
+    auto origCapacity = bucket_count();
     if (willReset) {
-      this->beforeReset(size(), bucket_count());
+      this->beforeReset(origSize, origCapacity);
     } else {
-      this->beforeClear(size(), bucket_count());
+      this->beforeClear(origSize, origCapacity);
     }
 
     if (!empty()) {
@@ -1848,13 +2039,16 @@ class F14Table : public Policy {
     }
 
     if (willReset) {
-      deleteChunks(chunks_, chunkMask_ + 1, bucket_count());
+      BytePtr rawAllocation = std::pointer_traits<BytePtr>::pointer_to(
+          *static_cast<uint8_t*>(static_cast<void*>(&*chunks_)));
+      std::size_t rawSize = chunkAllocSize(chunkMask_ + 1, bucket_count());
+
       chunks_ = Chunk::emptyInstance();
       chunkMask_ = 0;
 
-      this->afterReset();
+      this->afterReset(origSize, origCapacity, rawAllocation, rawSize);
     } else {
-      this->afterClear(bucket_count());
+      this->afterClear(origSize, origCapacity);
     }
   }
 
@@ -1936,10 +2130,51 @@ class F14Table : public Policy {
   template <typename V>
   void visitAllocationClasses(V&& visitor) const {
     auto bc = bucket_count();
-    if (bc != 0) {
-      visitor(allocSize(chunkMask_ + 1, bc), 1);
+    this->visitPolicyAllocationClasses(
+        (bc == 0 ? 0 : chunkAllocSize(chunkMask_ + 1, bc)),
+        size(),
+        bc,
+        visitor);
+  }
+
+  // visitor should take an Item const&
+  template <typename V>
+  void visitItems(V&& visitor) const {
+    if (empty()) {
+      return;
     }
-    this->visitPolicyAllocationClasses(size(), bc, visitor);
+    std::size_t maxChunkIndex = lastOccupiedChunk() - chunks_;
+    auto chunk = &chunks_[0];
+    for (std::size_t i = 0; i <= maxChunkIndex; ++i, ++chunk) {
+      auto iter = chunk->occupiedIter();
+      if (Policy::prefetchBeforeCopy()) {
+        for (auto piter = iter; piter.hasNext();) {
+          this->prefetchValue(chunk->citem(piter.next()));
+        }
+      }
+      while (iter.hasNext()) {
+        visitor(chunk->citem(iter.next()));
+      }
+    }
+  }
+
+  // visitor should take two Item const*
+  template <typename V>
+  void visitContiguousItemRanges(V&& visitor) const {
+    if (empty()) {
+      return;
+    }
+    std::size_t maxChunkIndex = lastOccupiedChunk() - chunks_;
+    auto chunk = &chunks_[0];
+    for (std::size_t i = 0; i <= maxChunkIndex; ++i, ++chunk) {
+      for (auto iter = chunk->occupiedRangeIter(); iter.hasNext();) {
+        auto be = iter.next();
+        FOLLY_SAFE_DCHECK(
+            chunk->occupied(be.first) && chunk->occupied(be.second - 1), "");
+        Item const* b = chunk->itemAddr(be.first);
+        visitor(b, b + (be.second - be.first));
+      }
+    }
   }
 
  private:
@@ -1957,7 +2192,7 @@ class F14Table : public Policy {
   F14TableStats computeStats() const {
     F14TableStats stats;
 
-    if (folly::kIsDebug && Policy::kEnableItemIteration) {
+    if (kIsDebug && Policy::kEnableItemIteration) {
       // validate iteration
       std::size_t n = 0;
       ItemIter prev;
@@ -2036,7 +2271,9 @@ class F14Table : public Policy {
     FOLLY_SAFE_DCHECK(n1 == size(), "");
     FOLLY_SAFE_DCHECK(n2 == size(), "");
 
+#if FOLLY_HAS_RTTI
     stats.policy = typeid(Policy).name();
+#endif
     stats.size = size();
     stats.valueSize = sizeof(value_type);
     stats.bucketCount = bucket_count();

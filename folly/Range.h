@@ -25,7 +25,6 @@
 #include <folly/portability/Constexpr.h>
 #include <folly/portability/String.h>
 
-#include <glog/logging.h>
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -33,6 +32,7 @@
 #include <cstddef>
 #include <cstring>
 #include <iosfwd>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -474,45 +474,63 @@ class Range {
     return detail::value_before(e_);
   }
 
+  /// explicit operator conversion to any compatible type
+  ///
+  /// A compatible type is one which is constructible with an iterator and a
+  /// size (preferred), or a pair of iterators (fallback), passed by const-ref.
+  ///
+  /// Participates in overload resolution precisely when the target type is
+  /// compatible. This allows std::is_constructible compile-time checks to work.
   template <
       typename Tgt,
-      std::enable_if_t<std::is_constructible<Tgt, Iter&, Iter&>::value, int> =
-          0>
-  FOLLY_CPP14_CONSTEXPR explicit operator Tgt() noexcept(
-      noexcept(Tgt(std::declval<Iter&>(), std::declval<Iter&>()))) {
-    return Tgt(b_, e_);
+      std::enable_if_t<
+          std::is_constructible<Tgt, Iter const&, size_type>::value,
+          int> = 0>
+  constexpr explicit operator Tgt() const noexcept(
+      std::is_nothrow_constructible<Tgt, Iter const&, size_type>::value) {
+    return Tgt(b_, walk_size());
   }
   template <
       typename Tgt,
       std::enable_if_t<
-          std::is_constructible<Tgt, Iter const&, Iter const&>::value,
+          !std::is_constructible<Tgt, Iter const&, size_type>::value &&
+              std::is_constructible<Tgt, Iter const&, Iter const&>::value,
           int> = 0>
   constexpr explicit operator Tgt() const noexcept(
-      noexcept(Tgt(std::declval<Iter const&>(), std::declval<Iter const&>()))) {
+      std::is_nothrow_constructible<Tgt, Iter const&, Iter const&>::value) {
     return Tgt(b_, e_);
   }
 
+  /// explicit non-operator conversion to any compatible type
+  ///
+  /// A compatible type is one which is constructible with an iterator and a
+  /// size (preferred), or a pair of iterators (fallback), passed by const-ref.
+  ///
+  /// Participates in overload resolution precisely when the target type is
+  /// compatible. This allows is_invocable compile-time checks to work.
+  ///
+  /// Provided in addition to the explicit operator conversion to permit passing
+  /// additional arguments to the target type constructor. A canonical example
+  /// of an additional argument might be an allocator, where the target type is
+  /// some specialization of std::vector or std::basic_string in a context which
+  /// requires a non-default-constructed allocator.
   template <typename Tgt, typename... Args>
-  FOLLY_CPP14_CONSTEXPR auto to(Args&&... args) noexcept(noexcept(
-      Tgt(std::declval<Iter&>(),
-          std::declval<Iter&>(),
-          static_cast<Args&&>(args)...)))
-      -> decltype(
-          Tgt(std::declval<Iter&>(),
-              std::declval<Iter&>(),
-              static_cast<Args&&>(args)...)) {
-    return Tgt(b_, e_, static_cast<Args&&>(args)...);
+  constexpr std::enable_if_t<
+      std::is_constructible<Tgt, Iter const&, size_type>::value,
+      Tgt>
+  to(Args&&... args) const noexcept(
+      std::is_nothrow_constructible<Tgt, Iter const&, size_type, Args&&...>::
+          value) {
+    return Tgt(b_, walk_size(), static_cast<Args&&>(args)...);
   }
-
   template <typename Tgt, typename... Args>
-  constexpr auto to(Args&&... args) const noexcept(noexcept(
-      Tgt(std::declval<Iter const&>(),
-          std::declval<Iter const&>(),
-          static_cast<Args&&>(args)...)))
-      -> decltype(
-          Tgt(std::declval<Iter const&>(),
-              std::declval<Iter const&>(),
-              static_cast<Args&&>(args)...)) {
+  constexpr std::enable_if_t<
+      !std::is_constructible<Tgt, Iter const&, size_type>::value &&
+          std::is_constructible<Tgt, Iter const&, Iter const&>::value,
+      Tgt>
+  to(Args&&... args) const noexcept(
+      std::is_nothrow_constructible<Tgt, Iter const&, Iter const&, Args&&...>::
+          value) {
     return Tgt(b_, e_, static_cast<Args&&>(args)...);
   }
 
@@ -546,12 +564,12 @@ class Range {
   }
 
   value_type& operator[](size_t i) {
-    DCHECK_GT(size(), i);
+    assert(i < size());
     return b_[i];
   }
 
   const value_type& operator[](size_t i) const {
-    DCHECK_GT(size(), i);
+    assert(i < size());
     return b_[i];
   }
 
@@ -587,8 +605,9 @@ class Range {
   // B) If you have to use this exact function then make your own hasher
   //    object and copy the body over (see thrift example: D3972362).
   //    https://github.com/facebook/fbthrift/commit/f8ed502e24ab4a32a9d5f266580
-  [[deprecated("Replace with folly::Hash if the hash is not serialized")]]
-  uint32_t hash() const {
+  [[deprecated(
+      "Replace with folly::Hash if the hash is not serialized")]] uint32_t
+  hash() const {
     // Taken from fbi/nstring.h:
     //    Quick and dirty bernstein hash...fine for short ascii strings
     uint32_t hash = 5381;
@@ -622,17 +641,17 @@ class Range {
 
   // unchecked versions
   void uncheckedAdvance(size_type n) {
-    DCHECK_LE(n, size());
+    assert(n <= size());
     b_ += n;
   }
 
   void uncheckedSubtract(size_type n) {
-    DCHECK_LE(n, size());
+    assert(n <= size());
     e_ -= n;
   }
 
   Range uncheckedSubpiece(size_type first, size_type length = npos) const {
-    DCHECK_LE(first, size());
+    assert(first <= size());
     return Range(b_ + first, std::min(length, size() - first));
   }
 
@@ -1420,16 +1439,12 @@ template <class T>
 struct hasher<
     folly::Range<T*>,
     typename std::enable_if<std::is_pod<T>::value, void>::type> {
+  using folly_is_avalanching = std::true_type;
+
   size_t operator()(folly::Range<T*> r) const {
     return hash::SpookyHashV2::Hash64(r.begin(), r.size() * sizeof(T), 0);
   }
 };
-
-template <typename H, typename K>
-struct IsAvalanchingHasher;
-
-template <typename T, typename E, typename K>
-struct IsAvalanchingHasher<hasher<folly::Range<T*>, E>, K> : std::true_type {};
 
 /**
  * _sp is a user-defined literal suffix to make an appropriate Range

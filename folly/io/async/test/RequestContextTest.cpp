@@ -44,6 +44,26 @@ class TestData : public RequestData {
   int data_;
 };
 
+RequestContext& getContext() {
+  auto* ctx = RequestContext::get();
+  EXPECT_TRUE(ctx != nullptr);
+  return *ctx;
+}
+
+void setData(int data = 0) {
+  getContext().setContextData("test", std::make_unique<TestData>(data));
+}
+
+bool hasData() {
+  return getContext().getContextData("test") != nullptr;
+}
+
+const TestData& getData() {
+  auto* ptr = dynamic_cast<TestData*>(getContext().getContextData("test"));
+  EXPECT_TRUE(ptr != nullptr);
+  return *ptr;
+}
+
 TEST(RequestContext, SimpleTest) {
   EventBase base;
 
@@ -79,6 +99,35 @@ TEST(RequestContext, SimpleTest) {
   RequestContext::setContext(std::shared_ptr<RequestContext>());
   // There should always be a default context
   EXPECT_TRUE(nullptr != RequestContext::get());
+}
+
+TEST(RequestContext, RequestContextScopeGuard) {
+  RequestContextScopeGuard g0;
+  setData(10);
+  {
+    RequestContextScopeGuard g1;
+    EXPECT_FALSE(hasData());
+    setData(20);
+    EXPECT_EQ(20, getData().data_);
+    EXPECT_EQ(1, getData().set_);
+    EXPECT_EQ(0, getData().unset_);
+  }
+  EXPECT_EQ(10, getData().data_);
+  EXPECT_EQ(2, getData().set_);
+  EXPECT_EQ(1, getData().unset_);
+}
+
+TEST(RequestContext, defaultContext) {
+  // Don't create a top level guard
+  // Regression test for set/onset used to not work with the default context
+  setData(10);
+  {
+    RequestContextScopeGuard g1;
+    EXPECT_FALSE(hasData());
+  }
+  EXPECT_EQ(10, getData().data_);
+  EXPECT_EQ(2, getData().set_);
+  EXPECT_EQ(1, getData().unset_);
 }
 
 TEST(RequestContext, setIfAbsentTest) {
@@ -156,49 +205,4 @@ TEST(RequestContext, deadlockTest) {
   RequestContext::get()->setContextData(
       "test", std::make_unique<DeadlockTestData>("test2"));
   RequestContext::get()->clearContextData("test");
-}
-
-TEST(RequestContext, Nested) {
-  class NestableRequestData : public RequestData {
-   public:
-    explicit NestableRequestData() {}
-    explicit NestableRequestData(int val) : val_(val) {}
-
-    bool hasCallback() override {
-      return false;
-    }
-
-    std::unique_ptr<RequestData> createChild() override {
-      return std::make_unique<NestableRequestData>(val_ + 1);
-    }
-
-    int val_{0};
-
-    static NestableRequestData* get() {
-      return static_cast<NestableRequestData*>(
-          RequestContext::get()->getContextData("nestable"));
-    }
-  };
-
-  RootRequestContextGuard root;
-  RequestContext::get()->setContextData(
-      "nestable", make_unique<NestableRequestData>());
-  RequestContext::get()->setContextData(
-      "unnestable", make_unique<TestData>(42));
-  EXPECT_EQ(NestableRequestData::get()->val_, 0);
-  EXPECT_NE(RequestContext::get()->getContextData("unnestable"), nullptr);
-  EXPECT_NE(NestableRequestData::get(), nullptr);
-  {
-    NestedRequestContextGuard nested1;
-    EXPECT_EQ(NestableRequestData::get()->val_, 1);
-    EXPECT_EQ(RequestContext::get()->getContextData("unnestable"), nullptr);
-    NestedRequestContextGuard nested2;
-    EXPECT_EQ(NestableRequestData::get()->val_, 2);
-    RootRequestContextGuard newRoot;
-    EXPECT_EQ(NestableRequestData::get(), nullptr);
-  }
-  {
-    NestedRequestContextGuard nested1;
-    EXPECT_EQ(NestableRequestData::get()->val_, 1);
-  }
 }

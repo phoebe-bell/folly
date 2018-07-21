@@ -108,13 +108,13 @@ class hazptr_obj {
 
   void push_to_retired(hazptr_domain<Atom>& domain) {
 #if FOLLY_HAZPTR_THR_LOCAL
-    if (&domain == &default_hazptr_domain<Atom>()) {
+    if (&domain == &default_hazptr_domain<Atom>() && !domain.shutdown_) {
       hazptr_priv_tls<Atom>().push(this);
       return;
     }
 #endif
     hazptr_obj_list<Atom> l(this);
-    hazptr_domain_push_retired(l, domain);
+    hazptr_domain_push_retired(l, true, domain);
   }
 
   FOLLY_NOINLINE void pre_retire_check_fail() noexcept {

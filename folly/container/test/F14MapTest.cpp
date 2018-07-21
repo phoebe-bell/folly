@@ -16,6 +16,9 @@
 
 #include <folly/container/F14Map.h>
 
+#include <algorithm>
+#include <unordered_map>
+
 #include <folly/Conv.h>
 #include <folly/FBString.h>
 #include <folly/container/test/F14TestUtil.h>
@@ -60,8 +63,11 @@ void runAllocatedMemorySizeTest() {
   TMap<K, V, DefaultHasher<K>, DefaultKeyEqual<K>, A> m;
   EXPECT_EQ(testAllocatedMemorySize, m.getAllocatedMemorySize());
 
+  std::size_t maxSize = 0;
   for (size_t i = 0; i < 1000; ++i) {
     m.insert(std::make_pair(folly::to<K>(i), V{}));
+    maxSize = std::max(m.size(), maxSize);
+    EXPECT_GT(maxSize, (m.bucket_count() / 2) & ~std::size_t{1});
     m.erase(folly::to<K>(i / 10 + 2));
     EXPECT_EQ(testAllocatedMemorySize, m.getAllocatedMemorySize());
     std::size_t size = 0;
@@ -98,6 +104,58 @@ TEST(F14Map, getAllocatedMemorySize) {
   runAllocatedMemorySizeTests<std::string, int>();
   runAllocatedMemorySizeTests<std::string, std::string>();
   runAllocatedMemorySizeTests<folly::fbstring, long>();
+}
+
+template <typename M>
+void runVisitContiguousRangesTest(int n) {
+  M map;
+
+  for (int i = 0; i < n; ++i) {
+    map[i] = i;
+    map.erase(i / 2);
+  }
+
+  std::unordered_map<uintptr_t, bool> visited;
+  for (auto& entry : map) {
+    visited[reinterpret_cast<uintptr_t>(&entry)] = false;
+  }
+
+  map.visitContiguousRanges([&](auto b, auto e) {
+    for (auto i = b; i != e; ++i) {
+      auto iter = visited.find(reinterpret_cast<uintptr_t>(i));
+      ASSERT_TRUE(iter != visited.end());
+      EXPECT_FALSE(iter->second);
+      iter->second = true;
+    }
+  });
+
+  // ensure no entries were skipped
+  for (auto& e : visited) {
+    EXPECT_TRUE(e.second);
+  }
+}
+
+template <typename M>
+void runVisitContiguousRangesTest() {
+  runVisitContiguousRangesTest<M>(0); // empty
+  runVisitContiguousRangesTest<M>(5); // single chunk
+  runVisitContiguousRangesTest<M>(1000); // many chunks
+}
+
+TEST(F14ValueMap, visitContiguousRanges) {
+  runVisitContiguousRangesTest<folly::F14ValueMap<int, int>>();
+}
+
+TEST(F14NodeMap, visitContiguousRanges) {
+  runVisitContiguousRangesTest<folly::F14NodeMap<int, int>>();
+}
+
+TEST(F14VectorMap, visitContiguousRanges) {
+  runVisitContiguousRangesTest<folly::F14VectorMap<int, int>>();
+}
+
+TEST(F14FastMap, visitContiguousRanges) {
+  runVisitContiguousRangesTest<folly::F14FastMap<int, int>>();
 }
 
 ///////////////////////////////////
@@ -1080,23 +1138,28 @@ TEST(F14VectorMap, destructuringErase) {
       0);
 }
 
-TEST(F14ValueMap, vectorMaxSize) {
+TEST(F14ValueMap, maxSize) {
   F14ValueMap<int, int> m;
   EXPECT_EQ(
       m.max_size(),
-      std::numeric_limits<uint64_t>::max() / sizeof(std::pair<int, int>));
+      std::numeric_limits<std::size_t>::max() / sizeof(std::pair<int, int>));
 }
 
-TEST(F14NodeMap, vectorMaxSize) {
+TEST(F14NodeMap, maxSize) {
   F14NodeMap<int, int> m;
   EXPECT_EQ(
       m.max_size(),
-      std::numeric_limits<uint64_t>::max() / sizeof(std::pair<int, int>));
+      std::numeric_limits<std::size_t>::max() / sizeof(std::pair<int, int>));
 }
 
 TEST(F14VectorMap, vectorMaxSize) {
   F14VectorMap<int, int> m;
-  EXPECT_EQ(m.max_size(), std::numeric_limits<uint32_t>::max());
+  EXPECT_EQ(
+      m.max_size(),
+      std::min(
+          std::size_t{std::numeric_limits<uint32_t>::max()},
+          std::numeric_limits<std::size_t>::max() /
+              sizeof(std::pair<int, int>)));
 }
 
 template <typename M>

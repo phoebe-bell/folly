@@ -21,6 +21,7 @@
 #include <folly/logging/LogStream.h>
 #include <folly/logging/Logger.h>
 #include <folly/logging/LoggerDB.h>
+#include <folly/logging/RateLimiter.h>
 #include <cstdlib>
 
 /*
@@ -53,7 +54,11 @@
  * best if you always invoke the compiler from the root directory of your
  * project repository.
  */
-#define XLOG(level, ...) XLOG_IF(level, true, ##__VA_ARGS__)
+#define XLOG(level, ...)                   \
+  XLOG_IMPL(                               \
+      ::folly::LogLevel::level,            \
+      ::folly::LogStreamProcessor::APPEND, \
+      ##__VA_ARGS__)
 
 /**
  * Log a message if and only if the specified condition predicate evaluates
@@ -61,7 +66,7 @@
  * passes.
  */
 #define XLOG_IF(level, cond, ...)          \
-  XLOG_IMPL(                               \
+  XLOG_IF_IMPL(                            \
       ::folly::LogLevel::level,            \
       cond,                                \
       ::folly::LogStreamProcessor::APPEND, \
@@ -69,8 +74,13 @@
 /**
  * Log a message to this file's default log category, using a format string.
  */
-#define XLOGF(level, fmt, arg1, ...) \
-  XLOGF_IF(level, true, fmt, arg1, ##__VA_ARGS__)
+#define XLOGF(level, fmt, arg1, ...)       \
+  XLOG_IMPL(                               \
+      ::folly::LogLevel::level,            \
+      ::folly::LogStreamProcessor::FORMAT, \
+      fmt,                                 \
+      arg1,                                \
+      ##__VA_ARGS__)
 
 /**
  * Log a message using a format string if and only if the specified condition
@@ -78,7 +88,7 @@
  * if the log-level check passes.
  */
 #define XLOGF_IF(level, cond, fmt, arg1, ...) \
-  XLOG_IMPL(                                  \
+  XLOG_IF_IMPL(                               \
       ::folly::LogLevel::level,               \
       cond,                                   \
       ::folly::LogStreamProcessor::FORMAT,    \
@@ -86,6 +96,54 @@
       arg1,                                   \
       ##__VA_ARGS__)
 
+/**
+ * Similar to XLOG(...) except only log a message every @param ms
+ * milliseconds.
+ *
+ * Note that this is threadsafe.
+ */
+#define XLOG_EVERY_MS(level, ms, ...)                                    \
+  XLOG_IF(                                                               \
+      level,                                                             \
+      [] {                                                               \
+        static ::folly::logging::IntervalRateLimiter                     \
+            folly_detail_xlog_limiter(1, std::chrono::milliseconds(ms)); \
+        return folly_detail_xlog_limiter.check();                        \
+      }(),                                                               \
+      ##__VA_ARGS__)
+
+/**
+ * Similar to XLOG(...) except only log a message every @param n
+ * invocations.
+ *
+ * The internal counter is process-global and threadsafe.
+ */
+#define XLOG_EVERY_N(level, n, ...)                                            \
+  XLOG_IF(                                                                     \
+      level,                                                                   \
+      [] {                                                                     \
+        static std::atomic<size_t> folly_detail_xlog_count{0};                 \
+        return FOLLY_UNLIKELY(                                                 \
+            (folly_detail_xlog_count.fetch_add(1, std::memory_order_relaxed) % \
+             (n)) == 0);                                                       \
+      }(),                                                                     \
+      ##__VA_ARGS__)
+
+/**
+ * Similar to XLOG(...) except only log at most @param count messages
+ * per @param ms millisecond interval.
+ *
+ * The internal counters are process-global and threadsafe.
+ */
+#define XLOG_N_PER_MS(level, count, ms, ...)                                   \
+  XLOG_IF(                                                                     \
+      level,                                                                   \
+      [] {                                                                     \
+        static ::folly::logging::IntervalRateLimiter                           \
+            folly_detail_xlog_limiter((count), std::chrono::milliseconds(ms)); \
+        return folly_detail_xlog_limiter.check();                              \
+      }(),                                                                     \
+      ##__VA_ARGS__)
 /**
  * FOLLY_XLOG_STRIP_PREFIXES can be defined to a string containing a
  * colon-separated list of directory prefixes to strip off from the filename
@@ -104,10 +162,17 @@
 #define XLOG_FILENAME __FILE__
 #endif
 
+#define XLOG_IMPL(level, type, ...) \
+  XLOG_ACTUAL_IMPL(                 \
+      level, true, ::folly::isLogLevelFatal(level), type, ##__VA_ARGS__)
+
+#define XLOG_IF_IMPL(level, cond, type, ...) \
+  XLOG_ACTUAL_IMPL(level, cond, false, type, ##__VA_ARGS__)
+
 /**
  * Helper macro used to implement XLOG() and XLOGF()
  *
- * Beware that the level argument is evalutated twice.
+ * Beware that the level argument is evaluated twice.
  *
  * This macro is somewhat tricky:
  *
@@ -147,31 +212,28 @@
  *   initialized.  On all subsequent calls, disabled log statements can be
  *   skipped with just a single check of the LogLevel.
  */
-/* clang-format off */
-#define XLOG_IMPL(level, cond, type, ...)                                    \
-  (!XLOG_IS_ON_IMPL(level) || !(cond))                                       \
-      ? ::folly::logDisabledHelper(                                          \
-            std::integral_constant<bool, ::folly::isLogLevelFatal(level)>{}) \
-      : ::folly::LogStreamVoidify< ::folly::isLogLevelFatal(level)>{} &      \
-          ::folly::LogStreamProcessor(                                       \
-              [] {                                                           \
-                static ::folly::XlogCategoryInfo<XLOG_IS_IN_HEADER_FILE>     \
-                    _xlogCategory_;                                          \
-                return _xlogCategory_.getInfo(                               \
-                    &xlog_detail::xlogFileScopeInfo);                        \
-              }(),                                                           \
-              (level),                                                       \
-              xlog_detail::getXlogCategoryName(XLOG_FILENAME, 0),            \
-              xlog_detail::isXlogCategoryOverridden(0),                      \
-              XLOG_FILENAME,                                                 \
-              __LINE__,                                                      \
-              (type),                                                        \
-              ##__VA_ARGS__)                                                 \
+#define XLOG_ACTUAL_IMPL(level, cond, always_fatal, type, ...)             \
+  (!XLOG_IS_ON_IMPL(level) || !(cond))                                     \
+      ? ::folly::logDisabledHelper(::folly::bool_constant<always_fatal>{}) \
+      : ::folly::LogStreamVoidify<::folly::isLogLevelFatal(level)>{} &     \
+          ::folly::LogStreamProcessor(                                     \
+              [] {                                                         \
+                static ::folly::XlogCategoryInfo<XLOG_IS_IN_HEADER_FILE>   \
+                    folly_detail_xlog_category;                            \
+                return folly_detail_xlog_category.getInfo(                 \
+                    &xlog_detail::xlogFileScopeInfo);                      \
+              }(),                                                         \
+              (level),                                                     \
+              xlog_detail::getXlogCategoryName(XLOG_FILENAME, 0),          \
+              xlog_detail::isXlogCategoryOverridden(0),                    \
+              XLOG_FILENAME,                                               \
+              __LINE__,                                                    \
+              (type),                                                      \
+              ##__VA_ARGS__)                                               \
               .stream()
-/* clang-format on */
 
 /**
- * Check if and XLOG() statement with the given log level would be enabled.
+ * Check if an XLOG() statement with the given log level would be enabled.
  *
  * The level parameter must be an unqualified LogLevel enum value.
  */
@@ -192,14 +254,15 @@
  *
  * See XlogLevelInfo for the implementation details.
  */
-#define XLOG_IS_ON_IMPL(level)                                         \
-  ([] {                                                                \
-    static ::folly::XlogLevelInfo<XLOG_IS_IN_HEADER_FILE> _xlogLevel_; \
-    return _xlogLevel_.check(                                          \
-        (level),                                                       \
-        xlog_detail::getXlogCategoryName(XLOG_FILENAME, 0),            \
-        xlog_detail::isXlogCategoryOverridden(0),                      \
-        &xlog_detail::xlogFileScopeInfo);                              \
+#define XLOG_IS_ON_IMPL(level)                              \
+  ([] {                                                     \
+    static ::folly::XlogLevelInfo<XLOG_IS_IN_HEADER_FILE>   \
+        folly_detail_xlog_level;                            \
+    return folly_detail_xlog_level.check(                   \
+        (level),                                            \
+        xlog_detail::getXlogCategoryName(XLOG_FILENAME, 0), \
+        xlog_detail::isXlogCategoryOverridden(0),           \
+        &xlog_detail::xlogFileScopeInfo);                   \
   }())
 
 /**
@@ -257,6 +320,30 @@
   }                                                        \
   }                                                        \
   }
+
+/**
+ * Assert that a condition is true.
+ *
+ * This crashes the program with an XLOG(FATAL) message if the condition is
+ * false.  Unlike assert() CHECK statements are always enabled, regardless of
+ * the setting of NDEBUG.
+ */
+#define XCHECK(cond, ...) \
+  XLOG_IF(FATAL, UNLIKELY(!(cond)), "Check failed: " #cond " ", ##__VA_ARGS__)
+
+/**
+ * Assert that a condition is true in non-debug builds.
+ *
+ * When NDEBUG is set this behaves like XDCHECK()
+ * When NDEBUG is not defined XDCHECK statements are not evaluated and will
+ * never log.
+ *
+ * You can use `XLOG_IF(DFATAL, condition)` instead if you want the condition to
+ * be evaluated in release builds but log a message without crashing the
+ * program.
+ */
+#define XDCHECK(cond, ...) \
+  (!::folly::kIsDebug) ? static_cast<void>(0) : XCHECK(cond, ##__VA_ARGS__)
 
 /**
  * XLOG_IS_IN_HEADER_FILE evaluates to false if we can definitively tell if we

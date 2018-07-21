@@ -133,19 +133,18 @@ class HHWheelTimer : private folly::AsyncTimeout,
           expiration_ - now);
     }
 
-    void setScheduled(HHWheelTimer* wheel,
-                      std::chrono::milliseconds);
+    void setScheduled(HHWheelTimer* wheel, std::chrono::milliseconds);
     void cancelTimeoutImpl();
 
     HHWheelTimer* wheel_{nullptr};
     std::chrono::steady_clock::time_point expiration_{};
     int bucket_{-1};
 
-    typedef boost::intrusive::list<
-      Callback,
-      boost::intrusive::constant_time_size<false> > List;
+    typedef boost::intrusive::
+        list<Callback, boost::intrusive::constant_time_size<false>>
+            List;
 
-    std::shared_ptr<RequestContext> context_;
+    std::shared_ptr<RequestContext> requestContext_;
 
     // Give HHWheelTimer direct access to our members so it can take care
     // of scheduling/cancelling.
@@ -209,10 +208,10 @@ class HHWheelTimer : private folly::AsyncTimeout,
    * If the callback is already scheduled, this cancels the existing timeout
    * before scheduling the new timeout.
    */
-  void scheduleTimeout(Callback* callback,
-                       std::chrono::milliseconds timeout);
-  void scheduleTimeoutImpl(Callback* callback,
-                       std::chrono::milliseconds timeout);
+  void scheduleTimeout(Callback* callback, std::chrono::milliseconds timeout);
+  void scheduleTimeoutImpl(
+      Callback* callback,
+      std::chrono::milliseconds timeout);
 
   /**
    * Schedule the specified Callback to be invoked after the
@@ -235,7 +234,7 @@ class HHWheelTimer : private folly::AsyncTimeout,
           fn_();
         } catch (std::exception const& e) {
           LOG(ERROR) << "HHWheelTimer timeout callback threw an exception: "
-            << e.what();
+                     << e.what();
         } catch (...) {
           LOG(ERROR) << "HHWheelTimer timeout callback threw a non-exception.";
         }
@@ -250,7 +249,7 @@ class HHWheelTimer : private folly::AsyncTimeout,
   /**
    * Return the number of currently pending timeouts
    */
-  uint64_t count() const {
+  std::size_t count() const {
     return count_;
   }
 
@@ -273,8 +272,8 @@ class HHWheelTimer : private folly::AsyncTimeout,
 
  private:
   // Forbidden copy constructor and assignment operator
-  HHWheelTimer(HHWheelTimer const &) = delete;
-  HHWheelTimer& operator=(HHWheelTimer const &) = delete;
+  HHWheelTimer(HHWheelTimer const&) = delete;
+  HHWheelTimer& operator=(HHWheelTimer const&) = delete;
 
   // Methods inherited from AsyncTimeout
   void timeoutExpired() noexcept override;
@@ -290,7 +289,7 @@ class HHWheelTimer : private folly::AsyncTimeout,
 
   typedef Callback::List CallbackList;
   CallbackList buckets_[WHEEL_BUCKETS][WHEEL_SIZE];
-  std::vector<uint64_t> bitmap_;
+  std::vector<std::size_t> bitmap_;
 
   int64_t timeToWheelTicks(std::chrono::milliseconds t) {
     return t.count() / interval_.count();
@@ -299,7 +298,7 @@ class HHWheelTimer : private folly::AsyncTimeout,
   bool cascadeTimers(int bucket, int tick);
   int64_t lastTick_;
   int64_t expireTick_;
-  uint64_t count_;
+  std::size_t count_;
   std::chrono::steady_clock::time_point startTime_;
 
   int64_t calcNextTick();

@@ -68,7 +68,15 @@ class F14BasicSet : public std::unordered_set<K, H, E, A> {
       visitor(bc * sizeof(typename Super::pointer), 1);
     }
     visitor(
-        this->size(), sizeof(StdNodeReplica<K, typename Super::value_type, H>));
+        sizeof(StdNodeReplica<K, typename Super::value_type, H>), this->size());
+  }
+
+  template <typename V>
+  void visitContiguousRanges(V&& visitor) const {
+    for (typename Super::value_type const& entry : *this) {
+      typename Super::value_type const* b = std::addressof(entry);
+      visitor(b, b + 1);
+    }
   }
 };
 } // namespace detail
@@ -138,7 +146,7 @@ class F14BasicSet {
           typename Policy::Hasher,
           typename Policy::KeyEqual,
           K>::value &&
-          !std::is_same<typename Policy::Iter, folly::remove_cvref_t<K>>::value,
+          !std::is_same<typename Policy::Iter, remove_cvref_t<K>>::value,
       T>;
 
  public:
@@ -424,11 +432,13 @@ class F14BasicSet {
   template <typename BeforeDestroy>
   FOLLY_ALWAYS_INLINE iterator
   eraseInto(const_iterator pos, BeforeDestroy&& beforeDestroy) {
-    table_.eraseIterInto(table_.unwrapIter(pos), beforeDestroy);
+    auto itemPos = table_.unwrapIter(pos);
+    table_.eraseIterInto(itemPos, beforeDestroy);
 
     // If we are inlined then gcc and clang can optimize away all of the
     // work of ++pos if the caller discards it.
-    return ++pos;
+    itemPos.advanceLikelyDead();
+    return table_.makeIter(itemPos);
   }
 
   template <typename BeforeDestroy>
@@ -619,6 +629,13 @@ class F14BasicSet {
     return table_.visitAllocationClasses(visitor);
   }
 
+  // Calls visitor with two value_type const*, b and e, such that every
+  // entry in the table is included in exactly one of the ranges [b,e).
+  // This can be used to efficiently iterate elements in bulk when crossing
+  // an API boundary that supports contiguous blocks of items.
+  template <typename V>
+  void visitContiguousRanges(V&& visitor) const;
+
   F14TableStats computeStats() const noexcept {
     return table_.computeStats();
   }
@@ -686,6 +703,11 @@ class F14ValueSet
   void swap(F14ValueSet& rhs) noexcept(Policy::kSwapIsNoexcept) {
     this->table_.swap(rhs.table_);
   }
+
+  template <typename V>
+  void visitContiguousRanges(V&& visitor) const {
+    this->table_.visitContiguousItemRanges(std::forward<V>(visitor));
+  }
 };
 
 template <typename K, typename H, typename E, typename A>
@@ -719,12 +741,22 @@ class F14NodeSet
   using Super = f14::detail::F14BasicSet<Policy>;
 
  public:
+  using typename Super::value_type;
+
   F14NodeSet() noexcept(Policy::kDefaultConstructIsNoexcept) : Super{} {}
 
   using Super::Super;
 
   void swap(F14NodeSet& rhs) noexcept(Policy::kSwapIsNoexcept) {
     this->table_.swap(rhs.table_);
+  }
+
+  template <typename V>
+  void visitContiguousRanges(V&& visitor) const {
+    this->table_.visitItems([&](typename Policy::Item ptr) {
+      value_type const* b = std::addressof(*ptr);
+      visitor(b, b + 1);
+    });
   }
 };
 
@@ -765,11 +797,8 @@ class F14VectorSet
           typename Policy::Hasher,
           typename Policy::KeyEqual,
           K>::value &&
-          !std::is_same<typename Policy::Iter, folly::remove_cvref_t<K>>::
-              value &&
-          !std::is_same<
-              typename Policy::ReverseIter,
-              folly::remove_cvref_t<K>>::value,
+          !std::is_same<typename Policy::Iter, remove_cvref_t<K>>::value &&
+          !std::is_same<typename Policy::ReverseIter, remove_cvref_t<K>>::value,
       T>;
 
  public:
@@ -885,7 +914,7 @@ class F14VectorSet
           static_cast<uint32_t>(tailIndex)});
       tail.item() = index;
       auto p = std::addressof(values[index]);
-      folly::assume(p != nullptr);
+      assume(p != nullptr);
       this->table_.transfer(a, std::addressof(values[tailIndex]), p, 1);
     }
   }
@@ -953,6 +982,15 @@ class F14VectorSet
       K const& key,
       BeforeDestroy&& beforeDestroy) {
     return eraseUnderlyingKey(key, beforeDestroy);
+  }
+
+  template <typename V>
+  void visitContiguousRanges(V&& visitor) const {
+    auto n = this->table_.size();
+    if (n > 0) {
+      value_type const* b = std::addressof(this->table_.values_[0]);
+      visitor(b, b + n);
+    }
   }
 };
 

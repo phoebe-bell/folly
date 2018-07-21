@@ -132,6 +132,7 @@ list(APPEND files
 )
 list(APPEND hfiles
   ${FOLLY_DIR}/io/async/test/AsyncSSLSocketTest.h
+  ${FOLLY_DIR}/io/async/test/AsyncSocketTest.h
   ${FOLLY_DIR}/io/async/test/AsyncSocketTest2.h
   ${FOLLY_DIR}/io/async/test/BlockingSocket.h
   ${FOLLY_DIR}/io/async/test/MockAsyncSocket.h
@@ -684,6 +685,7 @@ if (BUILD_TESTS)
       TEST group_varint_test SOURCES GroupVarintTest.cpp
       TEST group_varint_test_ssse3 SOURCES GroupVarintTest.cpp
       TEST has_member_fn_traits_test SOURCES HasMemberFnTraitsTest.cpp
+      TEST iterators_test SOURCES IteratorsTest.cpp
       TEST indestructible_test SOURCES IndestructibleTest.cpp
       TEST indexed_mem_pool_test BROKEN
         SOURCES IndexedMemPoolTest.cpp

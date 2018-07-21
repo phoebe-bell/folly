@@ -69,7 +69,7 @@ class hazptr_tc_entry {
  */
 template <template <typename> class Atom>
 class hazptr_tc {
-  static constexpr uint8_t kCapacity = 3;
+  static constexpr uint8_t kCapacity = 9;
 
   hazptr_tc_entry<Atom> entry_[kCapacity];
   uint8_t count_{0};
@@ -166,13 +166,15 @@ class hazptr_priv {
   Atom<hazptr_obj<Atom>*> head_;
   Atom<hazptr_obj<Atom>*> tail_;
   int rcount_;
+  bool in_dtor_;
 
  public:
-  hazptr_priv() : head_(nullptr), tail_(nullptr), rcount_(0) {}
+  hazptr_priv() : head_(nullptr), tail_(nullptr), rcount_(0), in_dtor_(false) {}
 
   ~hazptr_priv() {
+    in_dtor_ = true;
     if (!empty()) {
-      push_all_to_domain();
+      push_all_to_domain(false);
     }
   }
 
@@ -185,6 +187,11 @@ class hazptr_priv {
   }
 
   void push(hazptr_obj<Atom>* obj) {
+    DCHECK(!in_dtor_);
+    push_in_priv_list(obj);
+  }
+
+  void push_in_priv_list(hazptr_obj<Atom>* obj) {
     while (true) {
       if (tail()) {
         if (push_in_non_empty_list(obj)) {
@@ -197,18 +204,18 @@ class hazptr_priv {
       }
     }
     if (++rcount_ >= kThreshold) {
-      push_all_to_domain();
+      push_all_to_domain(true);
     }
   }
 
-  void push_all_to_domain() {
+  void push_all_to_domain(bool check_to_reclaim) {
     hazptr_obj<Atom>* h = nullptr;
     hazptr_obj<Atom>* t = nullptr;
     collect(h, t);
     if (h) {
       DCHECK(t);
       hazptr_obj_list<Atom> l(h, t, rcount_);
-      hazptr_domain_push_retired<Atom>(l);
+      hazptr_domain_push_retired<Atom>(l, check_to_reclaim);
       rcount_ = 0;
     }
   }

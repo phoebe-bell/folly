@@ -632,6 +632,61 @@ class TryLockable {
   folly::Function<void()> onUnlock;
 };
 
+struct TestSharedMutex {
+ public:
+  void lock() {
+    onLock_();
+  }
+  void unlock() {
+    onUnlock_();
+  }
+  void lock_shared() {
+    onLockShared_();
+  }
+  void unlock_shared() {
+    onUnlockShared_();
+  }
+
+  bool try_lock() {
+    onLock_();
+    return true;
+  }
+  bool try_lock_shared() {
+    onLockShared_();
+    return true;
+  }
+
+  std::function<void()> onLock_;
+  std::function<void()> onUnlock_;
+  std::function<void()> onLockShared_;
+  std::function<void()> onUnlockShared_;
+};
+
+struct TestMutex {
+ public:
+  void lock() {
+    onLock();
+    ++numTimesLocked;
+  }
+  bool try_lock() {
+    if (shouldTryLockSucceed) {
+      lock();
+      return true;
+    }
+    return false;
+  }
+  void unlock() {
+    onUnlock();
+    ++numTimesUnlocked;
+  }
+
+  int numTimesLocked{0};
+  int numTimesUnlocked{0};
+  bool shouldTryLockSucceed{true};
+  std::function<void()> onLock{[] {}};
+  std::function<void()> onUnlock{[] {}};
+};
+
 template <int kLockable, typename Func>
 void testTryLock(Func func) {
   {
@@ -713,97 +768,102 @@ TEST_F(SynchronizedLockTest, TestTryULock) {
 template <typename LockPolicy>
 using LPtr = LockedPtr<Synchronized<int>, LockPolicy>;
 
-TEST_F(SynchronizedLockTest, TestLockedPtrCompatibilityExclusive) {
-  EXPECT_TRUE((std::is_assignable<
-               LPtr<LockPolicyExclusive>&,
-               LPtr<LockPolicyTryExclusive>&&>::value));
-  EXPECT_TRUE((std::is_assignable<
-               LPtr<LockPolicyExclusive>&,
+namespace {
+template <template <typename...> class Trait>
+void testLockedPtrCompatibilityExclusive() {
+  EXPECT_TRUE((
+      Trait<LPtr<LockPolicyExclusive>, LPtr<LockPolicyTryExclusive>&&>::value));
+  EXPECT_TRUE((Trait<
+               LPtr<LockPolicyExclusive>,
                LPtr<LockPolicyFromUpgradeToExclusive>&&>::value));
 
-  EXPECT_FALSE((
-      std::is_assignable<LPtr<LockPolicyExclusive>&, LPtr<LockPolicyShared>&&>::
-          value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyExclusive>&,
-                LPtr<LockPolicyTryShared>&&>::value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyExclusive>&,
-                LPtr<LockPolicyUpgrade>&&>::value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyExclusive>&,
-                LPtr<LockPolicyTryUpgrade>&&>::value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyExclusive>&,
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyExclusive>&, LPtr<LockPolicyShared>&&>::value));
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyExclusive>, LPtr<LockPolicyTryShared>&&>::value));
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyExclusive>, LPtr<LockPolicyUpgrade>&&>::value));
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyExclusive>, LPtr<LockPolicyTryUpgrade>&&>::value));
+  EXPECT_FALSE((Trait<
+                LPtr<LockPolicyExclusive>,
                 LPtr<LockPolicyFromExclusiveToUpgrade>&&>::value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyExclusive>&,
+  EXPECT_FALSE((Trait<
+                LPtr<LockPolicyExclusive>,
                 LPtr<LockPolicyFromExclusiveToShared>&&>::value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyExclusive>&,
-                LPtr<LockPolicyFromUpgradeToShared>&&>::value));
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyExclusive>, LPtr<LockPolicyFromUpgradeToShared>&&>::
+           value));
+}
+
+template <template <typename...> class Trait>
+void testLockedPtrCompatibilityShared() {
+  EXPECT_TRUE(
+      (Trait<LPtr<LockPolicyShared>, LPtr<LockPolicyTryShared>&&>::value));
+  EXPECT_TRUE(
+      (Trait<LPtr<LockPolicyShared>, LPtr<LockPolicyFromUpgradeToShared>&&>::
+           value));
+  EXPECT_TRUE(
+      (Trait<LPtr<LockPolicyShared>, LPtr<LockPolicyFromExclusiveToShared>&&>::
+           value));
+
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyShared>, LPtr<LockPolicyExclusive>&&>::value));
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyShared>, LPtr<LockPolicyTryExclusive>&&>::value));
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyShared>, LPtr<LockPolicyUpgrade>&&>::value));
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyShared>, LPtr<LockPolicyTryUpgrade>&&>::value));
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyShared>, LPtr<LockPolicyFromExclusiveToUpgrade>&&>::
+           value));
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyShared>, LPtr<LockPolicyFromUpgradeToExclusive>&&>::
+           value));
+}
+
+template <template <typename...> class Trait>
+void testLockedPtrCompatibilityUpgrade() {
+  EXPECT_TRUE(
+      (Trait<LPtr<LockPolicyUpgrade>, LPtr<LockPolicyTryUpgrade>&&>::value));
+  EXPECT_TRUE((
+      Trait<LPtr<LockPolicyUpgrade>, LPtr<LockPolicyFromExclusiveToUpgrade>&&>::
+          value));
+
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyUpgrade>, LPtr<LockPolicyExclusive>&&>::value));
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyUpgrade>, LPtr<LockPolicyTryExclusive>&&>::value));
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyUpgrade>, LPtr<LockPolicyShared>&&>::value));
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyUpgrade>, LPtr<LockPolicyTryShared>&&>::value));
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyUpgrade>, LPtr<LockPolicyFromExclusiveToShared>&&>::
+           value));
+  EXPECT_FALSE(
+      (Trait<LPtr<LockPolicyUpgrade>, LPtr<LockPolicyFromUpgradeToShared>&&>::
+           value));
+  EXPECT_FALSE((
+      Trait<LPtr<LockPolicyUpgrade>, LPtr<LockPolicyFromUpgradeToExclusive>&&>::
+          value));
+}
+} // namespace
+
+TEST_F(SynchronizedLockTest, TestLockedPtrCompatibilityExclusive) {
+  testLockedPtrCompatibilityExclusive<std::is_assignable>();
+  testLockedPtrCompatibilityExclusive<std::is_constructible>();
 }
 
 TEST_F(SynchronizedLockTest, TestLockedPtrCompatibilityShared) {
-  EXPECT_TRUE((
-      std::is_assignable<LPtr<LockPolicyShared>&, LPtr<LockPolicyTryShared>&&>::
-          value));
-  EXPECT_TRUE((std::is_assignable<
-               LPtr<LockPolicyShared>&,
-               LPtr<LockPolicyFromUpgradeToShared>&&>::value));
-  EXPECT_TRUE((std::is_assignable<
-               LPtr<LockPolicyShared>&,
-               LPtr<LockPolicyFromExclusiveToShared>&&>::value));
-
-  EXPECT_FALSE((
-      std::is_assignable<LPtr<LockPolicyShared>&, LPtr<LockPolicyExclusive>&&>::
-          value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyShared>&,
-                LPtr<LockPolicyTryExclusive>&&>::value));
-  EXPECT_FALSE(
-      (std::is_assignable<LPtr<LockPolicyShared>&, LPtr<LockPolicyUpgrade>&&>::
-           value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyShared>&,
-                LPtr<LockPolicyTryUpgrade>&&>::value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyShared>&,
-                LPtr<LockPolicyFromExclusiveToUpgrade>&&>::value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyShared>&,
-                LPtr<LockPolicyFromUpgradeToExclusive>&&>::value));
+  testLockedPtrCompatibilityShared<std::is_assignable>();
+  testLockedPtrCompatibilityShared<std::is_constructible>();
 }
 
 TEST_F(SynchronizedLockTest, TestLockedPtrCompatibilityUpgrade) {
-  EXPECT_TRUE((std::is_assignable<
-               LPtr<LockPolicyUpgrade>&,
-               LPtr<LockPolicyTryUpgrade>&&>::value));
-  EXPECT_TRUE((std::is_assignable<
-               LPtr<LockPolicyUpgrade>&,
-               LPtr<LockPolicyFromExclusiveToUpgrade>&&>::value));
-
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyUpgrade>&,
-                LPtr<LockPolicyExclusive>&&>::value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyUpgrade>&,
-                LPtr<LockPolicyTryExclusive>&&>::value));
-  EXPECT_FALSE(
-      (std::is_assignable<LPtr<LockPolicyUpgrade>&, LPtr<LockPolicyShared>&&>::
-           value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyUpgrade>&,
-                LPtr<LockPolicyTryShared>&&>::value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyUpgrade>&,
-                LPtr<LockPolicyFromExclusiveToShared>&&>::value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyUpgrade>&,
-                LPtr<LockPolicyFromUpgradeToShared>&&>::value));
-  EXPECT_FALSE((std::is_assignable<
-                LPtr<LockPolicyUpgrade>&,
-                LPtr<LockPolicyFromUpgradeToExclusive>&&>::value));
+  testLockedPtrCompatibilityUpgrade<std::is_assignable>();
+  testLockedPtrCompatibilityUpgrade<std::is_constructible>();
 }
 
 TEST_F(SynchronizedLockTest, TestConvertTryLockToLock) {
@@ -850,42 +910,15 @@ TEST(FollyLockTest, TestVariadicLockWithArbitraryLockables) {
   EXPECT_TRUE(lckTwo);
 }
 
-namespace {
-struct TestLock {
- public:
-  void lock() {
-    onLock();
-    ++numTimesLocked;
-  }
-  bool try_lock() {
-    if (shouldTryLockSucceed) {
-      lock();
-      return true;
-    }
-    return false;
-  }
-  void unlock() {
-    onUnlock();
-    ++numTimesUnlocked;
-  }
-
-  int numTimesLocked{0};
-  int numTimesUnlocked{0};
-  bool shouldTryLockSucceed{true};
-  std::function<void()> onLock{[] {}};
-  std::function<void()> onUnlock{[] {}};
-};
-} // namespace
-
 TEST(FollyLockTest, TestVariadicLockSmartAndPoliteAlgorithm) {
-  auto one = TestLock{};
-  auto two = TestLock{};
-  auto three = TestLock{};
+  auto one = TestMutex{};
+  auto two = TestMutex{};
+  auto three = TestMutex{};
   auto makeReset = [&] {
     return folly::makeGuard([&] {
-      one = TestLock{};
-      two = TestLock{};
-      three = TestLock{};
+      one = TestMutex{};
+      two = TestMutex{};
+      three = TestMutex{};
     });
   };
 
@@ -943,6 +976,60 @@ TEST(FollyLockTest, TestVariadicLockSmartAndPoliteAlgorithm) {
     EXPECT_EQ(three.numTimesLocked, 2);
     EXPECT_EQ(three.numTimesUnlocked, 1);
   }
+}
+
+TEST(SynchronizedAlgorithmTest, Basic) {
+  auto sync = Synchronized<int>{0};
+  auto value = synchronized([](auto s) { return *s; }, wlock(sync));
+  EXPECT_EQ(value, 0);
+}
+
+TEST(SynchronizedAlgorithmTest, BasicNonShareableMutex) {
+  auto sync = Synchronized<int, std::mutex>{0};
+  auto value = synchronized([](auto s) { return *s; }, lock(sync));
+  EXPECT_EQ(value, 0);
+}
+
+TEST(Synchronized, SynchronizedFunctionNonConst) {
+  auto locked = 0;
+  auto unlocked = 0;
+  auto sync = Synchronized<int, TestSharedMutex>{
+      std::piecewise_construct,
+      std::make_tuple(0),
+      std::make_tuple([&] { ++locked; }, [&] { ++unlocked; }, [] {}, [] {})};
+
+  synchronized([](auto) {}, wlock(sync));
+  EXPECT_EQ(locked, 1);
+  EXPECT_EQ(unlocked, 1);
+}
+
+TEST(Synchronized, SynchronizedFunctionConst) {
+  auto locked = 0;
+  auto unlocked = 0;
+  auto sync = Synchronized<int, TestSharedMutex>{
+      std::piecewise_construct,
+      std::make_tuple(0),
+      std::make_tuple([] {}, [] {}, [&] { ++locked; }, [&] { ++unlocked; })};
+
+  synchronized([](auto) {}, rlock(sync));
+  EXPECT_EQ(locked, 1);
+  EXPECT_EQ(unlocked, 1);
+}
+
+TEST(Synchronized, SynchronizedFunctionManyObjects) {
+  auto fail = [] { EXPECT_TRUE(false); };
+  auto pass = [] {};
+
+  auto one = Synchronized<int, TestSharedMutex>{
+      std::piecewise_construct,
+      std::make_tuple(0),
+      std::make_tuple(pass, pass, fail, fail)};
+  auto two = Synchronized<std::string, TestSharedMutex>{
+      std::piecewise_construct,
+      std::make_tuple(),
+      std::make_tuple(fail, fail, pass, pass)};
+
+  synchronized([](auto, auto) {}, wlock(one), rlock(two));
 }
 
 } // namespace folly

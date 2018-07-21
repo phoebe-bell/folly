@@ -208,10 +208,9 @@ class fbvector {
   typedef std::reverse_iterator<const_iterator>       const_reverse_iterator;
 
  private:
-  typedef std::integral_constant<
-      bool,
+  typedef bool_constant<
       is_trivially_copyable<T>::value &&
-          sizeof(T) <= 16 // don't force large structures to be passed by value
+      sizeof(T) <= 16 // don't force large structures to be passed by value
       >
       should_pass_by_value;
   typedef typename std::conditional<
@@ -219,11 +218,12 @@ class fbvector {
   typedef typename std::conditional<
       should_pass_by_value::value, T, T&&>::type MT;
 
-  typedef std::integral_constant<bool,
-      std::is_same<Allocator, std::allocator<T>>::value> usingStdAllocator;
-  typedef std::integral_constant<bool,
+  typedef bool_constant<std::is_same<Allocator, std::allocator<T>>::value>
+      usingStdAllocator;
+  typedef bool_constant<
       usingStdAllocator::value ||
-      A::propagate_on_container_move_assignment::value> moveIsSwap;
+      A::propagate_on_container_move_assignment::value>
+      moveIsSwap;
 
   //===========================================================================
   //---------------------------------------------------------------------------
@@ -637,15 +637,15 @@ class fbvector {
   }
 
   // dispatch type trait
-  typedef std::integral_constant<bool,
-      folly::IsRelocatable<T>::value && usingStdAllocator::value
-    > relocate_use_memcpy;
+  typedef bool_constant<
+      folly::IsRelocatable<T>::value && usingStdAllocator::value>
+      relocate_use_memcpy;
 
-  typedef std::integral_constant<bool,
-      (std::is_nothrow_move_constructible<T>::value
-       && usingStdAllocator::value)
-      || !std::is_copy_constructible<T>::value
-    > relocate_use_move;
+  typedef bool_constant<
+      (std::is_nothrow_move_constructible<T>::value &&
+       usingStdAllocator::value) ||
+      !std::is_copy_constructible<T>::value>
+      relocate_use_move;
 
   // move
   void relocate_move(T* dest, T* first, T* last) {

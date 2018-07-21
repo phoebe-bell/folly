@@ -16,12 +16,27 @@
 #include <folly/init/Init.h>
 #include <folly/logging/xlog.h>
 #include <folly/portability/Stdlib.h>
+#include <iostream>
 
 DEFINE_string(
     category,
     "",
     "Crash with a message to this category instead of the default");
 DEFINE_bool(crash, true, "Crash with a fatal log message.");
+DEFINE_bool(
+    check_debug,
+    false,
+    "Print whether this binary was built in debug mode "
+    "and then exit successfully");
+
+DEFINE_bool(fail_fatal_xlog_if, false, "Fail an XLOG_IF(FATAL) check.");
+DEFINE_bool(fail_dfatal_xlog_if, false, "Fail an XLOG_IF(DFATAL) check.");
+DEFINE_bool(fail_xcheck, false, "Fail an XCHECK() test.");
+DEFINE_bool(
+    fail_xcheck_nomsg,
+    false,
+    "Fail an XCHECK() test with no additional message.");
+DEFINE_bool(fail_xdcheck, false, "Fail an XDCHECK() test.");
 
 using folly::LogLevel;
 
@@ -82,6 +97,18 @@ std::string fbLogFatalCheck() {
  */
 int main(int argc, char* argv[]) {
   auto init = folly::Init(&argc, &argv);
+
+  if (FLAGS_check_debug) {
+    std::cout << "DEBUG=" << static_cast<int>(folly::kIsDebug) << "\n";
+    return 0;
+  }
+
+  XLOG_IF(FATAL, FLAGS_fail_fatal_xlog_if) << "--fail_fatal_xlog_if specified!";
+  XLOG_IF(DFATAL, FLAGS_fail_dfatal_xlog_if)
+      << "--fail_dfatal_xlog_if specified!";
+  XCHECK(!FLAGS_fail_xcheck) << ": --fail_xcheck specified!";
+  XCHECK(!FLAGS_fail_xcheck_nomsg);
+  XDCHECK(!FLAGS_fail_xdcheck) << ": --fail_xdcheck specified!";
 
   // Do most of the work in a separate helper function.
   //

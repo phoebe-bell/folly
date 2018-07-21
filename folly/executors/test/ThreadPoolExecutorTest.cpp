@@ -463,6 +463,42 @@ TEST(InitThreadFactoryTest, InitializerCalled) {
   EXPECT_EQ(initializerCalledCount, 1);
 }
 
+TEST(InitThreadFactoryTest, InitializerAndFinalizerCalled) {
+  bool initializerCalled = false;
+  bool taskBodyCalled = false;
+  bool finalizerCalled = false;
+
+  InitThreadFactory factory(
+      std::make_shared<NamedThreadFactory>("test"),
+      [&] {
+        // thread initializer
+        EXPECT_FALSE(initializerCalled);
+        EXPECT_FALSE(taskBodyCalled);
+        EXPECT_FALSE(finalizerCalled);
+        initializerCalled = true;
+      },
+      [&] {
+        // thread finalizer
+        EXPECT_TRUE(initializerCalled);
+        EXPECT_TRUE(taskBodyCalled);
+        EXPECT_FALSE(finalizerCalled);
+        finalizerCalled = true;
+      });
+
+  factory
+      .newThread([&]() {
+        EXPECT_TRUE(initializerCalled);
+        EXPECT_FALSE(taskBodyCalled);
+        EXPECT_FALSE(finalizerCalled);
+        taskBodyCalled = true;
+      })
+      .join();
+
+  EXPECT_TRUE(initializerCalled);
+  EXPECT_TRUE(taskBodyCalled);
+  EXPECT_TRUE(finalizerCalled);
+}
+
 class TestData : public folly::RequestData {
  public:
   explicit TestData(int data) : data_(data) {}
@@ -578,7 +614,7 @@ static void removeThreadTest() {
   fe.setNumThreads(1);
 
   // future::then should be fulfilled because there is other thread available
-  EXPECT_EQ(77, f->get());
+  EXPECT_EQ(77, std::move(*f).get());
   // two thread should be different because then part should be rescheduled to
   // the other thread
   EXPECT_NE(id1, id2);
@@ -750,7 +786,7 @@ static void WeakRefTest() {
             .then([]() { burnMs(100)(); })
             .then([&] { ++counter; });
   }
-  EXPECT_THROW(f->get(), folly::BrokenPromise);
+  EXPECT_THROW(std::move(*f).get(), folly::BrokenPromise);
   EXPECT_EQ(1, counter);
 }
 
@@ -775,6 +811,21 @@ static void virtualExecutorTest() {
               .semi();
     }
     EXPECT_EQ(1, counter);
+
+    bool functionDestroyed{false};
+    bool functionCalled{false};
+    {
+      VirtualExecutor ve(fe);
+      auto guard = makeGuard([&functionDestroyed] {
+        std::this_thread::sleep_for(100ms);
+        functionDestroyed = true;
+      });
+      ve.add([&functionCalled, guard = std::move(guard)] {
+        functionCalled = true;
+      });
+    }
+    EXPECT_TRUE(functionCalled);
+    EXPECT_TRUE(functionDestroyed);
   }
   EXPECT_TRUE(f->isReady());
   EXPECT_NO_THROW(std::move(*f).get());

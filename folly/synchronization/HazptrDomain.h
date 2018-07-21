@@ -33,6 +33,14 @@
 
 namespace folly {
 
+namespace detail {
+
+constexpr int hazptr_domain_rcount_threshold() {
+  return 1000;
+}
+
+} // namespace detail
+
 /**
  *  hazptr_domain
  *
@@ -42,7 +50,7 @@ namespace folly {
  */
 template <template <typename> class Atom>
 class hazptr_domain {
-  static constexpr int kThreshold = 1000;
+  static constexpr int kThreshold = detail::hazptr_domain_rcount_threshold();
   static constexpr int kMultiplier = 2;
   static constexpr uint64_t kSyncTimePeriod{2000000000}; // nanoseconds
 
@@ -55,6 +63,7 @@ class hazptr_domain {
   Atom<int> hcount_{0};
   Atom<int> rcount_{0};
   Atom<uint16_t> num_bulk_reclaims_{0};
+  bool shutdown_{false};
 
  public:
   /** Constructor */
@@ -62,6 +71,7 @@ class hazptr_domain {
 
   /** Destructor */
   ~hazptr_domain() {
+    shutdown_ = true;
     reclaim_all_objects();
     free_hazptr_recs();
   }
@@ -98,8 +108,10 @@ class hazptr_domain {
  private:
   friend void hazptr_domain_push_retired<Atom>(
       hazptr_obj_list<Atom>&,
+      bool check,
       hazptr_domain<Atom>&) noexcept;
   friend class hazptr_holder<Atom>;
+  friend class hazptr_obj<Atom>;
 #if FOLLY_HAZPTR_THR_LOCAL
   friend class hazptr_tc<Atom>;
 #endif
@@ -270,7 +282,12 @@ class hazptr_domain {
       }
       obj = next;
     }
-    bool done = (children.count() == 0);
+#if FOLLY_HAZPTR_THR_LOCAL
+    if (!shutdown_) {
+      hazptr_priv_tls<Atom>().push_all_to_domain(false);
+    }
+#endif
+    bool done = ((children.count() == 0) && (retired() == nullptr));
     matched.splice(children);
     if (matched.count() > 0) {
       push_retired(matched, false /* don't call bulk_reclaim recursively */);
@@ -351,8 +368,9 @@ FOLLY_ALWAYS_INLINE hazptr_domain<Atom>& default_hazptr_domain() {
 template <template <typename> class Atom>
 void hazptr_domain_push_retired(
     hazptr_obj_list<Atom>& l,
+    bool check,
     hazptr_domain<Atom>& domain) noexcept {
-  domain.push_retired(l);
+  domain.push_retired(l, check);
 }
 
 /** hazptr_retire */

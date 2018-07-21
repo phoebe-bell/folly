@@ -17,7 +17,7 @@
 
 #include <folly/Optional.h>
 #include <folly/concurrency/detail/ConcurrentHashMap-detail.h>
-#include <folly/experimental/hazptr/hazptr.h>
+#include <folly/synchronization/Hazptr.h>
 #include <atomic>
 #include <mutex>
 
@@ -278,15 +278,15 @@ class ConcurrentHashMap {
     ConstIterator res(this, segment);
     auto seg = segments_[segment].load(std::memory_order_acquire);
     if (!seg) {
-      return folly::Optional<ConstIterator>();
+      return none;
     } else {
       auto r =
           seg->assign(res.it_, std::forward<Key>(k), std::forward<Value>(v));
       if (!r) {
-        return folly::Optional<ConstIterator>();
+        return none;
       }
     }
-    return res;
+    return std::move(res);
   }
 
   // Assign to desired if and only if key k is equal to expected
@@ -297,7 +297,7 @@ class ConcurrentHashMap {
     ConstIterator res(this, segment);
     auto seg = segments_[segment].load(std::memory_order_acquire);
     if (!seg) {
-      return folly::Optional<ConstIterator>();
+      return none;
     } else {
       auto r = seg->assign_if_equal(
           res.it_,
@@ -305,10 +305,10 @@ class ConcurrentHashMap {
           expected,
           std::forward<Value>(desired));
       if (!r) {
-        return folly::Optional<ConstIterator>();
+        return none;
       }
     }
-    return res;
+    return std::move(res);
   }
 
   // Copying wrappers around insert and find.
@@ -405,15 +405,9 @@ class ConcurrentHashMap {
     }
 
     ConstIterator& operator++() {
-      it_++;
+      ++it_;
       next();
       return *this;
-    }
-
-    ConstIterator operator++(int) {
-      auto prev = *this;
-      ++*this;
-      return prev;
     }
 
     bool operator==(const ConstIterator& o) const {
@@ -424,18 +418,23 @@ class ConcurrentHashMap {
       return !(*this == o);
     }
 
-    ConstIterator& operator=(const ConstIterator& o) {
-      parent_ = o.parent_;
-      it_ = o.it_;
-      segment_ = o.segment_;
+    ConstIterator& operator=(const ConstIterator& o) = delete;
+
+    ConstIterator& operator=(ConstIterator&& o) noexcept {
+      if (this != &o) {
+        it_ = std::move(o.it_);
+        segment_ = std::exchange(o.segment_, uint64_t(NumShards));
+        parent_ = std::exchange(o.parent_, nullptr);
+      }
       return *this;
     }
 
-    ConstIterator(const ConstIterator& o) {
-      parent_ = o.parent_;
-      it_ = o.it_;
-      segment_ = o.segment_;
-    }
+    ConstIterator(const ConstIterator& o) = delete;
+
+    ConstIterator(ConstIterator&& o) noexcept
+        : it_(std::move(o.it_)),
+          segment_(std::exchange(o.segment_, uint64_t(NumShards))),
+          parent_(std::exchange(o.parent_, nullptr)) {}
 
     ConstIterator(const ConcurrentHashMap* parent, uint64_t segment)
         : segment_(segment), parent_(parent) {}

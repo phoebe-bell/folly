@@ -72,7 +72,15 @@ class F14BasicMap : public std::unordered_map<K, M, H, E, A> {
       visitor(bc * sizeof(typename Super::pointer), 1);
     }
     visitor(
-        this->size(), sizeof(StdNodeReplica<K, typename Super::value_type, H>));
+        sizeof(StdNodeReplica<K, typename Super::value_type, H>), this->size());
+  }
+
+  template <typename V>
+  void visitContiguousRanges(V&& visitor) const {
+    for (typename Super::value_type const& entry : *this) {
+      typename Super::value_type const* b = std::addressof(entry);
+      visitor(b, b + 1);
+    }
   }
 };
 } // namespace detail
@@ -142,10 +150,8 @@ class F14BasicMap {
           typename Policy::Hasher,
           typename Policy::KeyEqual,
           K>::value &&
-          !std::is_same<typename Policy::Iter, folly::remove_cvref_t<K>>::
-              value &&
-          !std::is_same<typename Policy::ConstIter, folly::remove_cvref_t<K>>::
-              value,
+          !std::is_same<typename Policy::Iter, remove_cvref_t<K>>::value &&
+          !std::is_same<typename Policy::ConstIter, remove_cvref_t<K>>::value,
       T>;
 
  public:
@@ -489,7 +495,7 @@ class F14BasicMap {
       std::piecewise_construct_t,
       std::tuple<Args1...>&& first_args,
       std::tuple<Args2...>&& second_args) {
-    auto key = folly::make_from_tuple<key_type>(
+    auto key = make_from_tuple<key_type>(
         std::tuple<Args1&&...>(std::move(first_args)));
     return table_.tryEmplaceValue(
         key,
@@ -564,15 +570,17 @@ class F14BasicMap {
     // work of itemPos.advance() if our return value is discarded.
     auto itemPos = table_.unwrapIter(pos);
     table_.eraseIter(itemPos);
-    itemPos.advance();
+    itemPos.advanceLikelyDead();
     return table_.makeIter(itemPos);
   }
 
   // This form avoids ambiguity when key_type has a templated constructor
   // that accepts const_iterator
   iterator erase(iterator pos) {
-    table_.eraseIter(table_.unwrapIter(pos));
-    return ++pos;
+    auto itemPos = table_.unwrapIter(pos);
+    table_.eraseIter(itemPos);
+    itemPos.advanceLikelyDead();
+    return table_.makeIter(itemPos);
   }
 
   iterator erase(const_iterator first, const_iterator last) {
@@ -790,6 +798,13 @@ class F14BasicMap {
     return table_.visitAllocationClasses(visitor);
   }
 
+  // Calls visitor with two value_type const*, b and e, such that every
+  // entry in the table is included in exactly one of the ranges [b,e).
+  // This can be used to efficiently iterate elements in bulk when crossing
+  // an API boundary that supports contiguous blocks of items.
+  template <typename V>
+  void visitContiguousRanges(V&& visitor) const;
+
   F14TableStats computeStats() const noexcept {
     return table_.computeStats();
   }
@@ -878,6 +893,11 @@ class F14ValueMap
   void swap(F14ValueMap& rhs) noexcept(Policy::kSwapIsNoexcept) {
     this->table_.swap(rhs.table_);
   }
+
+  template <typename V>
+  void visitContiguousRanges(V&& visitor) const {
+    this->table_.visitContiguousItemRanges(visitor);
+  }
 };
 
 template <typename K, typename M, typename H, typename E, typename A>
@@ -918,12 +938,22 @@ class F14NodeMap
   using Super = f14::detail::F14BasicMap<Policy>;
 
  public:
+  using typename Super::value_type;
+
   F14NodeMap() noexcept(Policy::kDefaultConstructIsNoexcept) : Super{} {}
 
   using Super::Super;
 
   void swap(F14NodeMap& rhs) noexcept(Policy::kSwapIsNoexcept) {
     this->table_.swap(rhs.table_);
+  }
+
+  template <typename V>
+  void visitContiguousRanges(V&& visitor) const {
+    this->table_.visitItems([&](typename Policy::Item ptr) {
+      value_type const* b = std::addressof(*ptr);
+      visitor(b, b + 1);
+    });
   }
 
   // TODO extract and node_handle insert
@@ -973,22 +1003,19 @@ class F14VectorMap
           typename Policy::Hasher,
           typename Policy::KeyEqual,
           K>::value &&
-          !std::is_same<typename Policy::Iter, folly::remove_cvref_t<K>>::
+          !std::is_same<typename Policy::Iter, remove_cvref_t<K>>::value &&
+          !std::is_same<typename Policy::ConstIter, remove_cvref_t<K>>::value &&
+          !std::is_same<typename Policy::ReverseIter, remove_cvref_t<K>>::
               value &&
-          !std::is_same<typename Policy::ConstIter, folly::remove_cvref_t<K>>::
-              value &&
-          !std::is_same<
-              typename Policy::ReverseIter,
-              folly::remove_cvref_t<K>>::value &&
-          !std::is_same<
-              typename Policy::ConstReverseIter,
-              folly::remove_cvref_t<K>>::value,
+          !std::is_same<typename Policy::ConstReverseIter, remove_cvref_t<K>>::
+              value,
       T>;
 
  public:
   using typename Super::const_iterator;
   using typename Super::iterator;
   using typename Super::key_type;
+  using typename Super::value_type;
   using reverse_iterator = typename Policy::ReverseIter;
   using const_reverse_iterator = typename Policy::ConstReverseIter;
 
@@ -1096,7 +1123,7 @@ class F14VectorMap
           static_cast<uint32_t>(tailIndex)});
       tail.item() = index;
       auto p = std::addressof(values[index]);
-      folly::assume(p != nullptr);
+      assume(p != nullptr);
       this->table_.transfer(a, std::addressof(values[tailIndex]), p, 1);
     }
   }
@@ -1147,6 +1174,15 @@ class F14VectorMap
   template <typename K>
   EnableHeterogeneousVectorErase<K, std::size_t> erase(K const& key) {
     return eraseUnderlyingKey(key);
+  }
+
+  template <typename V>
+  void visitContiguousRanges(V&& visitor) const {
+    auto n = this->table_.size();
+    if (n > 0) {
+      value_type const* b = std::addressof(this->table_.values_[0]);
+      visitor(b, b + n);
+    }
   }
 };
 

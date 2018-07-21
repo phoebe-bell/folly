@@ -184,11 +184,15 @@ class ThreadLocalPtr {
 
   void reset(T* newPtr = nullptr) {
     auto guard = makeGuard([&] { delete newPtr; });
-    threadlocal_detail::ElementWrapper& w = StaticMeta::get(&id_);
+    threadlocal_detail::ElementWrapper* w = &StaticMeta::get(&id_);
 
-    w.dispose(TLPDestructionMode::THIS_THREAD);
+    w->dispose(TLPDestructionMode::THIS_THREAD);
+    // need to get a new ptr since the
+    // ThreadEntry::elements array can be reallocated
+    w = &StaticMeta::get(&id_);
+    w->cleanup();
     guard.dismiss();
-    w.set(newPtr);
+    w->set(newPtr);
   }
 
   explicit operator bool() const {
@@ -238,10 +242,14 @@ class ThreadLocalPtr {
         deleter(newPtr, TLPDestructionMode::THIS_THREAD);
       }
     });
-    threadlocal_detail::ElementWrapper& w = StaticMeta::get(&id_);
-    w.dispose(TLPDestructionMode::THIS_THREAD);
+    threadlocal_detail::ElementWrapper* w = &StaticMeta::get(&id_);
+    w->dispose(TLPDestructionMode::THIS_THREAD);
+    // need to get a new ptr since the
+    // ThreadEntry::elements array can be reallocated
+    w = &StaticMeta::get(&id_);
+    w->cleanup();
     guard.dismiss();
-    w.set(newPtr, deleter);
+    w->set(newPtr, deleter);
   }
 
   // Holds a global lock for iteration through all thread local child objects.
@@ -263,24 +271,26 @@ class ThreadLocalPtr {
     class Iterator {
       friend class Accessor;
       const Accessor* accessor_;
-      threadlocal_detail::ThreadEntry* e_;
+      threadlocal_detail::ThreadEntryNode* e_;
 
       void increment() {
-        e_ = e_->next;
+        e_ = e_->getNext();
         incrementToValid();
       }
 
       void decrement() {
-        e_ = e_->prev;
+        e_ = e_->getPrev();
         decrementToValid();
       }
 
       const T& dereference() const {
-        return *static_cast<T*>(e_->elements[accessor_->id_].ptr);
+        return *static_cast<T*>(
+            e_->getThreadEntry()->elements[accessor_->id_].ptr);
       }
 
       T& dereference() {
-        return *static_cast<T*>(e_->elements[accessor_->id_].ptr);
+        return *static_cast<T*>(
+            e_->getThreadEntry()->elements[accessor_->id_].ptr);
       }
 
       bool equal(const Iterator& other) const {
@@ -289,22 +299,27 @@ class ThreadLocalPtr {
       }
 
       explicit Iterator(const Accessor* accessor)
-        : accessor_(accessor),
-          e_(&accessor_->meta_.head_) {
-      }
+          : accessor_(accessor),
+            e_(&accessor_->meta_.head_.elements[accessor_->id_].node) {}
 
+      // we just need to check the ptr since it can be set to nullptr
+      // even if the entry is part of the list
       bool valid() const {
-        return (e_->elements &&
-                accessor_->id_ < e_->elementsCapacity &&
-                e_->elements[accessor_->id_].ptr);
+        return (e_->getThreadEntry()->elements[accessor_->id_].ptr);
       }
 
       void incrementToValid() {
-        for (; e_ != &accessor_->meta_.head_ && !valid(); e_ = e_->next) { }
+        for (; e_ != &accessor_->meta_.head_.elements[accessor_->id_].node &&
+             !valid();
+             e_ = e_->getNext()) {
+        }
       }
 
       void decrementToValid() {
-        for (; e_ != &accessor_->meta_.head_ && !valid(); e_ = e_->prev) { }
+        for (; e_ != &accessor_->meta_.head_.elements[accessor_->id_].node &&
+             !valid();
+             e_ = e_->getPrev()) {
+        }
       }
 
      public:
@@ -449,4 +464,19 @@ class ThreadLocalPtr {
   mutable typename StaticMeta::EntryID id_;
 };
 
+namespace threadlocal_detail {
+template <typename>
+struct static_meta_of;
+
+template <typename T, typename Tag, typename AccessMode>
+struct static_meta_of<ThreadLocalPtr<T, Tag, AccessMode>> {
+  using type = StaticMeta<Tag, AccessMode>;
+};
+
+template <typename T, typename Tag, typename AccessMode>
+struct static_meta_of<ThreadLocal<T, Tag, AccessMode>> {
+  using type = StaticMeta<Tag, AccessMode>;
+};
+
+} // namespace threadlocal_detail
 } // namespace folly

@@ -1494,8 +1494,8 @@ TEST(FiberManager, remoteFutureTest) {
   auto f1 = fiberManager.addTaskFuture([&]() { return testValue1; });
   auto f2 = fiberManager.addTaskRemoteFuture([&]() { return testValue2; });
   loopController.loop([&]() { loopController.stop(); });
-  auto v1 = f1.get();
-  auto v2 = f2.get();
+  auto v1 = std::move(f1).get();
+  auto v2 = std::move(f2).get();
 
   EXPECT_EQ(v1, testValue1);
   EXPECT_EQ(v2, testValue2);
@@ -1620,7 +1620,7 @@ void singleBatchDispatch(ExecutorT& executor, int batchSize, int index) {
 
   auto indexCopy = index;
   auto result = batchDispatcher.add(std::move(indexCopy));
-  EXPECT_EQ(folly::to<std::string>(index), result.get());
+  EXPECT_EQ(folly::to<std::string>(index), std::move(result).get());
 }
 
 TEST(FiberManager, batchDispatchTest) {
@@ -1720,7 +1720,7 @@ void doubleBatchOuterDispatch(
 
   auto indexCopy = index;
   auto result = batchDispatcher.add(std::move(indexCopy));
-  EXPECT_EQ(folly::to<std::string>(index), result.get());
+  EXPECT_EQ(folly::to<std::string>(index), std::move(result).get());
 }
 
 TEST(FiberManager, doubleBatchDispatchTest) {

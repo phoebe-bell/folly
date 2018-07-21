@@ -19,6 +19,9 @@
 #include <list>
 #include <mutex>
 
+constexpr auto kSmallGrowthFactor = 1.1;
+constexpr auto kBigGrowthFactor = 1.7;
+
 namespace folly { namespace threadlocal_detail {
 
 void ThreadEntryNode::initIfZero(bool locked) {
@@ -29,10 +32,6 @@ void ThreadEntryNode::initIfZero(bool locked) {
       parent->meta->pushBackUnlocked(parent, id);
     }
   }
-}
-
-ThreadEntryNode* ThreadEntryNode::getNext() {
-  return &next->elements[id].node;
 }
 
 void ThreadEntryNode::push_back(ThreadEntry* head) {
@@ -77,20 +76,30 @@ ThreadEntryList* StaticMetaBase::getThreadEntryList() {
   static FOLLY_TLS ThreadEntryList threadEntryListSingleton;
   return &threadEntryListSingleton;
 #else
-  static pthread_key_t pthreadKey;
-  static folly::once_flag onceFlag;
-  folly::call_once(onceFlag, [&]() {
-    int ret = pthread_key_create(&pthreadKey, nullptr);
-    checkPosixError(ret, "pthread_key_create failed");
-    PthreadKeyUnregister::registerKey(pthreadKey);
-  });
+  class PthreadKey {
+   public:
+    PthreadKey() {
+      int ret = pthread_key_create(&pthreadKey_, nullptr);
+      checkPosixError(ret, "pthread_key_create failed");
+      PthreadKeyUnregister::registerKey(pthreadKey_);
+    }
+
+    FOLLY_ALWAYS_INLINE pthread_key_t get() const {
+      return pthreadKey_;
+    }
+
+   private:
+    pthread_key_t pthreadKey_;
+  };
+
+  static auto instance = detail::createGlobal<PthreadKey, void>();
 
   ThreadEntryList* threadEntryList =
-      static_cast<ThreadEntryList*>(pthread_getspecific(pthreadKey));
+      static_cast<ThreadEntryList*>(pthread_getspecific(instance->get()));
 
   if (UNLIKELY(!threadEntryList)) {
     threadEntryList = new ThreadEntryList();
-    int ret = pthread_setspecific(pthreadKey, threadEntryList);
+    int ret = pthread_setspecific(instance->get(), threadEntryList);
     checkPosixError(ret, "pthread_setspecific failed");
   }
 
@@ -130,6 +139,7 @@ void StaticMetaBase::onThreadExit(void* ptr) {
       shouldRun = false;
       FOR_EACH_RANGE (i, 0, threadEntry->elementsCapacity) {
         if (threadEntry->elements[i].dispose(TLPDestructionMode::THIS_THREAD)) {
+          threadEntry->elements[i].cleanup();
           shouldRun = true;
         }
       }
@@ -161,6 +171,7 @@ void StaticMetaBase::onThreadExit(void* ptr) {
         shouldRunInner = false;
         FOR_EACH_RANGE (i, 0, tmp->elementsCapacity) {
           if (tmp->elements[i].dispose(TLPDestructionMode::THIS_THREAD)) {
+            tmp->elements[i].cleanup();
             shouldRunInner = true;
             shouldRunOuter = true;
           }
@@ -191,6 +202,12 @@ void StaticMetaBase::onThreadExit(void* ptr) {
 #ifndef FOLLY_TLD_USE_FOLLY_TLS
   delete threadEntryList;
 #endif
+}
+
+uint32_t StaticMetaBase::elementsCapacity() const {
+  ThreadEntry* threadEntry = (*threadEntry_)();
+
+  return FOLLY_LIKELY(!!threadEntry) ? threadEntry->elementsCapacity : 0;
 }
 
 uint32_t StaticMetaBase::allocate(EntryID* ent) {
@@ -276,7 +293,9 @@ void StaticMetaBase::destroy(EntryID* ent) {
     }
     // Delete elements outside the locks.
     for (ElementWrapper& elem : elements) {
-      elem.dispose(TLPDestructionMode::ALL_THREADS);
+      if (elem.dispose(TLPDestructionMode::ALL_THREADS)) {
+        elem.cleanup();
+      }
     }
   } catch (...) { // Just in case we get a lock error or something anyway...
     LOG(WARNING) << "Destructor discarding an exception that was thrown.";
@@ -291,7 +310,14 @@ ElementWrapper* StaticMetaBase::reallocate(
 
   // Growth factor < 2, see folly/docs/FBVector.md; + 5 to prevent
   // very slow start.
-  newCapacity = static_cast<size_t>((idval + 5) * 1.7);
+  auto smallCapacity = static_cast<size_t>((idval + 5) * kSmallGrowthFactor);
+  auto bigCapacity = static_cast<size_t>((idval + 5) * kBigGrowthFactor);
+
+  newCapacity = (threadEntry->meta &&
+                 (bigCapacity <= threadEntry->meta->head_.elementsCapacity))
+      ? bigCapacity
+      : smallCapacity;
+
   assert(newCapacity > prevCapacity);
   ElementWrapper* reallocated = nullptr;
 

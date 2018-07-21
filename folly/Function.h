@@ -227,6 +227,7 @@
 #include <folly/Portability.h>
 #include <folly/Traits.h>
 #include <folly/functional/Invoke.h>
+#include <folly/lang/Exception.h>
 
 namespace folly {
 
@@ -246,16 +247,17 @@ Function<ReturnType(Args...) const noexcept> constCastFunction(
 namespace detail {
 namespace function {
 
-enum class Op { MOVE, NUKE, FULL, HEAP };
+enum class Op { MOVE, NUKE, HEAP };
 
 union Data {
+  Data() {}
   void* big;
   std::aligned_storage<6 * sizeof(void*)>::type tiny;
 };
 
 template <typename Fun, typename = Fun*>
 using IsSmall = Conjunction<
-    std::integral_constant<bool, (sizeof(Fun) <= sizeof(Data::tiny))>,
+    bool_constant<(sizeof(Fun) <= sizeof(Data::tiny))>,
     std::is_nothrow_move_constructible<Fun>>;
 using SmallTag = std::true_type;
 using HeapTag = std::false_type;
@@ -278,10 +280,6 @@ bool isNullPtrFn(T* p) {
 template <typename T>
 std::false_type isNullPtrFn(T&&) {
   return {};
-}
-
-inline bool uninitNoop(Op, Data*, Data*) {
-  return false;
 }
 
 template <typename F, typename... Args>
@@ -414,7 +412,7 @@ struct FunctionTraits<ReturnType(Args...) noexcept> {
   }
 
   static ReturnType uninitCall(Data&, Args&&...) noexcept {
-    throw std::bad_function_call();
+    terminate_with<std::bad_function_call>();
   }
 
   ReturnType operator()(Args... args) noexcept {
@@ -491,8 +489,6 @@ bool execSmall(Op o, Data* src, Data* dst) {
     case Op::NUKE:
       static_cast<Fun*>(static_cast<void*>(&src->tiny))->~Fun();
       break;
-    case Op::FULL:
-      return true;
     case Op::HEAP:
       break;
   }
@@ -509,7 +505,6 @@ bool execBig(Op o, Data* src, Data* dst) {
     case Op::NUKE:
       delete static_cast<Fun*>(src->big);
       break;
-    case Op::FULL:
     case Op::HEAP:
       break;
   }
@@ -543,7 +538,11 @@ class Function final : private detail::function::FunctionTraits<FunctionType> {
   // is the result of calling `constCastFunction`.
   mutable Data data_{};
   Call call_{&Traits::uninitCall};
-  Exec exec_{&detail::function::uninitNoop};
+  Exec exec_{nullptr};
+
+  bool exec(Op o, Data* src, Data* dst) const {
+    return exec_ && exec_(o, src, dst);
+  }
 
   friend Traits;
   friend Function<typename Traits::ConstSignature> folly::constCastFunction<>(
@@ -575,7 +574,7 @@ class Function final : private detail::function::FunctionTraits<FunctionType> {
   Function(
       Function<typename Traits::OtherSignature>&& that,
       CoerceTag) noexcept {
-    that.exec_(Op::MOVE, &that.data_, &data_);
+    that.exec(Op::MOVE, &that.data_, &data_);
     std::swap(call_, that.call_);
     std::swap(exec_, that.exec_);
   }
@@ -601,7 +600,7 @@ class Function final : private detail::function::FunctionTraits<FunctionType> {
    * Move constructor
    */
   Function(Function&& that) noexcept {
-    that.exec_(Op::MOVE, &that.data_, &data_);
+    that.exec(Op::MOVE, &that.data_, &data_);
     std::swap(call_, that.call_);
     std::swap(exec_, that.exec_);
   }
@@ -672,7 +671,7 @@ class Function final : private detail::function::FunctionTraits<FunctionType> {
   }
 
   ~Function() {
-    exec_(Op::NUKE, &data_, nullptr);
+    exec(Op::NUKE, &data_, nullptr);
   }
 
   Function& operator=(const Function&) = delete;
@@ -780,7 +779,7 @@ class Function final : private detail::function::FunctionTraits<FunctionType> {
    * non-empty.
    */
   explicit operator bool() const noexcept {
-    return exec_(Op::FULL, nullptr, nullptr);
+    return exec_ != nullptr;
   }
 
   /**
@@ -790,7 +789,7 @@ class Function final : private detail::function::FunctionTraits<FunctionType> {
    * object itself.
    */
   bool hasAllocatedMemory() const noexcept {
-    return exec_(Op::HEAP, nullptr, nullptr);
+    return exec(Op::HEAP, nullptr, nullptr);
   }
 
   using typename Traits::SharedProxy;

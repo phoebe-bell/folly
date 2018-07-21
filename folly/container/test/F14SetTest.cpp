@@ -16,6 +16,8 @@
 
 #include <folly/container/F14Set.h>
 
+#include <unordered_map>
+
 #include <folly/Conv.h>
 #include <folly/FBString.h>
 #include <folly/container/test/F14TestUtil.h>
@@ -94,6 +96,89 @@ TEST(F14Set, getAllocatedMemorySize) {
   runAllocatedMemorySizeTests<long double>();
   runAllocatedMemorySizeTests<std::string>();
   runAllocatedMemorySizeTests<folly::fbstring>();
+
+  {
+    folly::F14ValueSet<int> set;
+    set.insert(10);
+    EXPECT_EQ(sizeof(set), 4 * sizeof(void*));
+    if (alignof(folly::max_align_t) == 16) {
+      // chunks will be allocated as 2 max_align_t-s
+      EXPECT_EQ(set.getAllocatedMemorySize(), 32);
+    } else {
+      // chunks will be allocated using aligned_malloc with the true size
+      EXPECT_EQ(set.getAllocatedMemorySize(), 24);
+    }
+  }
+  {
+    folly::F14NodeSet<int> set;
+    set.insert(10);
+    EXPECT_EQ(sizeof(set), 4 * sizeof(void*));
+    if (alignof(folly::max_align_t) == 16) {
+      // chunks will be allocated as 2 max_align_t-s
+      EXPECT_EQ(set.getAllocatedMemorySize(), 36);
+    } else {
+      // chunks will be allocated using aligned_malloc with the true size
+      EXPECT_EQ(set.getAllocatedMemorySize(), 20 + 2 * sizeof(void*));
+    }
+  }
+  {
+    folly::F14VectorSet<int> set;
+    set.insert(10);
+    EXPECT_EQ(sizeof(set), 8 + 2 * sizeof(void*));
+    EXPECT_EQ(set.getAllocatedMemorySize(), 32);
+  }
+}
+
+template <typename S>
+void runVisitContiguousRangesTest(int n) {
+  S set;
+
+  for (int i = 0; i < n; ++i) {
+    set.insert(i);
+    set.erase(i / 2);
+  }
+
+  std::unordered_map<uintptr_t, bool> visited;
+  for (auto& entry : set) {
+    visited[reinterpret_cast<uintptr_t>(&entry)] = false;
+  }
+
+  set.visitContiguousRanges([&](auto b, auto e) {
+    for (auto i = b; i != e; ++i) {
+      auto iter = visited.find(reinterpret_cast<uintptr_t>(i));
+      ASSERT_TRUE(iter != visited.end());
+      EXPECT_FALSE(iter->second);
+      iter->second = true;
+    }
+  });
+
+  // ensure no entries were skipped
+  for (auto& e : visited) {
+    EXPECT_TRUE(e.second);
+  }
+}
+
+template <typename S>
+void runVisitContiguousRangesTest() {
+  runVisitContiguousRangesTest<S>(0); // empty
+  runVisitContiguousRangesTest<S>(5); // single chunk
+  runVisitContiguousRangesTest<S>(1000); // many chunks
+}
+
+TEST(F14ValueSet, visitContiguousRanges) {
+  runVisitContiguousRangesTest<folly::F14ValueSet<int>>();
+}
+
+TEST(F14NodeSet, visitContiguousRanges) {
+  runVisitContiguousRangesTest<folly::F14NodeSet<int>>();
+}
+
+TEST(F14VectorSet, visitContiguousRanges) {
+  runVisitContiguousRangesTest<folly::F14VectorSet<int>>();
+}
+
+TEST(F14FastSet, visitContiguousRanges) {
+  runVisitContiguousRangesTest<folly::F14FastSet<int>>();
 }
 
 ///////////////////////////////////
@@ -674,19 +759,25 @@ TEST(F14VectorSet, destructuring) {
   runInsertAndEmplace<F14VectorSet<Tracked<0>>>();
 }
 
-TEST(F14ValueSet, vectorMaxSize) {
+TEST(F14ValueSet, maxSize) {
   F14ValueSet<int> s;
-  EXPECT_EQ(s.max_size(), std::numeric_limits<uint64_t>::max() / sizeof(int));
+  EXPECT_EQ(
+      s.max_size(), std::numeric_limits<std::size_t>::max() / sizeof(int));
 }
 
-TEST(F14NodeSet, vectorMaxSize) {
+TEST(F14NodeSet, maxSize) {
   F14NodeSet<int> s;
-  EXPECT_EQ(s.max_size(), std::numeric_limits<uint64_t>::max() / sizeof(int));
+  EXPECT_EQ(
+      s.max_size(), std::numeric_limits<std::size_t>::max() / sizeof(int));
 }
 
-TEST(F14VectorSet, vectorMaxSize) {
+TEST(F14VectorSet, maxSize) {
   F14VectorSet<int> s;
-  EXPECT_EQ(s.max_size(), std::numeric_limits<uint32_t>::max());
+  EXPECT_EQ(
+      s.max_size(),
+      std::min(
+          std::size_t{std::numeric_limits<uint32_t>::max()},
+          std::numeric_limits<std::size_t>::max() / sizeof(int)));
 }
 
 template <typename S>
@@ -960,6 +1051,45 @@ TEST(F14FastSet, heterogeneousInsert) {
       Tracked<1>,
       TransparentTrackedHash<1>,
       TransparentTrackedEqual<1>>>();
+}
+
+namespace {
+struct CharArrayHasher {
+  template <std::size_t N>
+  std::size_t operator()(std::array<char, N> const& value) const {
+    return folly::Hash{}(StringPiece{value.begin(), value.end()});
+  }
+};
+
+template <
+    template <typename, typename, typename, typename> class S,
+    std::size_t N>
+struct RunAllValueSizeTests {
+  void operator()() const {
+    using Key = std::array<char, N>;
+    static_assert(sizeof(Key) == N, "");
+    S<Key, CharArrayHasher, std::equal_to<Key>, std::allocator<Key>> set;
+
+    for (int i = 0; i < 100; ++i) {
+      Key key{{static_cast<char>(i)}};
+      set.insert(key);
+    }
+    while (!set.empty()) {
+      set.erase(set.begin());
+    }
+
+    RunAllValueSizeTests<S, N - 1>{}();
+  }
+};
+
+template <template <typename, typename, typename, typename> class S>
+struct RunAllValueSizeTests<S, 0> {
+  void operator()() const {}
+};
+} // namespace
+
+TEST(F14ValueSet, valueSize) {
+  RunAllValueSizeTests<F14ValueSet, 32>{}();
 }
 
 ///////////////////////////////////

@@ -83,6 +83,20 @@ TEST(Window, basic) {
     EXPECT_EQ(6, res);
   }
   {
+    // string -> return SemiFuture<int>
+    auto res = reduce(
+                   window(
+                       std::vector<std::string>{"1", "2", "3"},
+                       [](std::string s) {
+                         return makeSemiFuture<int>(folly::to<int>(s));
+                       },
+                       2),
+                   0,
+                   [](int sum, const Try<int>& b) { return sum + *b; })
+                   .get();
+    EXPECT_EQ(6, res);
+  }
+  {
     SCOPED_TRACE("repeat same fn");
     auto res = reduce(
       window(
@@ -123,7 +137,7 @@ TEST(Window, exception) {
   }
 
   // Should have received 2 exceptions.
-  EXPECT_EQ(2, res.get());
+  EXPECT_EQ(2, std::move(res).get());
 }
 
 TEST(Window, stackOverflow) {
@@ -157,7 +171,7 @@ TEST(Window, stackOverflow) {
         return sum;
       });
 
-  EXPECT_EQ(res.get(), expectedSum);
+  EXPECT_EQ(std::move(res).get(), expectedSum);
 }
 
 TEST(Window, parallel) {
@@ -276,7 +290,7 @@ TEST(WindowExecutor, basic) {
         0,
         [](int sum, const Try<int>& b) { return sum + *b; });
     executor_->waitFor(res);
-    EXPECT_EQ(expect, res.get());
+    EXPECT_EQ(expect, std::move(res).get());
   };
   {
     SCOPED_TRACE("2 in-flight at a time");
@@ -307,7 +321,7 @@ TEST(WindowExecutor, basic) {
           return sum + 1;
         });
     executor.waitFor(res);
-    EXPECT_EQ(3, res.get());
+    EXPECT_EQ(3, std::move(res).get());
   }
   {
     // string -> return Future<int>
@@ -320,7 +334,7 @@ TEST(WindowExecutor, basic) {
         0,
         [](int sum, const Try<int>& b) { return sum + *b; });
     executor.waitFor(res);
-    EXPECT_EQ(6, res.get());
+    EXPECT_EQ(6, std::move(res).get());
   }
 }
 

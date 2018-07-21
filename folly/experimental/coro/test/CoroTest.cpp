@@ -93,9 +93,9 @@ TEST(Coro, Sleep) {
   EXPECT_TRUE(future.await_ready());
 }
 
-coro::Task<void> taskException() {
+coro::Task<int> taskException() {
   throw std::runtime_error("Test exception");
-  co_return;
+  co_return 42;
 }
 
 TEST(Coro, Throw) {
@@ -108,6 +108,18 @@ TEST(Coro, Throw) {
 
   EXPECT_TRUE(future.await_ready());
   EXPECT_THROW(future.get(), std::runtime_error);
+}
+
+TEST(Coro, FutureThrow) {
+  ManualExecutor executor;
+  auto future = via(&executor, taskException()).toFuture();
+
+  EXPECT_FALSE(future.isReady());
+
+  executor.drive();
+
+  EXPECT_TRUE(future.isReady());
+  EXPECT_THROW(std::move(future).get(), std::runtime_error);
 }
 
 coro::Task<int> taskRecursion(int depth) {
@@ -174,6 +186,118 @@ TEST(Coro, CurrentExecutor) {
       via(evbThread.getEventBase(), taskYield(evbThread.getEventBase()));
 
   future.wait();
+  EXPECT_EQ(42, future.get());
+}
+
+coro::Task<void> taskTimedWait() {
+  auto fastFuture =
+      futures::sleep(std::chrono::milliseconds{50}).then([] { return 42; });
+  auto fastResult = co_await coro::timed_wait(
+      std::move(fastFuture), std::chrono::milliseconds{100});
+  EXPECT_TRUE(fastResult);
+  EXPECT_EQ(42, *fastResult);
+
+  struct ExpectedException : public std::runtime_error {
+    ExpectedException() : std::runtime_error("ExpectedException") {}
+  };
+
+  auto throwingFuture = futures::sleep(std::chrono::milliseconds{50}).then([] {
+    throw ExpectedException();
+  });
+  EXPECT_THROW(
+      (void)co_await coro::timed_wait(
+          std::move(throwingFuture), std::chrono::milliseconds{100}),
+      ExpectedException);
+
+  auto slowFuture =
+      futures::sleep(std::chrono::milliseconds{200}).then([] { return 42; });
+  auto slowResult = co_await coro::timed_wait(
+      std::move(slowFuture), std::chrono::milliseconds{100});
+  EXPECT_FALSE(slowResult);
+
+  co_return;
+}
+
+TEST(Coro, TimedWait) {
+  ManualExecutor executor;
+  via(&executor, taskTimedWait()).toFuture().getVia(&executor);
+}
+
+template <int value>
+struct AwaitableInt {
+  bool await_ready() const {
+    return true;
+  }
+
+  bool await_suspend(std::experimental::coroutine_handle<>) {
+    LOG(FATAL) << "Should never be called.";
+  }
+
+  int await_resume() {
+    return value;
+  }
+};
+
+struct AwaitableWithOperator {};
+
+AwaitableInt<42> operator co_await(const AwaitableWithOperator&) {
+  return {};
+}
+
+coro::Task<int> taskAwaitableWithOperator() {
+  co_return co_await AwaitableWithOperator();
+}
+
+TEST(Coro, AwaitableWithOperator) {
+  ManualExecutor executor;
+  EXPECT_EQ(
+      42,
+      via(&executor, taskAwaitableWithOperator()).toFuture().getVia(&executor));
+}
+
+struct AwaitableWithMemberOperator {
+  AwaitableInt<42> operator co_await() {
+    return {};
+  }
+};
+
+AwaitableInt<24> operator co_await(const AwaitableWithMemberOperator&) {
+  return {};
+}
+
+coro::Task<int> taskAwaitableWithMemberOperator() {
+  co_return co_await AwaitableWithMemberOperator();
+}
+
+TEST(Coro, AwaitableWithMemberOperator) {
+  ManualExecutor executor;
+  EXPECT_EQ(
+      42,
+      via(&executor, taskAwaitableWithMemberOperator())
+          .toFuture()
+          .getVia(&executor));
+}
+
+coro::Task<int> taskBaton(fibers::Baton& baton) {
+  co_await baton;
+  co_return 42;
+}
+
+TEST(Coro, Baton) {
+  ManualExecutor executor;
+  fibers::Baton baton;
+  auto future = via(&executor, taskBaton(baton));
+
+  EXPECT_FALSE(future.await_ready());
+
+  executor.run();
+
+  EXPECT_FALSE(future.await_ready());
+
+  baton.post();
+  executor.run();
+
+  EXPECT_TRUE(future.await_ready());
   EXPECT_EQ(42, future.get());
 }
 

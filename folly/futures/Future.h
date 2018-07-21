@@ -21,9 +21,6 @@
 #include <memory>
 #include <type_traits>
 #include <vector>
-#if FOLLY_HAS_COROUTINES
-#include <experimental/coroutine>
-#endif
 
 #include <folly/Optional.h>
 #include <folly/Portability.h>
@@ -37,6 +34,10 @@
 #include <folly/futures/Promise.h>
 #include <folly/futures/detail/Types.h>
 #include <folly/lang/Exception.h>
+
+#if FOLLY_HAS_COROUTINES
+#include <experimental/coroutine>
+#endif
 
 // boring predeclarations and details
 #include <folly/futures/Future-pre.h>
@@ -57,6 +58,11 @@ class FOLLY_EXPORT FutureInvalid : public FutureException {
   FutureInvalid() : FutureException("Future invalid") {}
 };
 
+/// At most one continuation may be attached to any given Future.
+///
+/// If a continuation is attached to a future to which another continuation has
+/// already been attached, then an instance of FutureAlreadyContinued will be
+/// thrown instead.
 class FOLLY_EXPORT FutureAlreadyContinued : public FutureException {
  public:
   FutureAlreadyContinued() : FutureException("Future already continued") {}
@@ -341,18 +347,17 @@ class FutureBase {
   template <class>
   friend class Future;
 
-  using CoreType = futures::detail::Core<T>;
-  using corePtr = CoreType*;
+  using Core = futures::detail::Core<T>;
 
   // Throws FutureInvalid if there is no shared state object; else returns it
   // by ref.
   //
   // Implementation methods should usually use this instead of `this->core_`.
   // The latter should be used only when you need the possibly-null pointer.
-  CoreType& getCore() {
+  Core& getCore() {
     return getCoreImpl(*this);
   }
-  CoreType const& getCore() const {
+  Core const& getCore() const {
     return getCoreImpl(*this);
   }
 
@@ -382,9 +387,9 @@ class FutureBase {
 
   // shared core state object
   // usually you should use `getCore()` instead of directly accessing `core_`.
-  corePtr core_;
+  Core* core_;
 
-  explicit FutureBase(corePtr obj) : core_(obj) {}
+  explicit FutureBase(Core* obj) : core_(obj) {}
 
   explicit FutureBase(futures::detail::EmptyConstruct) noexcept;
 
@@ -430,6 +435,14 @@ class FutureBase {
 };
 template <class T>
 void convertFuture(SemiFuture<T>&& sf, Future<T>& f);
+
+class DeferredExecutor;
+
+template <typename T>
+DeferredExecutor* getDeferredExecutor(SemiFuture<T>& future);
+
+template <typename T>
+DeferredExecutor* stealDeferredExecutor(SemiFuture<T>& future);
 } // namespace detail
 } // namespace futures
 
@@ -836,12 +849,22 @@ class SemiFuture : private futures::detail::FutureBase<T> {
       return {};
     }
 
+    void return_value(const T& value) {
+      promise_.setValue(value);
+    }
+
     void return_value(T& value) {
       promise_.setValue(std::move(value));
     }
 
     void unhandled_exception() {
-      promise_.setException(exception_wrapper(std::current_exception()));
+      try {
+        std::rethrow_exception(std::current_exception());
+      } catch (std::exception& e) {
+        promise_.setException(exception_wrapper(std::current_exception(), e));
+      } catch (...) {
+        promise_.setException(exception_wrapper(std::current_exception()));
+      }
     }
 
    private:
@@ -864,15 +887,18 @@ class SemiFuture : private futures::detail::FutureBase<T> {
   friend class SemiFuture;
   template <class>
   friend class Future;
+  friend DeferredExecutor* futures::detail::stealDeferredExecutor<T>(
+      SemiFuture&);
+  friend DeferredExecutor* futures::detail::getDeferredExecutor<T>(SemiFuture&);
 
-  using typename Base::corePtr;
   using Base::setExecutor;
   using Base::throwIfInvalid;
+  using typename Base::Core;
 
   template <class T2>
   friend SemiFuture<T2> makeSemiFuture(Try<T2>&&);
 
-  explicit SemiFuture(corePtr obj) : Base(obj) {}
+  explicit SemiFuture(Core* obj) : Base(obj) {}
 
   explicit SemiFuture(futures::detail::EmptyConstruct) noexcept
       : Base(futures::detail::EmptyConstruct{}) {}
@@ -880,7 +906,10 @@ class SemiFuture : private futures::detail::FutureBase<T> {
   // Throws FutureInvalid if !this->core_
   DeferredExecutor* getDeferredExecutor() const;
 
-  static void releaseDeferredExecutor(corePtr core);
+  // Throws FutureInvalid if !this->core_
+  DeferredExecutor* stealDeferredExecutor() const;
+
+  static void releaseDeferredExecutor(Core* core);
 };
 
 template <class T>
@@ -1519,7 +1548,7 @@ class Future : private futures::detail::FutureBase<T> {
   /// Postconditions:
   ///
   /// - `valid() == false`
-  T get();
+  T get() &&;
 
   /// Blocks until the future is fulfilled, or until `dur` elapses. Returns the
   /// value (moved-out), or throws the exception (which might be a FutureTimeout
@@ -1532,7 +1561,7 @@ class Future : private futures::detail::FutureBase<T> {
   /// Postconditions:
   ///
   /// - `valid() == false`
-  T get(Duration dur);
+  T get(Duration dur) &&;
 
   /// A reference to the Try of the value
   ///
@@ -1797,9 +1826,9 @@ class Future : private futures::detail::FutureBase<T> {
   using Base::setExecutor;
   using Base::throwIfContinued;
   using Base::throwIfInvalid;
-  using typename Base::corePtr;
+  using typename Base::Core;
 
-  explicit Future(corePtr obj) : Base(obj) {}
+  explicit Future(Core* obj) : Base(obj) {}
 
   explicit Future(futures::detail::EmptyConstruct) noexcept
       : Base(futures::detail::EmptyConstruct{}) {}
@@ -1944,13 +1973,19 @@ class FutureRefAwaitable {
   folly::Future<T>& future_;
 };
 } // namespace detail
-} // namespace folly
 
 template <typename T>
-folly::detail::FutureAwaitable<T>
-/* implicit */ operator co_await(folly::Future<T>& future) {
-  return folly::detail::FutureRefAwaitable<T>(future);
+inline detail::FutureRefAwaitable<T>
+/* implicit */ operator co_await(Future<T>& future) {
+  return detail::FutureRefAwaitable<T>(future);
 }
+
+template <typename T>
+inline detail::FutureRefAwaitable<T>
+/* implicit */ operator co_await(Future<T>&& future) {
+  return detail::FutureRefAwaitable<T>(future);
+}
+} // namespace folly
 #endif
 
 #include <folly/futures/Future-inl.h>

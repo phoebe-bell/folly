@@ -11,7 +11,7 @@ SUBDIRS = . \
 	  $(MAYBE_INIT) \
 	  chrono/test \
 	  io/test \
-	  logging \
+	  logging/example \
 	  stats/test
 
 ACLOCAL_AMFLAGS = -I m4
@@ -69,7 +69,6 @@ nobase_follyinclude_HEADERS = \
 	container/detail/BitIteratorDetail.h \
 	container/detail/F14Defaults.h \
 	container/detail/F14IntrinsicsAvailability.h \
-	container/detail/F14Memory.h \
 	container/detail/F14Policy.h \
 	container/detail/F14Table.h \
 	container/Iterator.h \
@@ -94,6 +93,7 @@ nobase_follyinclude_HEADERS = \
 	detail/GroupVarintDetail.h \
 	detail/IPAddress.h \
 	detail/IPAddressSource.h \
+	detail/Iterators.h \
 	detail/MemoryIdler.h \
 	detail/MPMCPipelineDetail.h \
 	detail/PolyDetail.h \
@@ -519,7 +519,8 @@ nobase_follyinclude_HEADERS = \
 	Uri.h \
 	Uri-inl.h \
 	Utility.h \
-	Varint.h
+	Varint.h \
+	VirtualExecutor.h
 
 libfollybasesse42_la_SOURCES = \
 	detail/RangeSse42.cpp \
@@ -617,6 +618,31 @@ libfolly_la_SOURCES = \
 	lang/Assume.cpp \
 	lang/ColdClass.cpp \
 	lang/SafeAssert.cpp \
+	logging/AsyncFileWriter.cpp \
+	logging/FileHandlerFactory.cpp \
+	logging/FileWriterFactory.cpp \
+	logging/GlogStyleFormatter.cpp \
+	logging/ImmediateFileWriter.cpp \
+	logging/Init.cpp \
+	logging/InitWeak.cpp \
+	logging/LogCategory.cpp \
+	logging/LogCategoryConfig.cpp \
+	logging/LogConfig.cpp \
+	logging/LogConfigParser.cpp \
+	logging/Logger.cpp \
+	logging/LoggerDB.cpp \
+	logging/LogHandlerConfig.cpp \
+	logging/LogLevel.cpp \
+	logging/LogMessage.cpp \
+	logging/LogName.cpp \
+	logging/LogStream.cpp \
+	logging/LogStreamProcessor.cpp \
+	logging/printf.cpp \
+	logging/RateLimiter.cpp \
+	logging/StandardLogHandler.cpp \
+	logging/StandardLogHandlerFactory.cpp \
+	logging/StreamHandlerFactory.cpp \
+	logging/xlog.cpp \
 	detail/MemoryIdler.cpp \
 	detail/SocketFastOpen.cpp \
 	MacAddress.cpp \
