@@ -26,7 +26,7 @@ namespace folly {
 /**
  * @function for_each
  *
- * folly::for_each is a generalized iteration algorithm.  Example:
+ * folly::for_each is a generalized iteration algorithm. Example:
  *
  *  auto one = std::make_tuple(1, 2, 3);
  *  auto two = std::vector<int>{1, 2, 3};
@@ -36,20 +36,24 @@ namespace folly {
  *  folly::for_each(one, func);
  *  folly::for_each(two, func);
  *
- * The for_each function allows iteration through sequences, these
- * can either be runtime sequences (i.e. entities for which std::begin and
- * std::end work) or compile time sequences (as deemed by the presence of
- * std::tuple_length<>, get<> (ADL resolved) functions)
+ * The for_each function allows iteration through sequences, these can either be
+ * runtime sequences (i.e. entities for which std::begin and std::end work) or
+ * compile time sequences (as deemed by the presence of std::tuple_length<> and
+ * member get<> or ADL get<> functions).
  *
- * The function is made to provide a convenient library based alternative to
- * the proposal p0589r0, which aims to generalize the range based for loop
- * even further to work with compile time sequences.
+ * If a sequence type is both a runtime sequence (aka range) and a compile-time
+ * sequence (aka tuple), then it is treated as a range in preference to a tuple.
+ * An example of such a type is std::array.
+ *
+ * The function is made to provide a convenient library based alternative to the
+ * proposal p0589r0, which aims to generalize the range based for loop even
+ * further to work with compile time sequences.
  *
  * A drawback of using range based for loops is that sometimes you do not have
- * access to the index within the range.  This provides easy access to that,
- * even with compile time sequences.
+ * access to the index within the range. This provides easy access to that, even
+ * with compile time sequences.
  *
- * And breaking out is easy
+ * And breaking out is easy:
  *
  *  auto range_one = std::vector<int>{1, 2, 3};
  *  auto range_two = std::make_tuple(1, 2, 3);
@@ -63,17 +67,16 @@ namespace folly {
  *  folly_for_each(range_one, func);
  *  folly_for_each(range_two, func);
  *
- * A simple use case would be when using futures, if the user was doing calls
- * to n servers then they would accept the callback with the futures like this
+ * A simple use case would be when using futures, if the user was doing calls to
+ * n servers then they would accept the callback with the futures like this:
  *
  *  auto vec = std::vector<std::future<int>>{request_one(), ...};
  *  when_all(vec.begin(), vec.end()).then([](auto futures) {
  *    folly::for_each(futures, [](auto& fut) { ... });
  *  });
  *
- * Now when this code switches to use tuples instead of the runtime
- * std::vector, then the loop does not need to change, the code will still
- * work just fine
+ * Now when this code switches to use tuples instead of the runtime std::vector,
+ * then the loop does not need to change, the code will still work just fine:
  *
  *  when_all(future_one, future_two, future_three).then([](auto futures) {
  *    folly::for_each(futures, [](auto& fut) { ... });
@@ -85,7 +88,7 @@ FOLLY_CPP14_CONSTEXPR Func for_each(Range&& range, Func func);
 /**
  * The user should return loop_break and loop_continue if they want to iterate
  * in such a way that they can preemptively stop the loop and break out when
- * certain conditions are met
+ * certain conditions are met.
  */
 namespace for_each_detail {
 enum class LoopControl : bool { BREAK, CONTINUE };
@@ -96,11 +99,11 @@ constexpr auto loop_continue = for_each_detail::LoopControl::CONTINUE;
 
 /**
  * Utility method to help access elements of a sequence with one uniform
- * interface
+ * interface.
  *
  * This can be useful for example when you are looping through a sequence and
  * want to modify another sequence based on the information in the current
- * sequence
+ * sequence:
  *
  *  auto range_one = std::make_tuple(1, 2, 3);
  *  auto range_two = std::make_tuple(4, 5, 6);
@@ -108,12 +111,12 @@ constexpr auto loop_continue = for_each_detail::LoopControl::CONTINUE;
  *    folly::fetch(range_two, index) = ele;
  *  });
  *
- * For non-tuple like ranges, this works by first trying to use the iterator
- * class if the iterator has been marked to be a random access iterator.  This
- * should be inspectable via the std::iterator_traits traits class.  If the
- * iterator class is not present or is not a random access iterator then the
- * implementation falls back to trying to use the indexing operator
- * (operator[]) to fetch the required element
+ * For ranges, this works by first trying to use the iterator class if the
+ * iterator has been marked to be a random access iterator. This should be
+ * inspectable via the std::iterator_traits traits class. If the iterator class
+ * is not present or is not a random access iterator then the implementation
+ * falls back to trying to use the indexing operator (operator[]) to fetch the
+ * required element.
  */
 template <typename Sequence, typename Index>
 FOLLY_CPP14_CONSTEXPR decltype(auto) fetch(Sequence&& sequence, Index&& index);
@@ -137,12 +140,11 @@ FOLLY_CPP14_CONSTEXPR decltype(auto) fetch(Sequence&& sequence, Index&& index);
  *
  * If you need access to the iterators please write an explicit iterator loop
  */
-#define FOR_EACH(i, c)                                  \
-  if (bool _FE_ANON(s1_) = false) {} else               \
-    for (auto && _FE_ANON(s2_) = (c);                   \
-         !_FE_ANON(s1_); _FE_ANON(s1_) = true)          \
-      for (auto i = _FE_ANON(s2_).begin();              \
-           i != _FE_ANON(s2_).end(); ++i)
+#define FOR_EACH(i, c)                                                     \
+  if (bool _FE_ANON(s1_) = false) {                                        \
+  } else                                                                   \
+    for (auto&& _FE_ANON(s2_) = (c); !_FE_ANON(s1_); _FE_ANON(s1_) = true) \
+      for (auto i = _FE_ANON(s2_).begin(); i != _FE_ANON(s2_).end(); ++i)
 
 /*
  * If you just want the element values, please use this (ranges-v3) construct:
@@ -151,12 +153,11 @@ FOLLY_CPP14_CONSTEXPR decltype(auto) fetch(Sequence&& sequence, Index&& index);
  *
  * If you need access to the iterators please write an explicit iterator loop
  */
-#define FOR_EACH_R(i, c)                                \
-  if (bool _FE_ANON(s1_) = false) {} else               \
-    for (auto && _FE_ANON(s2_) = (c);                   \
-         !_FE_ANON(s1_); _FE_ANON(s1_) = true)          \
-      for (auto i = _FE_ANON(s2_).rbegin();             \
-           i != _FE_ANON(s2_).rend(); ++i)
+#define FOR_EACH_R(i, c)                                                   \
+  if (bool _FE_ANON(s1_) = false) {                                        \
+  } else                                                                   \
+    for (auto&& _FE_ANON(s2_) = (c); !_FE_ANON(s1_); _FE_ANON(s1_) = true) \
+      for (auto i = _FE_ANON(s2_).rbegin(); i != _FE_ANON(s2_).rend(); ++i)
 
 /*
  * If you just want the element values, please use this construct:
@@ -166,14 +167,15 @@ FOLLY_CPP14_CONSTEXPR decltype(auto) fetch(Sequence&& sequence, Index&& index);
  * If you need access to the iterators please write an explicit iterator loop
  * and use a counter variable
  */
-#define FOR_EACH_ENUMERATE(count, i, c)                                \
-  if (bool _FE_ANON(s1_) = false) {} else                            \
-    for (auto && FOR_EACH_state2 = (c);                                \
-         !_FE_ANON(s1_); _FE_ANON(s1_) = true)                     \
-      if (size_t _FE_ANON(n1_) = 0) {} else                            \
-        if (const size_t& count = _FE_ANON(n1_)) {} else               \
-          for (auto i = FOR_EACH_state2.begin();                       \
-               i != FOR_EACH_state2.end(); ++_FE_ANON(n1_), ++i)
+#define FOR_EACH_ENUMERATE(count, i, c)                                      \
+  if (bool _FE_ANON(s1_) = false) {                                          \
+  } else                                                                     \
+    for (auto&& FOR_EACH_state2 = (c); !_FE_ANON(s1_); _FE_ANON(s1_) = true) \
+      if (size_t _FE_ANON(n1_) = 0) {                                        \
+      } else if (const size_t& count = _FE_ANON(n1_)) {                      \
+      } else                                                                 \
+        for (auto i = FOR_EACH_state2.begin(); i != FOR_EACH_state2.end();   \
+             ++_FE_ANON(n1_), ++i)
 /**
  * If you just want the keys, please use this (ranges-v3) construct:
  *
@@ -192,28 +194,30 @@ FOLLY_CPP14_CONSTEXPR decltype(auto) fetch(Sequence&& sequence, Index&& index);
  *    }
  *
  */
-#define FOR_EACH_KV(k, v, c)                                  \
-  if (unsigned int _FE_ANON(s1_) = 0) {} else                 \
-    for (auto && _FE_ANON(s2_) = (c);                         \
-         !_FE_ANON(s1_); _FE_ANON(s1_) = 1)                   \
-      for (auto _FE_ANON(s3_) = _FE_ANON(s2_).begin();        \
-           _FE_ANON(s3_) != _FE_ANON(s2_).end();              \
-           _FE_ANON(s1_) == 2                                 \
-             ? ((_FE_ANON(s1_) = 0), ++_FE_ANON(s3_))         \
-             : (_FE_ANON(s3_) = _FE_ANON(s2_).end()))         \
-        for (auto &k = _FE_ANON(s3_)->first;                  \
-             !_FE_ANON(s1_); ++_FE_ANON(s1_))                 \
-          for (auto &v = _FE_ANON(s3_)->second;               \
-               !_FE_ANON(s1_); ++_FE_ANON(s1_))
+#define FOR_EACH_KV(k, v, c)                                                  \
+  if (unsigned int _FE_ANON(s1_) = 0) {                                       \
+  } else                                                                      \
+    for (auto&& _FE_ANON(s2_) = (c); !_FE_ANON(s1_); _FE_ANON(s1_) = 1)       \
+      for (auto _FE_ANON(s3_) = _FE_ANON(s2_).begin();                        \
+           _FE_ANON(s3_) != _FE_ANON(s2_).end();                              \
+           _FE_ANON(s1_) == 2 ? ((_FE_ANON(s1_) = 0), ++_FE_ANON(s3_))        \
+                              : (_FE_ANON(s3_) = _FE_ANON(s2_).end()))        \
+        for (auto& k = _FE_ANON(s3_)->first; !_FE_ANON(s1_); ++_FE_ANON(s1_)) \
+          for (auto& v = _FE_ANON(s3_)->second; !_FE_ANON(s1_); ++_FE_ANON(s1_))
 
-namespace folly { namespace detail {
+namespace folly {
+namespace detail {
 
 // Boost 1.48 lacks has_less, we emulate a subset of it here.
 template <typename T, typename U>
 class HasLess {
-  struct BiggerThanChar { char unused[2]; };
-  template <typename C, typename D> static char test(decltype(C() < D())*);
-  template <typename, typename> static BiggerThanChar test(...);
+  struct BiggerThanChar {
+    char unused[2];
+  };
+  template <typename C, typename D>
+  static char test(decltype(C() < D())*);
+  template <typename, typename>
+  static BiggerThanChar test(...);
 
  public:
   enum { value = sizeof(test<T, U>(nullptr)) == 1 };
@@ -257,40 +261,39 @@ notThereYet(T& iter, const U& end) {
 
 template <class T, class U>
 typename std::enable_if<
-  (std::is_arithmetic<T>::value && std::is_arithmetic<U>::value) ||
-  (std::is_pointer<T>::value && std::is_pointer<U>::value),
-  bool>::type
+    (std::is_arithmetic<T>::value && std::is_arithmetic<U>::value) ||
+        (std::is_pointer<T>::value && std::is_pointer<U>::value),
+    bool>::type
 notThereYet(T& iter, const U& end) {
   return iter < end;
 }
 
 template <class T, class U>
 typename std::enable_if<
-  !(
-    (std::is_arithmetic<T>::value && std::is_arithmetic<U>::value) ||
-    (std::is_pointer<T>::value && std::is_pointer<U>::value)
-  ),
-  bool>::type
+    !((std::is_arithmetic<T>::value && std::is_arithmetic<U>::value) ||
+      (std::is_pointer<T>::value && std::is_pointer<U>::value)),
+    bool>::type
 notThereYet(T& iter, const U& end) {
   return iter != end;
 }
 
 #endif
 
-
 /**
  * downTo is similar to notThereYet, but in reverse - it helps the
  * FOR_EACH_RANGE_R macro.
  */
 template <class T, class U>
-typename std::enable_if<HasLess<U, T>::value, bool>::type
-downTo(T& iter, const U& begin) {
+typename std::enable_if<HasLess<U, T>::value, bool>::type downTo(
+    T& iter,
+    const U& begin) {
   return begin < iter--;
 }
 
 template <class T, class U>
-typename std::enable_if<!HasLess<U, T>::value, bool>::type
-downTo(T& iter, const U& begin) {
+typename std::enable_if<!HasLess<U, T>::value, bool>::type downTo(
+    T& iter,
+    const U& begin) {
   if (iter == begin) {
     return false;
   }
@@ -307,9 +310,9 @@ downTo(T& iter, const U& begin) {
  *
  *    for (auto& element : make_iterator_range(begin, end))
  */
-#define FOR_EACH_RANGE(i, begin, end)           \
-  for (auto i = (true ? (begin) : (end));       \
-       ::folly::detail::notThereYet(i, (end));  \
+#define FOR_EACH_RANGE(i, begin, end)          \
+  for (auto i = (true ? (begin) : (end));      \
+       ::folly::detail::notThereYet(i, (end)); \
        ++i)
 
 /*

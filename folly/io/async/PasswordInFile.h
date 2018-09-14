@@ -13,15 +13,32 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
-#include <folly/FormatArg.h>
+#include <folly/io/async/SSLContext.h> // PasswordCollector
 
 namespace folly {
 
-[[noreturn]] void throwBadFormatArg(char const* msg) {
-  throw BadFormatArg(msg);
-}
-[[noreturn]] void throwBadFormatArg(std::string const& msg) {
-  throw BadFormatArg(msg);
-}
+class PasswordInFile : public PasswordCollector {
+ public:
+  explicit PasswordInFile(const std::string& file);
+  ~PasswordInFile() override;
+
+  void getPassword(std::string& password, int /* size */) const override {
+    password = password_;
+  }
+
+  const char* getPasswordStr() const {
+    return password_.c_str();
+  }
+
+  std::string describe() const override {
+    return fileName_;
+  }
+
+ protected:
+  std::string fileName_;
+  std::string password_;
+};
+
 } // namespace folly

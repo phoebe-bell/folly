@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <folly/Range.h>
+#include <folly/Utility.h>
 
 namespace folly {
 
@@ -92,7 +93,8 @@ class TDigest {
    * Returns a new TDigest constructed with values merged from the current
    * digest and the given sortedValues.
    */
-  TDigest merge(Range<const double*> sortedValues) const;
+  TDigest merge(presorted_t, Range<const double*> sortedValues) const;
+  TDigest merge(Range<const double*> unsortedValues) const;
 
   /*
    * Returns a new TDigest constructed with values merged from the given
@@ -131,6 +133,10 @@ class TDigest {
 
   const std::vector<Centroid>& getCentroids() const {
     return centroids_;
+  }
+
+  size_t maxSize() const {
+    return maxSize_;
   }
 
  private:

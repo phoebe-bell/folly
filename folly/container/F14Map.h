@@ -34,7 +34,7 @@
 #include <folly/lang/Exception.h>
 #include <folly/lang/SafeAssert.h>
 
-#include <folly/container/F14Map-pre.h>
+#include <folly/container/F14Map-fwd.h>
 #include <folly/container/detail/F14Policy.h>
 #include <folly/container/detail/F14Table.h>
 
@@ -54,31 +54,39 @@ class F14BasicMap : public std::unordered_map<K, M, H, E, A> {
   using Super = std::unordered_map<K, M, H, E, A>;
 
  public:
+  using typename Super::pointer;
+  using typename Super::value_type;
+
+  F14BasicMap() = default;
+
   using Super::Super;
-  F14BasicMap() : Super() {}
 
   //// PUBLIC - F14 Extensions
 
-  typename Super::size_type getAllocatedMemorySize() const {
-    auto bc = this->bucket_count();
-    return (bc == 1 ? 0 : bc) * sizeof(typename Super::pointer) +
-        this->size() * sizeof(StdNodeReplica<K, typename Super::value_type, H>);
+  // exact for libstdc++, approximate for others
+  std::size_t getAllocatedMemorySize() const {
+    std::size_t rv = 0;
+    visitAllocationClasses(
+        [&](std::size_t bytes, std::size_t n) { rv += bytes * n; });
+    return rv;
   }
 
+  // exact for libstdc++, approximate for others
   template <typename V>
   void visitAllocationClasses(V&& visitor) const {
     auto bc = this->bucket_count();
     if (bc > 1) {
-      visitor(bc * sizeof(typename Super::pointer), 1);
+      visitor(bc * sizeof(pointer), 1);
     }
-    visitor(
-        sizeof(StdNodeReplica<K, typename Super::value_type, H>), this->size());
+    if (this->size() > 0) {
+      visitor(sizeof(StdNodeReplica<K, value_type, H>), this->size());
+    }
   }
 
   template <typename V>
   void visitContiguousRanges(V&& visitor) const {
-    for (typename Super::value_type const& entry : *this) {
-      typename Super::value_type const* b = std::addressof(entry);
+    for (value_type const& entry : *this) {
+      value_type const* b = std::addressof(entry);
       visitor(b, b + 1);
     }
   }
@@ -86,31 +94,73 @@ class F14BasicMap : public std::unordered_map<K, M, H, E, A> {
 } // namespace detail
 } // namespace f14
 
-template <typename K, typename M, typename H, typename E, typename A>
-class F14ValueMap : public f14::detail::F14BasicMap<K, M, H, E, A> {
-  using Super = f14::detail::F14BasicMap<K, M, H, E, A>;
+template <
+    typename Key,
+    typename Mapped,
+    typename Hasher,
+    typename KeyEqual,
+    typename Alloc>
+class F14ValueMap
+    : public f14::detail::F14BasicMap<Key, Mapped, Hasher, KeyEqual, Alloc> {
+  using Super = f14::detail::F14BasicMap<Key, Mapped, Hasher, KeyEqual, Alloc>;
 
  public:
+  using typename Super::value_type;
+
+  F14ValueMap() = default;
+
   using Super::Super;
-  F14ValueMap() : Super() {}
+
+  F14ValueMap& operator=(std::initializer_list<value_type> ilist) {
+    Super::operator=(ilist);
+    return *this;
+  }
 };
 
-template <typename K, typename M, typename H, typename E, typename A>
-class F14NodeMap : public f14::detail::F14BasicMap<K, M, H, E, A> {
-  using Super = f14::detail::F14BasicMap<K, M, H, E, A>;
+template <
+    typename Key,
+    typename Mapped,
+    typename Hasher,
+    typename KeyEqual,
+    typename Alloc>
+class F14NodeMap
+    : public f14::detail::F14BasicMap<Key, Mapped, Hasher, KeyEqual, Alloc> {
+  using Super = f14::detail::F14BasicMap<Key, Mapped, Hasher, KeyEqual, Alloc>;
 
  public:
+  using typename Super::value_type;
+
+  F14NodeMap() = default;
+
   using Super::Super;
-  F14NodeMap() : Super() {}
+
+  F14NodeMap& operator=(std::initializer_list<value_type> ilist) {
+    Super::operator=(ilist);
+    return *this;
+  }
 };
 
-template <typename K, typename M, typename H, typename E, typename A>
-class F14VectorMap : public f14::detail::F14BasicMap<K, M, H, E, A> {
-  using Super = f14::detail::F14BasicMap<K, M, H, E, A>;
+template <
+    typename Key,
+    typename Mapped,
+    typename Hasher,
+    typename KeyEqual,
+    typename Alloc>
+class F14VectorMap
+    : public f14::detail::F14BasicMap<Key, Mapped, Hasher, KeyEqual, Alloc> {
+  using Super = f14::detail::F14BasicMap<Key, Mapped, Hasher, KeyEqual, Alloc>;
 
  public:
+  using typename Super::value_type;
+
+  F14VectorMap() = default;
+
   using Super::Super;
-  F14VectorMap() : Super() {}
+
+  F14VectorMap& operator=(std::initializer_list<value_type> ilist) {
+    Super::operator=(ilist);
+    return *this;
+  }
 };
 
 } // namespace folly
@@ -197,7 +247,8 @@ class F14BasicMap {
       allocator_type const& alloc)
       : F14BasicMap(initialCapacity, hash, key_equal{}, alloc) {}
 
-  explicit F14BasicMap(allocator_type const& alloc) : F14BasicMap(0, alloc) {}
+  explicit F14BasicMap(allocator_type const& alloc)
+      : F14BasicMap(0, hasher{}, key_equal{}, alloc) {}
 
   template <typename InputIt>
   F14BasicMap(
@@ -274,6 +325,12 @@ class F14BasicMap {
 
   F14BasicMap& operator=(F14BasicMap&&) = default;
 
+  F14BasicMap& operator=(std::initializer_list<value_type> ilist) {
+    clear();
+    bulkInsert(ilist.begin(), ilist.end(), false);
+    return *this;
+  }
+
   allocator_type get_allocator() const noexcept {
     return table_.alloc();
   }
@@ -330,6 +387,27 @@ class F14BasicMap {
       std::pair<iterator, bool>>
   insert(P&& value) {
     return emplace(std::forward<P>(value));
+  }
+
+  // TODO(T31574848): Work around libstdc++ versions (e.g., GCC < 6) with no
+  // implementation of N4387 ("perfect initialization" for pairs and tuples).
+  template <typename U1, typename U2>
+  std::enable_if_t<
+      std::is_constructible<key_type, U1 const&>::value &&
+          std::is_constructible<mapped_type, U2 const&>::value,
+      std::pair<iterator, bool>>
+  insert(std::pair<U1, U2> const& value) {
+    return emplace(value);
+  }
+
+  // TODO(T31574848)
+  template <typename U1, typename U2>
+  std::enable_if_t<
+      std::is_constructible<key_type, U1&&>::value &&
+          std::is_constructible<mapped_type, U2&&>::value,
+      std::pair<iterator, bool>>
+  insert(std::pair<U1, U2>&& value) {
+    return emplace(std::move(value));
   }
 
   std::pair<iterator, bool> insert(value_type&& value) {
@@ -458,8 +536,16 @@ class F14BasicMap {
   std::pair<ItemIter, bool> emplaceItem(U1&& x, U2&& y) {
     using K = KeyTypeForEmplace<key_type, hasher, key_equal, U1>;
     K key(std::forward<U1>(x));
+
+    // TODO(T31574848): piecewise_construct is to work around libstdc++ versions
+    // (e.g., GCC < 6) with no implementation of N4387 ("perfect initialization"
+    // for pairs and tuples).  Otherwise we could just pass key, forwarded key,
+    // and forwarded y to tryEmplaceValue.
     return table_.tryEmplaceValue(
-        key, std::forward<K>(key), std::forward<U2>(y));
+        key,
+        std::piecewise_construct,
+        std::forward_as_tuple(std::forward<K>(key)),
+        std::forward_as_tuple(std::forward<U2>(y)));
   }
 
   template <typename U1, typename U2>
@@ -886,9 +972,16 @@ class F14ValueMap
   using Super = f14::detail::F14BasicMap<Policy>;
 
  public:
-  F14ValueMap() noexcept(Policy::kDefaultConstructIsNoexcept) : Super{} {}
+  using typename Super::value_type;
+
+  F14ValueMap() = default;
 
   using Super::Super;
+
+  F14ValueMap& operator=(std::initializer_list<value_type> ilist) {
+    Super::operator=(ilist);
+    return *this;
+  }
 
   void swap(F14ValueMap& rhs) noexcept(Policy::kSwapIsNoexcept) {
     this->table_.swap(rhs.table_);
@@ -940,9 +1033,14 @@ class F14NodeMap
  public:
   using typename Super::value_type;
 
-  F14NodeMap() noexcept(Policy::kDefaultConstructIsNoexcept) : Super{} {}
+  F14NodeMap() = default;
 
   using Super::Super;
+
+  F14NodeMap& operator=(std::initializer_list<value_type> ilist) {
+    Super::operator=(ilist);
+    return *this;
+  }
 
   void swap(F14NodeMap& rhs) noexcept(Policy::kSwapIsNoexcept) {
     this->table_.swap(rhs.table_);
@@ -1019,10 +1117,15 @@ class F14VectorMap
   using reverse_iterator = typename Policy::ReverseIter;
   using const_reverse_iterator = typename Policy::ConstReverseIter;
 
-  F14VectorMap() noexcept(Policy::kDefaultConstructIsNoexcept) : Super{} {}
+  F14VectorMap() = default;
 
   // inherit constructors
   using Super::Super;
+
+  F14VectorMap& operator=(std::initializer_list<value_type> ilist) {
+    Super::operator=(ilist);
+    return *this;
+  }
 
   void swap(F14VectorMap& rhs) noexcept(Policy::kSwapIsNoexcept) {
     this->table_.swap(rhs.table_);
@@ -1222,8 +1325,16 @@ class F14FastMap : public std::conditional_t<
       F14VectorMap<Key, Mapped, Hasher, KeyEqual, Alloc>>;
 
  public:
+  using typename Super::value_type;
+
+  F14FastMap() = default;
+
   using Super::Super;
-  F14FastMap() : Super() {}
+
+  F14FastMap& operator=(std::initializer_list<value_type> ilist) {
+    Super::operator=(ilist);
+    return *this;
+  }
 };
 
 template <typename K, typename M, typename H, typename E, typename A>

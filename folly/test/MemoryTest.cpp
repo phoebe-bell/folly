@@ -167,9 +167,68 @@ TEST(AlignedSysAllocator, bad_alloc_default) {
   }
 }
 
+TEST(AlignedSysAllocator, converting_constructor) {
+  using Alloc1 = AlignedSysAllocator<float>;
+  using Alloc2 = AlignedSysAllocator<double>;
+  Alloc1 const alloc1(1024);
+  Alloc2 const alloc2(alloc1);
+}
+
 TEST(allocate_sys_buffer, compiles) {
   auto buf = allocate_sys_buffer(256);
   //  Freed at the end of the scope.
+}
+
+struct CountedAllocatorStats {
+  size_t deallocates = 0;
+};
+
+template <typename T>
+class CountedAllocator : public std::allocator<T> {
+ private:
+  CountedAllocatorStats* stats_;
+
+ public:
+  explicit CountedAllocator(CountedAllocatorStats& stats) noexcept
+      : stats_(&stats) {}
+  void deallocate(T* p, size_t n) {
+    std::allocator<T>::deallocate(p, n);
+    ++stats_->deallocates;
+  }
+};
+
+TEST(allocate_unique, ctor_failure) {
+  struct CtorThrows {
+    explicit CtorThrows(bool cond) {
+      if (cond) {
+        throw std::runtime_error("nope");
+      }
+    }
+  };
+  using Alloc = CountedAllocator<CtorThrows>;
+  using Deleter = allocator_delete<CountedAllocator<CtorThrows>>;
+  {
+    CountedAllocatorStats stats;
+    Alloc const alloc(stats);
+    EXPECT_EQ(0, stats.deallocates);
+    std::unique_ptr<CtorThrows, Deleter> ptr{nullptr, Deleter{alloc}};
+    ptr = allocate_unique<CtorThrows>(alloc, false);
+    EXPECT_NE(nullptr, ptr);
+    EXPECT_EQ(0, stats.deallocates);
+    ptr = nullptr;
+    EXPECT_EQ(nullptr, ptr);
+    EXPECT_EQ(1, stats.deallocates);
+  }
+  {
+    CountedAllocatorStats stats;
+    Alloc const alloc(stats);
+    EXPECT_EQ(0, stats.deallocates);
+    std::unique_ptr<CtorThrows, Deleter> ptr{nullptr, Deleter{alloc}};
+    EXPECT_THROW(
+        ptr = allocate_unique<CtorThrows>(alloc, true), std::runtime_error);
+    EXPECT_EQ(nullptr, ptr);
+    EXPECT_EQ(1, stats.deallocates);
+  }
 }
 
 namespace {
@@ -270,52 +329,6 @@ TEST(AllocatorObjectLifecycleTraits, compiles) {
       "");
   static_assert(
       !folly::AllocatorHasDefaultObjectDestroy<TestAlloc5<S>, S>::value, "");
-}
-
-template <typename C>
-static void test_enable_shared_from_this(std::shared_ptr<C> sp) {
-  ASSERT_EQ(1l, sp.use_count());
-
-  // Test shared_from_this().
-  std::shared_ptr<C> sp2 = sp->shared_from_this();
-  ASSERT_EQ(sp, sp2);
-
-  // Test weak_from_this().
-  std::weak_ptr<C> wp = sp->weak_from_this();
-  ASSERT_EQ(sp, wp.lock());
-  sp.reset();
-  sp2.reset();
-  ASSERT_EQ(nullptr, wp.lock());
-
-  // Test shared_from_this() and weak_from_this() on object not owned by a
-  // shared_ptr. Undefined in C++14 but well-defined in C++17. Also known to
-  // work with libstdc++ >= 20150123. Feel free to add other standard library
-  // versions where the behavior is known.
-#if __cplusplus >= 201700L || __GLIBCXX__ >= 20150123L
-  C stack_resident;
-  ASSERT_THROW(stack_resident.shared_from_this(), std::bad_weak_ptr);
-  ASSERT_TRUE(stack_resident.weak_from_this().expired());
-#endif
-}
-
-TEST(enable_shared_from_this, compatible_with_std_enable_shared_from_this) {
-  // Compile-time compatibility.
-  class C_std : public std::enable_shared_from_this<C_std> {};
-  class C_folly : public folly::enable_shared_from_this<C_folly> {};
-  static_assert(
-      noexcept(std::declval<C_std>().shared_from_this()) ==
-          noexcept(std::declval<C_folly>().shared_from_this()),
-      "");
-  static_assert(
-      noexcept(std::declval<C_std const>().shared_from_this()) ==
-          noexcept(std::declval<C_folly const>().shared_from_this()),
-      "");
-  static_assert(noexcept(std::declval<C_folly>().weak_from_this()), "");
-  static_assert(noexcept(std::declval<C_folly const>().weak_from_this()), "");
-
-  // Runtime compatibility.
-  test_enable_shared_from_this(std::make_shared<C_folly>());
-  test_enable_shared_from_this(std::make_shared<C_folly const>());
 }
 
 template <typename T>

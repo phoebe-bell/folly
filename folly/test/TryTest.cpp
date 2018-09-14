@@ -33,6 +33,7 @@ class A {
   int x() const {
     return x_;
   }
+
  private:
   int x_;
 };
@@ -79,6 +80,256 @@ TEST(Try, in_place_nested) {
   Try<Try<A>> t_t_a(in_place, in_place, 5);
 
   EXPECT_EQ(5, t_t_a.value().value().x());
+}
+
+TEST(Try, assignmentWithThrowingCopyConstructor) {
+  struct MyException : std::exception {};
+  struct ThrowingCopyConstructor {
+    int& counter_;
+    explicit ThrowingCopyConstructor(int& counter) : counter_(counter) {
+      ++counter_;
+    }
+
+    [[noreturn]] ThrowingCopyConstructor(
+        const ThrowingCopyConstructor& other) noexcept(false)
+        : counter_(other.counter_) {
+      throw MyException{};
+    }
+
+    ThrowingCopyConstructor& operator=(const ThrowingCopyConstructor&) = delete;
+
+    ~ThrowingCopyConstructor() {
+      --counter_;
+    }
+  };
+
+  int counter = 0;
+
+  {
+    Try<ThrowingCopyConstructor> t1{in_place, counter};
+    Try<ThrowingCopyConstructor> t2{in_place, counter};
+    EXPECT_EQ(2, counter);
+    EXPECT_THROW(t2 = t1, MyException);
+    EXPECT_EQ(1, counter);
+    EXPECT_FALSE(t2.hasValue());
+    EXPECT_TRUE(t1.hasValue());
+  }
+  EXPECT_EQ(0, counter);
+  {
+    Try<ThrowingCopyConstructor> t1{in_place, counter};
+    Try<ThrowingCopyConstructor> t2;
+    EXPECT_EQ(1, counter);
+    EXPECT_THROW(t2 = t1, MyException);
+    EXPECT_EQ(1, counter);
+    EXPECT_FALSE(t2.hasValue());
+    EXPECT_TRUE(t1.hasValue());
+  }
+  EXPECT_EQ(0, counter);
+}
+
+TEST(Try, assignmentWithThrowingMoveConstructor) {
+  struct MyException : std::exception {};
+  struct ThrowingMoveConstructor {
+    int& counter_;
+    explicit ThrowingMoveConstructor(int& counter) : counter_(counter) {
+      ++counter_;
+    }
+
+    [[noreturn]] ThrowingMoveConstructor(
+        ThrowingMoveConstructor&& other) noexcept(false)
+        : counter_(other.counter_) {
+      throw MyException{};
+    }
+
+    ThrowingMoveConstructor& operator=(ThrowingMoveConstructor&&) = delete;
+
+    ~ThrowingMoveConstructor() {
+      --counter_;
+    }
+  };
+
+  int counter = 0;
+
+  {
+    Try<ThrowingMoveConstructor> t1{in_place, counter};
+    Try<ThrowingMoveConstructor> t2{in_place, counter};
+    EXPECT_EQ(2, counter);
+    EXPECT_THROW(t2 = std::move(t1), MyException);
+    EXPECT_EQ(1, counter);
+    EXPECT_FALSE(t2.hasValue());
+    EXPECT_TRUE(t1.hasValue());
+  }
+  EXPECT_EQ(0, counter);
+  {
+    Try<ThrowingMoveConstructor> t1{in_place, counter};
+    Try<ThrowingMoveConstructor> t2;
+    EXPECT_EQ(1, counter);
+    EXPECT_THROW(t2 = std::move(t1), MyException);
+    EXPECT_EQ(1, counter);
+    EXPECT_FALSE(t2.hasValue());
+    EXPECT_TRUE(t1.hasValue());
+  }
+  EXPECT_EQ(0, counter);
+}
+
+TEST(Try, emplace) {
+  Try<A> t;
+  A& t_a = t.emplace(10);
+  EXPECT_TRUE(t.hasValue());
+  EXPECT_EQ(t_a.x(), 10);
+}
+
+TEST(Try, emplaceWithThrowingConstructor) {
+  struct MyException : std::exception {};
+  struct ThrowingConstructor {
+    explicit ThrowingConstructor(bool shouldThrow) {
+      if (shouldThrow) {
+        throw MyException{};
+      }
+    }
+  };
+
+  {
+    // Try constructing from empty state to new value and constructor throws.
+    Try<ThrowingConstructor> t;
+    EXPECT_FALSE(t.hasValue());
+    EXPECT_FALSE(t.hasException());
+    EXPECT_THROW(t.emplace(true), MyException);
+
+    EXPECT_FALSE(t.hasValue());
+    EXPECT_FALSE(t.hasException());
+  }
+
+  {
+    // Initialise to value, then re-emplace with throwing constructor.
+    // This should reset the object back to empty.
+    Try<ThrowingConstructor> t{in_place, false};
+    EXPECT_TRUE(t.hasValue());
+    EXPECT_THROW(t.emplace(true), MyException);
+    EXPECT_FALSE(t.hasValue());
+    EXPECT_FALSE(t.hasException());
+  }
+}
+
+TEST(Try, tryEmplace) {
+  Try<A> t;
+  A* a = tryEmplace(t, 10);
+  EXPECT_EQ(&t.value(), a);
+  EXPECT_TRUE(t.hasValue());
+  EXPECT_EQ(10, t.value().x());
+}
+
+TEST(Try, tryEmplaceWithThrowingConstructor) {
+  struct MyException : std::exception {};
+  struct NonInheritingException {};
+  struct ThrowingConstructor {
+    [[noreturn]] ThrowingConstructor() noexcept(false) {
+      throw NonInheritingException{}; // @nolint
+    }
+
+    explicit ThrowingConstructor(bool shouldThrow) {
+      if (shouldThrow) {
+        throw MyException{};
+      }
+    }
+  };
+
+  {
+    Try<ThrowingConstructor> t;
+    EXPECT_EQ(nullptr, tryEmplace(t, true));
+    EXPECT_TRUE(t.hasException());
+    EXPECT_NE(t.tryGetExceptionObject<MyException>(), nullptr);
+  }
+
+  {
+    Try<ThrowingConstructor> t;
+    EXPECT_EQ(nullptr, tryEmplace(t));
+    EXPECT_TRUE(t.hasException());
+    EXPECT_NE(t.tryGetExceptionObject<NonInheritingException>(), nullptr);
+  }
+
+  {
+    Try<ThrowingConstructor> t;
+    EXPECT_NE(nullptr, tryEmplace(t, false));
+    EXPECT_TRUE(t.hasValue());
+    EXPECT_EQ(nullptr, tryEmplace(t, true));
+    EXPECT_TRUE(t.hasException());
+    EXPECT_NE(t.tryGetExceptionObject<MyException>(), nullptr);
+  }
+}
+
+TEST(Try, emplaceVoidTry) {
+  struct MyException : std::exception {};
+  Try<void> t;
+  t.emplace();
+  EXPECT_TRUE(t.hasValue());
+  t.emplaceException(folly::in_place_type<MyException>);
+  EXPECT_FALSE(t.hasValue());
+  EXPECT_TRUE(t.hasException());
+  EXPECT_TRUE(t.hasException<MyException>());
+  t.emplace();
+  EXPECT_TRUE(t.hasValue());
+  EXPECT_FALSE(t.hasException());
+}
+
+TEST(Try, tryEmplaceVoidTry) {
+  struct MyException : std::exception {};
+  Try<void> t;
+  tryEmplace(t);
+  EXPECT_TRUE(t.hasValue());
+  t.emplaceException(folly::in_place_type<MyException>);
+  EXPECT_FALSE(t.hasValue());
+  EXPECT_TRUE(t.hasException());
+  EXPECT_TRUE(t.hasException<MyException>());
+  t.emplace();
+  EXPECT_TRUE(t.hasValue());
+  EXPECT_FALSE(t.hasException());
+}
+
+TEST(Try, tryEmplaceWith) {
+  Try<std::string> t;
+  tryEmplaceWith(t, [] { return "hello"; });
+  EXPECT_EQ("hello", t.value());
+}
+
+TEST(Try, tryEmplaceWithFunctionThrows) {
+  struct MyException : std::exception {};
+  Try<int> t;
+  tryEmplaceWith(t, []() -> int { throw MyException{}; });
+  EXPECT_TRUE(t.hasException());
+  EXPECT_TRUE(t.hasException<MyException>());
+}
+
+TEST(Try, tryEmplaceWithConstructorThrows) {
+  struct MyException : std::exception {};
+  struct ThrowingConstructor {
+    int value_;
+    explicit ThrowingConstructor(bool shouldThrow) noexcept(false) : value_(0) {
+      if (shouldThrow) {
+        throw MyException{};
+      }
+    }
+  };
+
+  Try<ThrowingConstructor> t;
+  tryEmplaceWith(t, [] { return false; });
+  EXPECT_TRUE(t.hasValue());
+  tryEmplaceWith(t, [] { return true; });
+  EXPECT_TRUE(t.hasException());
+  EXPECT_TRUE(t.hasException<MyException>());
+}
+
+TEST(Try, tryEmplaceWithVoidTry) {
+  Try<void> t;
+  bool hasRun = false;
+  tryEmplaceWith(t, [&] { hasRun = true; });
+  EXPECT_TRUE(t.hasValue());
+  EXPECT_TRUE(hasRun);
+
+  struct MyException : std::exception {};
+  tryEmplaceWith(t, [&] { throw MyException{}; });
+  EXPECT_TRUE(t.hasException());
+  EXPECT_TRUE(t.hasException<MyException>());
 }
 
 TEST(Try, nothrow) {
@@ -193,9 +444,7 @@ TEST(Try, moveOnly) {
 }
 
 TEST(Try, makeTryWith) {
-  auto func = []() {
-    return std::make_unique<int>(1);
-  };
+  auto func = []() { return std::make_unique<int>(1); };
 
   auto result = makeTryWith(func);
   EXPECT_TRUE(result.hasValue());
@@ -212,18 +461,14 @@ TEST(Try, makeTryWithThrow) {
 }
 
 TEST(Try, makeTryWithVoid) {
-  auto func = []() {
-    return;
-  };
+  auto func = []() { return; };
 
   auto result = makeTryWith(func);
   EXPECT_TRUE(result.hasValue());
 }
 
 TEST(Try, makeTryWithVoidThrow) {
-  auto func = []() {
-    throw std::runtime_error("Runtime");
-  };
+  auto func = []() { throw std::runtime_error("Runtime"); };
 
   auto result = makeTryWith(func);
   EXPECT_TRUE(result.hasException<std::runtime_error>());

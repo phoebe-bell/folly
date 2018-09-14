@@ -23,10 +23,6 @@
 #include <array>
 #include <memory>
 
-// this placates visual studio stupidity - see
-// http://stackoverflow.com/questions/5503901
-namespace {}
-
 namespace {
 
 void func(int a, int b, double c) {
@@ -51,8 +47,12 @@ struct Wat {
 };
 
 struct Overloaded {
-  int func(int) { return 0; }
-  bool func(bool) { return true; }
+  int func(int) {
+    return 0;
+  }
+  bool func(bool) {
+    return true;
+  }
 };
 
 struct Func {
@@ -70,7 +70,7 @@ struct CopyCount {
 
 void anotherFunc(CopyCount const&) {}
 
-std::function<void (int, int, double)> makeFunc() {
+std::function<void(int, int, double)> makeFunc() {
   return &func;
 }
 
@@ -85,14 +85,11 @@ typedef GuardObjBase const& Guard;
 template <class F, class Tuple>
 struct GuardObj : GuardObjBase {
   explicit GuardObj(F&& f, Tuple&& args)
-    : f_(std::forward<F>(f))
-    , args_(std::forward<Tuple>(args))
-  {}
+      : f_(std::forward<F>(f)), args_(std::forward<Tuple>(args)) {}
   GuardObj(GuardObj&& g) noexcept
-    : GuardObjBase(std::move(g))
-    , f_(std::move(g.f_))
-    , args_(std::move(g.args_))
-  {}
+      : GuardObjBase(std::move(g)),
+        f_(std::move(g.f_)),
+        args_(std::move(g.args_)) {}
 
   ~GuardObj() {
     folly::apply(f_, args_);
@@ -107,12 +104,11 @@ struct GuardObj : GuardObjBase {
 };
 
 template <class F, class... Args>
-GuardObj<typename std::decay<F>::type,std::tuple<Args...>>
-guard(F&& f, Args&&... args) {
-  return GuardObj<typename std::decay<F>::type,std::tuple<Args...>>(
-    std::forward<F>(f),
-    std::tuple<Args...>(std::forward<Args>(args)...)
-  );
+GuardObj<typename std::decay<F>::type, std::tuple<Args...>> guard(
+    F&& f,
+    Args&&... args) {
+  return GuardObj<typename std::decay<F>::type, std::tuple<Args...>>(
+      std::forward<F>(f), std::tuple<Args...>(std::forward<Args>(args)...));
 }
 
 struct Mover {
@@ -180,8 +176,12 @@ TEST(ApplyTuple, Mutable) {
 TEST(ApplyTuple, ConstOverloads) {
   struct ConstOverloaded {
     ConstOverloaded() {}
-    int operator()() { return 101; }
-    int operator()() const { return 102; }
+    int operator()() {
+      return 101;
+    }
+    int operator()() const {
+      return 102;
+    }
   };
 
   ConstOverloaded covl;
@@ -201,9 +201,15 @@ TEST(ApplyTuple, ConstOverloads) {
 TEST(ApplyTuple, RefOverloads) {
   struct RefOverloaded {
     RefOverloaded() {}
-    int operator()() & { return 201; }
-    int operator()() const & { return 202; }
-    int operator()() && { return 203; }
+    int operator()() & {
+      return 201;
+    }
+    int operator()() const& {
+      return 202;
+    }
+    int operator()() && {
+      return 203;
+    }
   };
 
   RefOverloaded rovl;
@@ -224,8 +230,12 @@ TEST(ApplyTuple, RefOverloads) {
 
 struct MemberFunc {
   int x;
-  int getX() const { return x; }
-  void setX(int xx) { x = xx; }
+  int getX() const {
+    return x;
+  }
+  void setX(int xx) {
+    x = xx;
+  }
 };
 
 TEST(ApplyTuple, MemberFunction) {

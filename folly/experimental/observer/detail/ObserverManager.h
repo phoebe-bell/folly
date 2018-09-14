@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <glog/logging.h>
+
 #include <folly/experimental/observer/detail/Core.h>
 #include <folly/experimental/observer/detail/GraphCycleDetector.h>
 #include <folly/futures/Future.h>
@@ -80,13 +82,11 @@ class ObserverManager {
 
     SharedMutexReadPriority::ReadHolder rh(instance->versionMutex_);
 
-    instance->scheduleCurrent([
-      core = std::move(core),
-      promise = std::move(promise),
-      instancePtr = instance.get(),
-      rh = std::move(rh),
-      force
-    ]() mutable {
+    instance->scheduleCurrent([core = std::move(core),
+                               promise = std::move(promise),
+                               instancePtr = instance.get(),
+                               rh = std::move(rh),
+                               force]() mutable {
       promise.setWith([&]() { core->refresh(instancePtr->version_, force); });
     });
 

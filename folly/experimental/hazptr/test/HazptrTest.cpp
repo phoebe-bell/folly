@@ -13,16 +13,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#define HAZPTR_DEBUG true
 #define HAZPTR_STATS true
 #define HAZPTR_SCAN_THRESHOLD 10
 
+#include <folly/experimental/hazptr/hazptr.h>
 #include <folly/experimental/hazptr/debug.h>
 #include <folly/experimental/hazptr/example/LockFreeLIFO.h>
 #include <folly/experimental/hazptr/example/MWMRSet.h>
 #include <folly/experimental/hazptr/example/SWMRList.h>
 #include <folly/experimental/hazptr/example/WideCAS.h>
-#include <folly/experimental/hazptr/hazptr.h>
 #include <folly/experimental/hazptr/test/HazptrUse1.h>
 #include <folly/experimental/hazptr/test/HazptrUse2.h>
 
@@ -517,7 +516,7 @@ TEST_F(HazptrTest, mt_refcount) {
 
   std::atomic<bool> ready(false);
   std::atomic<int> setHazptrs(0);
-  std::atomic<Foo*> head;
+  std::atomic<Foo*> head{nullptr};
 
   int num = 20;
   int nthr = 10;

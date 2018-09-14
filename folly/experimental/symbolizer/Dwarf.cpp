@@ -18,7 +18,9 @@
 
 #include <type_traits>
 
-#if FOLLY_HAVE_LIBDWARF_DWARF_H
+// We can delete this #if check once we completely deprecate and remove
+// the autoconf build.
+#if __has_include(<libdwarf/dwarf.h>)
 #include <libdwarf/dwarf.h>
 #else
 #include <dwarf.h> // @manual

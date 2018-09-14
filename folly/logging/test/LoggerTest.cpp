@@ -142,6 +142,7 @@ TEST_F(LoggerTest, toString) {
 class ToStringFailure {};
 class FormattableButNoToString {};
 
+// clang-format off
 [[noreturn]] void toAppend(
     const ToStringFailure& /* arg */,
     std::string* /* result */) {
@@ -172,6 +173,7 @@ class FormatValue<FormattableButNoToString> {
   }
 };
 } // namespace folly
+// clang-format on
 
 TEST_F(LoggerTest, toStringError) {
   // Use the folly::to<string> log API, with an object that will throw
@@ -308,9 +310,9 @@ TEST_F(LoggerTest, logMacros) {
 
   auto& messages = handler_->getMessages();
 
-  // test.other's effective level should be ERR, so a warning
+  // test.other's effective level should be INFO, so a DBG0
   // message to it should be discarded
-  FB_LOG(other, WARN, "this should be discarded");
+  FB_LOG(other, DBG0, "this should be discarded");
   ASSERT_EQ(0, messages.size());
 
   // Disabled log messages should not evaluate their arguments
@@ -357,7 +359,15 @@ TEST_F(LoggerTest, logRawMacros) {
 
   auto& messages = handler_->getMessages();
 
-  FB_LOG_RAW(foobar, LogLevel::DBG1, "src/some/file.c", 1234, "hello", ' ', 1)
+  FB_LOG_RAW(
+      foobar,
+      LogLevel::DBG1,
+      "src/some/file.c",
+      1234,
+      "testFunction",
+      "hello",
+      ' ',
+      1)
       << " world";
   ASSERT_EQ(1, messages.size());
   EXPECT_EQ("hello 1 world", messages[0].first.getMessage());
@@ -367,7 +377,15 @@ TEST_F(LoggerTest, logRawMacros) {
   messages.clear();
 
   auto level = LogLevel::DBG1;
-  FB_LOGF_RAW(foobar, level, "test/mytest.c", 99, "{}: num={}", "test", 42)
+  FB_LOGF_RAW(
+      foobar,
+      level,
+      "test/mytest.c",
+      99,
+      "testFunction",
+      "{}: num={}",
+      "test",
+      42)
       << " plus extra stuff";
   ASSERT_EQ(1, messages.size());
   EXPECT_EQ("test: num=42 plus extra stuff", messages[0].first.getMessage());

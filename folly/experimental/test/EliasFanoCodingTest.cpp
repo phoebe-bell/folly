@@ -29,7 +29,7 @@ using namespace folly::compression;
 
 #ifndef EF_TEST_ARCH
 #define EF_TEST_ARCH Default
-#endif  // EF_TEST_ARCH
+#endif // EF_TEST_ARCH
 
 namespace {
 
@@ -49,21 +49,20 @@ TEST(EliasFanoCoding, defaultNumLowerBits) {
   static constexpr size_t kNumIterations = 2500;
   auto compare = [](size_t upperBound, size_t size) {
     using Encoder = EliasFanoEncoderV2<size_t>;
-    EXPECT_EQ(int(slowDefaultNumLowerBits(upperBound, size)),
-              int(Encoder::defaultNumLowerBits(upperBound, size)))
+    EXPECT_EQ(
+        int(slowDefaultNumLowerBits(upperBound, size)),
+        int(Encoder::defaultNumLowerBits(upperBound, size)))
         << upperBound << " " << size;
   };
   auto batch = [&compare](size_t initialUpperBound) {
-    for (size_t upperBound = initialUpperBound, i = 0;
-         i < kNumIterations;
+    for (size_t upperBound = initialUpperBound, i = 0; i < kNumIterations;
          ++i, --upperBound) {
       // Test "size" values close to "upperBound".
       for (size_t size = upperBound, j = 0; j < kNumIterations; ++j, --size) {
         compare(upperBound, size);
       }
       // Sample "size" values between [0, upperBound].
-      for (size_t size = upperBound;
-           size > 1 + upperBound / kNumIterations;
+      for (size_t size = upperBound; size > 1 + upperBound / kNumIterations;
            size -= 1 + upperBound / kNumIterations) {
         compare(upperBound, size);
       }
@@ -97,7 +96,11 @@ class EliasFanoCodingTest : public ::testing::Test {
   template <size_t kSkipQuantum, size_t kForwardQuantum, class SizeType>
   void doTestAll() {
     typedef EliasFanoEncoderV2<
-      uint32_t, uint32_t, kSkipQuantum, kForwardQuantum> Encoder;
+        uint32_t,
+        uint32_t,
+        kSkipQuantum,
+        kForwardQuantum>
+        Encoder;
     using Reader =
         EliasFanoReader<Encoder, instructions::EF_TEST_ARCH, false, SizeType>;
     testAll<Reader, Encoder>({0});
@@ -128,19 +131,6 @@ TEST_F(EliasFanoCodingTest, ForwardPointers) {
 TEST_F(EliasFanoCodingTest, SkipForwardPointers) {
   doTestAll<128, 128, uint32_t>();
   doTestAll<128, 128, size_t>();
-}
-
-TEST_F(EliasFanoCodingTest, Select64) {
-  typedef instructions::EF_TEST_ARCH instr;
-  constexpr uint64_t kPrime = uint64_t(-59);
-  for (uint64_t x = kPrime, i = 0; i < (1 << 20); x *= kPrime, i += 1) {
-    size_t w = instr::popcount(x);
-    for (size_t k = 0; k < w; ++k) {
-      auto pos = folly::select64<instr>(x, k);
-      CHECK_EQ((x >> pos) & 1, 1);
-      CHECK_EQ(instr::popcount(x & ((uint64_t(1) << pos) - 1)), k);
-    }
-  }
 }
 
 TEST_F(EliasFanoCodingTest, BugLargeGapInUpperBits) { // t16274876
@@ -252,14 +242,14 @@ BENCHMARK(JumpTo_SkipQ128, iters) {
 BENCHMARK_DRAW_LINE();
 
 BENCHMARK(Encode_10) {
-  auto list = bm::Encoder::encode(bm::encodeSmallData.begin(),
-                                  bm::encodeSmallData.end());
+  auto list = bm::Encoder::encode(
+      bm::encodeSmallData.begin(), bm::encodeSmallData.end());
   list.free();
 }
 
 BENCHMARK(Encode) {
-  auto list = bm::Encoder::encode(bm::encodeLargeData.begin(),
-                                  bm::encodeLargeData.end());
+  auto list = bm::Encoder::encode(
+      bm::encodeLargeData.begin(), bm::encodeLargeData.end());
   list.free();
 }
 

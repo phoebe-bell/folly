@@ -212,9 +212,26 @@ struct DefaultType<Key, KeysDefault...> {
 template <class... KeysDefault>
 auto extract_default(const KeysDefault&... keysDefault) ->
     typename DefaultType<KeysDefault...>::type const& {
-  return std::get<sizeof...(KeysDefault)-1>(std::tie(keysDefault...));
+  return std::get<sizeof...(KeysDefault) - 1>(std::tie(keysDefault...));
 }
 } // namespace detail
+
+/**
+ * Given a map of maps and a path of keys, return a Optional<V> if the nested
+ * key exists and None if the nested keys does not exist in the map.
+ */
+template <class Map, class Key1, class Key2, class... Keys>
+auto get_optional(
+    const Map& map,
+    const Key1& key1,
+    const Key2& key2,
+    const Keys&... keys)
+    -> folly::Optional<
+        typename detail::NestedMapType<Map, 2 + sizeof...(Keys)>::type> {
+  auto pos = map.find(key1);
+  return pos != map.end() ? get_optional(pos->second, key2, keys...)
+                          : folly::none;
+}
 
 /**
  * Given a map of maps and a path of keys, return a pointer to the nested value,

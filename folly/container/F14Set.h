@@ -31,7 +31,7 @@
 
 #include <folly/lang/SafeAssert.h>
 
-#include <folly/container/F14Set-pre.h>
+#include <folly/container/F14Set-fwd.h>
 #include <folly/container/detail/F14Policy.h>
 #include <folly/container/detail/F14Table.h>
 
@@ -50,31 +50,39 @@ class F14BasicSet : public std::unordered_set<K, H, E, A> {
   using Super = std::unordered_set<K, H, E, A>;
 
  public:
+  using typename Super::pointer;
+  using typename Super::value_type;
+
+  F14BasicSet() = default;
+
   using Super::Super;
-  F14BasicSet() : Super() {}
 
   //// PUBLIC - F14 Extensions
 
-  typename Super::size_type getAllocatedMemorySize() const {
-    auto bc = this->bucket_count();
-    return (bc == 1 ? 0 : bc) * sizeof(typename Super::pointer) +
-        this->size() * sizeof(StdNodeReplica<K, typename Super::value_type, H>);
+  // exact for libstdc++, approximate for others
+  std::size_t getAllocatedMemorySize() const {
+    std::size_t rv = 0;
+    visitAllocationClasses(
+        [&](std::size_t bytes, std::size_t n) { rv += bytes * n; });
+    return rv;
   }
 
+  // exact for libstdc++, approximate for others
   template <typename V>
   void visitAllocationClasses(V&& visitor) const {
     auto bc = this->bucket_count();
     if (bc > 1) {
-      visitor(bc * sizeof(typename Super::pointer), 1);
+      visitor(bc * sizeof(pointer), 1);
     }
-    visitor(
-        sizeof(StdNodeReplica<K, typename Super::value_type, H>), this->size());
+    if (this->size() > 0) {
+      visitor(sizeof(StdNodeReplica<K, value_type, H>), this->size());
+    }
   }
 
   template <typename V>
   void visitContiguousRanges(V&& visitor) const {
-    for (typename Super::value_type const& entry : *this) {
-      typename Super::value_type const* b = std::addressof(entry);
+    for (value_type const& entry : *this) {
+      value_type const* b = std::addressof(entry);
       visitor(b, b + 1);
     }
   }
@@ -82,31 +90,58 @@ class F14BasicSet : public std::unordered_set<K, H, E, A> {
 } // namespace detail
 } // namespace f14
 
-template <typename K, typename H, typename E, typename A>
-class F14NodeSet : public f14::detail::F14BasicSet<K, H, E, A> {
-  using Super = f14::detail::F14BasicSet<K, H, E, A>;
+template <typename Key, typename Hasher, typename KeyEqual, typename Alloc>
+class F14NodeSet
+    : public f14::detail::F14BasicSet<Key, Hasher, KeyEqual, Alloc> {
+  using Super = f14::detail::F14BasicSet<Key, Hasher, KeyEqual, Alloc>;
 
  public:
+  using typename Super::value_type;
+
+  F14NodeSet() = default;
+
   using Super::Super;
-  F14NodeSet() : Super() {}
+
+  F14NodeSet& operator=(std::initializer_list<value_type> ilist) {
+    Super::operator=(ilist);
+    return *this;
+  }
 };
 
-template <typename K, typename H, typename E, typename A>
-class F14ValueSet : public f14::detail::F14BasicSet<K, H, E, A> {
-  using Super = f14::detail::F14BasicSet<K, H, E, A>;
+template <typename Key, typename Hasher, typename KeyEqual, typename Alloc>
+class F14ValueSet
+    : public f14::detail::F14BasicSet<Key, Hasher, KeyEqual, Alloc> {
+  using Super = f14::detail::F14BasicSet<Key, Hasher, KeyEqual, Alloc>;
 
  public:
-  using Super::Super;
+  using typename Super::value_type;
+
   F14ValueSet() : Super() {}
+
+  using Super::Super;
+
+  F14ValueSet& operator=(std::initializer_list<value_type> ilist) {
+    Super::operator=(ilist);
+    return *this;
+  }
 };
 
-template <typename K, typename H, typename E, typename A>
-class F14VectorSet : public f14::detail::F14BasicSet<K, H, E, A> {
-  using Super = f14::detail::F14BasicSet<K, H, E, A>;
+template <typename Key, typename Hasher, typename KeyEqual, typename Alloc>
+class F14VectorSet
+    : public f14::detail::F14BasicSet<Key, Hasher, KeyEqual, Alloc> {
+  using Super = f14::detail::F14BasicSet<Key, Hasher, KeyEqual, Alloc>;
 
  public:
+  using typename Super::value_type;
+
+  F14VectorSet() = default;
+
   using Super::Super;
-  F14VectorSet() : Super() {}
+
+  F14VectorSet& operator=(std::initializer_list<value_type> ilist) {
+    Super::operator=(ilist);
+    return *this;
+  }
 };
 
 } // namespace folly
@@ -191,7 +226,8 @@ class F14BasicSet {
       allocator_type const& alloc)
       : F14BasicSet(initialCapacity, hash, key_equal{}, alloc) {}
 
-  explicit F14BasicSet(allocator_type const& alloc) : F14BasicSet(0, alloc) {}
+  explicit F14BasicSet(allocator_type const& alloc)
+      : F14BasicSet(0, hasher{}, key_equal{}, alloc) {}
 
   template <typename InputIt>
   F14BasicSet(
@@ -267,6 +303,12 @@ class F14BasicSet {
   F14BasicSet& operator=(F14BasicSet const&) = default;
 
   F14BasicSet& operator=(F14BasicSet&&) = default;
+
+  F14BasicSet& operator=(std::initializer_list<value_type> ilist) {
+    clear();
+    bulkInsert(ilist.begin(), ilist.end(), false);
+    return *this;
+  }
 
   allocator_type get_allocator() const noexcept {
     return table_.alloc();
@@ -696,9 +738,16 @@ class F14ValueSet
   using Super = f14::detail::F14BasicSet<Policy>;
 
  public:
-  F14ValueSet() noexcept(Policy::kDefaultConstructIsNoexcept) : Super{} {}
+  using typename Super::value_type;
+
+  F14ValueSet() = default;
 
   using Super::Super;
+
+  F14ValueSet& operator=(std::initializer_list<value_type> ilist) {
+    Super::operator=(ilist);
+    return *this;
+  }
 
   void swap(F14ValueSet& rhs) noexcept(Policy::kSwapIsNoexcept) {
     this->table_.swap(rhs.table_);
@@ -743,9 +792,14 @@ class F14NodeSet
  public:
   using typename Super::value_type;
 
-  F14NodeSet() noexcept(Policy::kDefaultConstructIsNoexcept) : Super{} {}
+  F14NodeSet() = default;
 
   using Super::Super;
+
+  F14NodeSet& operator=(std::initializer_list<value_type> ilist) {
+    Super::operator=(ilist);
+    return *this;
+  }
 
   void swap(F14NodeSet& rhs) noexcept(Policy::kSwapIsNoexcept) {
     this->table_.swap(rhs.table_);
@@ -809,10 +863,14 @@ class F14VectorSet
   using reverse_iterator = typename Policy::ReverseIter;
   using const_reverse_iterator = reverse_iterator;
 
-  F14VectorSet() noexcept(Policy::kDefaultConstructIsNoexcept) : Super{} {}
+  F14VectorSet() = default;
 
-  // inherit constructors
   using Super::Super;
+
+  F14VectorSet& operator=(std::initializer_list<value_type> ilist) {
+    Super::operator=(ilist);
+    return *this;
+  }
 
   void swap(F14VectorSet& rhs) noexcept(Policy::kSwapIsNoexcept) {
     this->table_.swap(rhs.table_);
@@ -1023,8 +1081,16 @@ class F14FastSet : public std::conditional_t<
       F14VectorSet<Key, Hasher, KeyEqual, Alloc>>;
 
  public:
+  using typename Super::value_type;
+
+  F14FastSet() = default;
+
   using Super::Super;
-  F14FastSet() : Super() {}
+
+  F14FastSet& operator=(std::initializer_list<value_type> ilist) {
+    Super::operator=(ilist);
+    return *this;
+  }
 };
 
 template <typename K, typename H, typename E, typename A>

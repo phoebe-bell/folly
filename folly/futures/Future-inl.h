@@ -428,7 +428,7 @@ FutureBase<T>::thenImplementation(
 template <class T>
 template <typename E>
 SemiFuture<T>
-FutureBase<T>::withinImplementation(Duration dur, E e, Timekeeper* tk) {
+FutureBase<T>::withinImplementation(Duration dur, E e, Timekeeper* tk) && {
   struct Context {
     explicit Context(E ex) : exception(std::move(ex)) {}
     E exception;
@@ -1017,10 +1017,11 @@ template <class T>
 template <class F>
 typename std::
     enable_if<isFuture<F>::value, Future<typename isFuture<T>::Inner>>::type
-    Future<T>::unwrap() {
-  return then([](Future<typename isFuture<T>::Inner> internal_future) {
-    return internal_future;
-  });
+    Future<T>::unwrap() && {
+  return std::move(*this).then(
+      [](Future<typename isFuture<T>::Inner> internal_future) {
+        return internal_future;
+      });
 }
 
 template <class T>
@@ -1063,13 +1064,14 @@ Future<T> Future<T>::via(Executor* executor, int8_t priority) & {
 
 template <typename T>
 template <typename R, typename Caller, typename... Args>
-  Future<typename isFuture<R>::Inner>
-Future<T>::then(R(Caller::*func)(Args...), Caller *instance) {
+Future<typename isFuture<R>::Inner> Future<T>::then(
+    R (Caller::*func)(Args...),
+    Caller* instance) && {
   typedef typename std::remove_cv<typename std::remove_reference<
       typename futures::detail::ArgType<Args...>::FirstArg>::type>::type
       FirstArg;
 
-  return then([instance, func](Try<T>&& t){
+  return std::move(*this).thenTry([instance, func](Try<T>&& t) {
     return (instance->*func)(t.template get<isTry<FirstArg>::value, Args>()...);
   });
 }
@@ -1078,20 +1080,27 @@ template <class T>
 template <typename F>
 Future<typename futures::detail::tryCallableResult<T, F>::value_type>
 Future<T>::thenTry(F&& func) && {
-  return std::move(*this).then(std::forward<F>(func));
+  auto lambdaFunc = [f = std::forward<F>(func)](folly::Try<T>&& t) mutable {
+    return std::forward<F>(f)(std::move(t));
+  };
+  using R = futures::detail::tryCallableResult<T, decltype(lambdaFunc)>;
+  return this->template thenImplementation<decltype(lambdaFunc), R>(
+      std::move(lambdaFunc), typename R::Arg());
 }
 
 template <class T>
 template <typename F>
 Future<typename futures::detail::valueCallableResult<T, F>::value_type>
 Future<T>::thenValue(F&& func) && {
-  return std::move(*this).then([f = std::forward<F>(func)](
-                                   folly::Try<T>&& t) mutable {
+  auto lambdaFunc = [f = std::forward<F>(func)](folly::Try<T>&& t) mutable {
     return std::forward<F>(f)(
         t.template get<
             false,
             typename futures::detail::valueCallableResult<T, F>::FirstArg>());
-  });
+  };
+  using R = futures::detail::tryCallableResult<T, decltype(lambdaFunc)>;
+  return this->template thenImplementation<decltype(lambdaFunc), R>(
+      std::move(lambdaFunc), typename R::Arg());
 }
 
 template <class T>
@@ -1101,9 +1110,10 @@ Future<T> Future<T>::thenError(F&& func) && {
   // Allow for applying to future with null executor while this is still
   // possible.
   auto* e = this->getExecutor();
-  return onError([func = std::forward<F>(func)](ExceptionType& ex) mutable {
-           return std::forward<F>(func)(ex);
-         })
+  return std::move(*this)
+      .onError([func = std::forward<F>(func)](ExceptionType& ex) mutable {
+        return std::forward<F>(func)(ex);
+      })
       .via(e ? e : &InlineExecutor::instance());
 }
 
@@ -1114,16 +1124,17 @@ Future<T> Future<T>::thenError(F&& func) && {
   // Allow for applying to future with null executor while this is still
   // possible.
   auto* e = this->getExecutor();
-  return onError([func = std::forward<F>(func)](
-                     folly::exception_wrapper&& ex) mutable {
-           return std::forward<F>(func)(std::move(ex));
-         })
+  return std::move(*this)
+      .onError([func = std::forward<F>(func)](
+                   folly::exception_wrapper&& ex) mutable {
+        return std::forward<F>(func)(std::move(ex));
+      })
       .via(e ? e : &InlineExecutor::instance());
 }
 
 template <class T>
-Future<Unit> Future<T>::then() {
-  return then([]() {});
+Future<Unit> Future<T>::then() && {
+  return std::move(*this).then([]() {});
 }
 
 // onError where the callback returns T
@@ -1133,7 +1144,7 @@ typename std::enable_if<
     !is_invocable<F, exception_wrapper>::value &&
         !futures::detail::Extract<F>::ReturnsFuture::value,
     Future<T>>::type
-Future<T>::onError(F&& func) {
+Future<T>::onError(F&& func) && {
   typedef std::remove_reference_t<
       typename futures::detail::Extract<F>::FirstArg>
       Exn;
@@ -1168,7 +1179,7 @@ typename std::enable_if<
     !is_invocable<F, exception_wrapper>::value &&
         futures::detail::Extract<F>::ReturnsFuture::value,
     Future<T>>::type
-Future<T>::onError(F&& func) {
+Future<T>::onError(F&& func) && {
   static_assert(
       std::is_same<typename futures::detail::Extract<F>::Return, Future<T>>::
           value,
@@ -1188,7 +1199,7 @@ Future<T>::onError(F&& func) {
           if (tf2.hasException()) {
             state.setException(std::move(tf2.exception()));
           } else {
-            tf2->setCallback_([p = state.stealPromise()](Try<T> && t3) mutable {
+            tf2->setCallback_([p = state.stealPromise()](Try<T>&& t3) mutable {
               p.setTry(std::move(t3));
             });
           }
@@ -1205,17 +1216,18 @@ Future<T>::onError(F&& func) {
 
 template <class T>
 template <class F>
-Future<T> Future<T>::ensure(F&& func) {
-  return this->then([funcw = std::forward<F>(func)](Try<T>&& t) mutable {
-    std::forward<F>(funcw)();
-    return makeFuture(std::move(t));
-  });
+Future<T> Future<T>::ensure(F&& func) && {
+  return std::move(*this).then(
+      [funcw = std::forward<F>(func)](Try<T>&& t) mutable {
+        std::forward<F>(funcw)();
+        return makeFuture(std::move(t));
+      });
 }
 
 template <class T>
 template <class F>
-Future<T> Future<T>::onTimeout(Duration dur, F&& func, Timekeeper* tk) {
-  return within(dur, tk).template thenError<FutureTimeout>(
+Future<T> Future<T>::onTimeout(Duration dur, F&& func, Timekeeper* tk) && {
+  return std::move(*this).within(dur, tk).template thenError<FutureTimeout>(
       [funcw = std::forward<F>(func)](auto const&) mutable {
         return std::forward<F>(funcw)();
       });
@@ -1227,7 +1239,7 @@ typename std::enable_if<
     is_invocable<F, exception_wrapper>::value &&
         futures::detail::Extract<F>::ReturnsFuture::value,
     Future<T>>::type
-Future<T>::onError(F&& func) {
+Future<T>::onError(F&& func) && {
   static_assert(
       std::is_same<typename futures::detail::Extract<F>::Return, Future<T>>::
           value,
@@ -1243,7 +1255,7 @@ Future<T>::onError(F&& func) {
           if (tf2.hasException()) {
             state.setException(std::move(tf2.exception()));
           } else {
-            tf2->setCallback_([p = state.stealPromise()](Try<T> && t3) mutable {
+            tf2->setCallback_([p = state.stealPromise()](Try<T>&& t3) mutable {
               p.setTry(std::move(t3));
             });
           }
@@ -1265,7 +1277,7 @@ typename std::enable_if<
     is_invocable<F, exception_wrapper>::value &&
         !futures::detail::Extract<F>::ReturnsFuture::value,
     Future<T>>::type
-Future<T>::onError(F&& func) {
+Future<T>::onError(F&& func) && {
   static_assert(
       std::is_same<typename futures::detail::Extract<F>::Return, Future<T>>::
           value,
@@ -1291,10 +1303,16 @@ Future<T>::onError(F&& func) {
 }
 
 template <class Func>
-auto via(Executor* x, Func&& func)
-    -> Future<typename isFuture<decltype(std::declval<Func>()())>::Inner> {
+auto via(Executor* x, Func&& func) -> Future<
+    typename isFutureOrSemiFuture<decltype(std::declval<Func>()())>::Inner> {
   // TODO make this actually more performant. :-P #7260175
   return via(x).then(std::forward<Func>(func));
+}
+
+template <class Func>
+auto via(Executor::KeepAlive<> x, Func&& func) -> Future<
+    typename isFutureOrSemiFuture<decltype(std::declval<Func>()())>::Inner> {
+  return via(std::move(x)).then(std::forward<Func>(func));
 }
 
 // makeFuture
@@ -1347,9 +1365,9 @@ Future<T> makeFuture(exception_wrapper ew) {
 }
 
 template <class T, class E>
-typename std::enable_if<std::is_base_of<std::exception, E>::value,
-                        Future<T>>::type
-makeFuture(E const& e) {
+typename std::enable_if<std::is_base_of<std::exception, E>::value, Future<T>>::
+    type
+    makeFuture(E const& e) {
   return makeFuture(Try<T>(make_exception_wrapper<E>(e)));
 }
 
@@ -1361,6 +1379,10 @@ Future<T> makeFuture(Try<T>&& t) {
 // via
 Future<Unit> via(Executor* executor, int8_t priority) {
   return makeFuture().via(executor, priority);
+}
+
+Future<Unit> via(Executor::KeepAlive<> executor, int8_t priority) {
+  return makeFuture().via(std::move(executor), priority);
 }
 
 namespace futures {
@@ -1598,11 +1620,9 @@ Future<std::tuple<typename remove_cvref_t<Fs>::value_type...>> collect(
 
 // TODO(T26439406): Make return SemiFuture
 template <class InputIterator>
-Future<
-  std::pair<size_t,
-            Try<
-              typename
-              std::iterator_traits<InputIterator>::value_type::value_type>>>
+Future<std::pair<
+    size_t,
+    Try<typename std::iterator_traits<InputIterator>::value_type::value_type>>>
 collectAny(InputIterator first, InputIterator last) {
   using F = typename std::iterator_traits<InputIterator>::value_type;
   using T = typename F::value_type;
@@ -1738,7 +1758,7 @@ Future<T> reduce(It first, It last, T&& initial, F&& func) {
 
   auto sfunc = std::make_shared<std::decay_t<F>>(std::forward<F>(func));
 
-  auto f = first->then(
+  auto f = std::move(*first).then(
       [initial = std::forward<T>(initial), sfunc](Try<ItT>&& head) mutable {
         return (*sfunc)(
             std::move(initial), head.template get<IsTry::value, Arg&&>());
@@ -1761,8 +1781,7 @@ Future<T> reduce(It first, It last, T&& initial, F&& func) {
 // window (collection)
 
 template <class Collection, class F, class ItT, class Result>
-std::vector<Future<Result>>
-window(Collection input, F func, size_t n) {
+std::vector<Future<Result>> window(Collection input, F func, size_t n) {
   // Use global QueuedImmediateExecutor singleton to avoid stack overflow.
   auto executor = &QueuedImmediateExecutor::instance();
   return window(executor, std::move(input), std::move(func), n);
@@ -1829,15 +1848,16 @@ window(Executor* executor, Collection input, F func, size_t n) {
 
 template <class T>
 template <class I, class F>
-Future<I> Future<T>::reduce(I&& initial, F&& func) {
-  return then([minitial = std::forward<I>(initial),
-               mfunc = std::forward<F>(func)](T&& vals) mutable {
-    auto ret = std::move(minitial);
-    for (auto& val : vals) {
-      ret = mfunc(std::move(ret), std::move(val));
-    }
-    return ret;
-  });
+Future<I> Future<T>::reduce(I&& initial, F&& func) && {
+  return std::move(*this).then(
+      [minitial = std::forward<I>(initial),
+       mfunc = std::forward<F>(func)](T&& vals) mutable {
+        auto ret = std::move(minitial);
+        for (auto& val : vals) {
+          ret = mfunc(std::move(ret), std::move(val));
+        }
+        return ret;
+      });
 }
 
 // unorderedReduce (iterator)
@@ -1929,19 +1949,20 @@ Future<T> unorderedReduce(It first, It last, T initial, F func) {
 // within
 
 template <class T>
-Future<T> Future<T>::within(Duration dur, Timekeeper* tk) {
-  return within(dur, FutureTimeout(), tk);
+Future<T> Future<T>::within(Duration dur, Timekeeper* tk) && {
+  return std::move(*this).within(dur, FutureTimeout(), tk);
 }
 
 template <class T>
 template <class E>
-Future<T> Future<T>::within(Duration dur, E e, Timekeeper* tk) {
+Future<T> Future<T>::within(Duration dur, E e, Timekeeper* tk) && {
   if (this->isReady()) {
     return std::move(*this);
   }
 
   auto* exe = this->getExecutor();
-  return this->withinImplementation(dur, e, tk)
+  return std::move(*this)
+      .withinImplementation(dur, e, tk)
       .via(exe ? exe : &InlineExecutor::instance());
 }
 
@@ -2259,8 +2280,8 @@ Future<bool> Future<T>::willEqual(Future<T>& f) {
 
 template <class T>
 template <class F>
-Future<T> Future<T>::filter(F&& predicate) {
-  return this->then([p = std::forward<F>(predicate)](T val) {
+Future<T> Future<T>::filter(F&& predicate) && {
+  return std::move(*this).then([p = std::forward<F>(predicate)](T val) {
     T const& valConstRef = val;
     if (!p(valConstRef)) {
       throw_exception<FuturePredicateDoesNotObtain>();
@@ -2278,10 +2299,8 @@ template <class P, class F>
 Future<Unit> whileDo(P&& predicate, F&& thunk) {
   if (predicate()) {
     auto future = thunk();
-    return future.then([
-      predicate = std::forward<P>(predicate),
-      thunk = std::forward<F>(thunk)
-    ]() mutable {
+    return std::move(future).then([predicate = std::forward<P>(predicate),
+                                   thunk = std::forward<F>(thunk)]() mutable {
       return whileDo(std::forward<P>(predicate), std::forward<F>(thunk));
     });
   }
@@ -2301,11 +2320,23 @@ namespace futures {
 template <class It, class F, class ItT, class Result>
 std::vector<Future<Result>> map(It first, It last, F func) {
   std::vector<Future<Result>> results;
+  results.reserve(std::distance(first, last));
   for (auto it = first; it != last; it++) {
-    results.push_back(it->then(func));
+    results.push_back(std::move(*it).then(func));
   }
   return results;
 }
+
+template <class It, class F, class ItT, class Result>
+std::vector<Future<Result>> map(Executor& exec, It first, It last, F func) {
+  std::vector<Future<Result>> results;
+  results.reserve(std::distance(first, last));
+  for (auto it = first; it != last; it++) {
+    results.push_back(std::move(*it).via(&exec).then(func));
+  }
+  return results;
+}
+
 } // namespace futures
 
 template <class Clock>

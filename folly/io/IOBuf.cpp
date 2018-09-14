@@ -132,11 +132,7 @@ IOBuf::SharedInfo::SharedInfo(FreeFunction fn, void* arg)
 
 void* IOBuf::operator new(size_t size) {
   size_t fullSize = offsetof(HeapStorage, buf) + size;
-  auto* storage = static_cast<HeapStorage*>(malloc(fullSize));
-  // operator new is not allowed to return nullptr
-  if (UNLIKELY(storage == nullptr)) {
-    throw std::bad_alloc();
-  }
+  auto* storage = static_cast<HeapStorage*>(checkedMalloc(fullSize));
 
   new (&storage->prefix) HeapPrefix(kIOBufInUse);
   return &(storage->buf);
@@ -150,6 +146,12 @@ void IOBuf::operator delete(void* ptr) {
   auto* storageAddr = static_cast<uint8_t*>(ptr) - offsetof(HeapStorage, buf);
   auto* storage = reinterpret_cast<HeapStorage*>(storageAddr);
   releaseStorage(storage, kIOBufInUse);
+}
+
+void IOBuf::operator delete(void* /* ptr */, void* /* placement */) {
+  // Provide matching operator for `IOBuf::new` to avoid MSVC compilation
+  // warning (C4291) about memory leak when exception is thrown in the
+  // constructor.
 }
 
 void IOBuf::releaseStorage(HeapStorage* storage, uint16_t freeFlags) {
@@ -245,7 +247,7 @@ unique_ptr<IOBuf> IOBuf::createCombined(std::size_t capacity) {
   // SharedInfo struct, and the data itself all with a single call to malloc().
   size_t requiredStorage = offsetof(HeapFullStorage, align) + capacity;
   size_t mallocSize = goodMallocSize(requiredStorage);
-  auto* storage = static_cast<HeapFullStorage*>(malloc(mallocSize));
+  auto* storage = static_cast<HeapFullStorage*>(checkedMalloc(mallocSize));
 
   new (&storage->hs.prefix) HeapPrefix(kIOBufInUse | kDataInUse);
   new (&storage->shared) SharedInfo(freeInternalBuf, storage);
@@ -865,11 +867,7 @@ void IOBuf::reserveSlow(std::size_t minHeadroom, std::size_t minTailroom) {
   // an internal buffer).  malloc/copy/free.
   if (newBuffer == nullptr) {
     newAllocatedCapacity = goodExtBufferSize(newCapacity);
-    void* p = malloc(newAllocatedCapacity);
-    if (UNLIKELY(p == nullptr)) {
-      throw std::bad_alloc();
-    }
-    newBuffer = static_cast<uint8_t*>(p);
+    newBuffer = static_cast<uint8_t*>(checkedMalloc(newAllocatedCapacity));
     if (length_ > 0) {
       assert(data_ != nullptr);
       memcpy(newBuffer + minHeadroom, data_, length_);
@@ -918,10 +916,7 @@ void IOBuf::allocExtBuffer(
     SharedInfo** infoReturn,
     std::size_t* capacityReturn) {
   size_t mallocSize = goodExtBufferSize(minCapacity);
-  uint8_t* buf = static_cast<uint8_t*>(malloc(mallocSize));
-  if (UNLIKELY(buf == nullptr)) {
-    throw std::bad_alloc();
-  }
+  uint8_t* buf = static_cast<uint8_t*>(checkedMalloc(mallocSize));
   initExtBuffer(buf, mallocSize, infoReturn, capacityReturn);
   *bufReturn = buf;
 }
@@ -1013,6 +1008,26 @@ void IOBuf::appendToIov(folly::fbvector<struct iovec>* iov) const {
     }
     p = p->next();
   } while (p != this);
+}
+
+unique_ptr<IOBuf> IOBuf::wrapIov(const iovec* vec, size_t count) {
+  unique_ptr<IOBuf> result = nullptr;
+  for (size_t i = 0; i < count; ++i) {
+    size_t len = vec[i].iov_len;
+    void* data = vec[i].iov_base;
+    if (len > 0) {
+      auto buf = wrapBuffer(data, len);
+      if (!result) {
+        result = std::move(buf);
+      } else {
+        result->prependChain(std::move(buf));
+      }
+    }
+  }
+  if (UNLIKELY(result == nullptr)) {
+    return create(0);
+  }
+  return result;
 }
 
 size_t IOBuf::fillIov(struct iovec* iov, size_t len) const {

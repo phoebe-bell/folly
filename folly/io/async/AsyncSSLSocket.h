@@ -322,7 +322,7 @@ class AsyncSSLSocket : public virtual AsyncSocket {
   void shutdownWriteNow() override;
   bool good() const override;
   bool connecting() const override;
-  std::string getApplicationProtocol() noexcept override;
+  std::string getApplicationProtocol() const noexcept override;
 
   std::string getSecurityProtocol() const override {
     if (sslState_ == STATE_UNENCRYPTED) {
@@ -741,46 +741,18 @@ class AsyncSSLSocket : public virtual AsyncSocket {
    */
   void setBufferMovableEnabled(bool enabled);
 
+  const AsyncTransportCertificate* getPeerCertificate() const override;
+  const AsyncTransportCertificate* getSelfCertificate() const override;
+
   /**
    * Returns the peer certificate, or nullptr if no peer certificate received.
    */
   ssl::X509UniquePtr getPeerCert() const override {
-    if (!ssl_) {
+    auto peerCert = getPeerCertificate();
+    if (!peerCert) {
       return nullptr;
     }
-
-    X509* cert = SSL_get_peer_certificate(ssl_);
-    return ssl::X509UniquePtr(cert);
-  }
-
-  /**
-   * A set of possible outcomes of certificate validation.
-   */
-  enum class CertValidationResult {
-    CERT_VALID, // Cert is valid.
-    CERT_MISSING, // No cert is provided.
-    CERT_INVALID_FUTURE, // Cert has start datetime in the future.
-    CERT_INVALID_EXPIRED, // Cert has expired.
-    CERT_INVALID_BAD_CHAIN, // Cert has bad chain.
-    CERT_INVALID_OTHER, // Cert is invalid due to other reasons.
-  };
-
-  /**
-   * Get the validation result of client cert. If the server side has not
-   * set this value, it will return folly::none; otherwise a value in
-   * CertValidationResult.
-   */
-  const Optional<CertValidationResult> getClientCertValidationResult() {
-    return clientCertValidationResult_;
-  }
-
-  /**
-   * Set the validation result of client cert. Used by server side.
-   * @param result A value of CertValidationResult wrapped by folly::Optional.
-   */
-  void setClientCertValidationResult(
-      const Optional<CertValidationResult>& result) {
-    clientCertValidationResult_ = result;
+    return peerCert->getX509();
   }
 
   /**
@@ -961,8 +933,6 @@ class AsyncSSLSocket : public virtual AsyncSocket {
 
   folly::SSLContext::SSLVerifyPeerEnum verifyPeer_{
       folly::SSLContext::SSLVerifyPeerEnum::USE_CTX};
-
-  Optional<CertValidationResult> clientCertValidationResult_{none};
 
   // Callback for SSL_CTX_set_verify()
   static int sslVerifyCallback(int preverifyOk, X509_STORE_CTX* ctx);

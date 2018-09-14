@@ -15,6 +15,7 @@
  */
 
 #include <folly/stats/TDigest.h>
+#include <folly/stats/detail/DoubleRadixSort.h>
 
 #include <algorithm>
 #include <limits>
@@ -101,7 +102,28 @@ TDigest::TDigest(
   }
 }
 
-TDigest TDigest::merge(Range<const double*> sortedValues) const {
+// Merge unsorted values by first sorting them.  Use radix sort if
+// possible.  This implementation puts all additional memory in the
+// heap, so that if called from fiber context we do not smash the
+// stack.  Otherwise it is very similar to boost::spreadsort.
+TDigest TDigest::merge(Range<const double*> unsortedValues) const {
+  auto n = unsortedValues.size();
+
+  // We require 256 buckets per byte level, plus one count array we can reuse.
+  std::unique_ptr<uint64_t[]> buckets{new uint64_t[256 * 9]};
+  // Allocate input and tmp array
+  std::unique_ptr<double[]> tmp{new double[n * 2]};
+  auto out = tmp.get() + n;
+  auto in = tmp.get();
+  std::copy(unsortedValues.begin(), unsortedValues.end(), in);
+
+  detail::double_radix_sort(n, buckets.get(), in, out);
+  DCHECK(std::is_sorted(in, in + n));
+
+  return merge(presorted, Range<const double*>(in, in + n));
+}
+
+TDigest TDigest::merge(presorted_t, Range<const double*> sortedValues) const {
   if (sortedValues.empty()) {
     return *this;
   }
@@ -175,6 +197,10 @@ TDigest TDigest::merge(Range<const double*> sortedValues) const {
   result.sum_ += cur.add(sumsToMerge, weightsToMerge);
   compressed.push_back(cur);
   compressed.shrink_to_fit();
+
+  // Deal with floating point precision
+  std::sort(compressed.begin(), compressed.end());
+
   result.centroids_ = std::move(compressed);
   return result;
 }
@@ -273,6 +299,9 @@ TDigest TDigest::merge(Range<const TDigest*> digests) {
   compressed.push_back(cur);
   compressed.shrink_to_fit();
 
+  // Deal with floating point precision
+  std::sort(compressed.begin(), compressed.end());
+
   result.count_ = count;
   result.min_ = min;
   result.max_ = max;
@@ -317,18 +346,24 @@ double TDigest::estimateQuantile(double q) const {
   }
 
   double delta = 0;
+  double min = min_;
+  double max = max_;
   if (centroids_.size() > 1) {
     if (pos == 0) {
       delta = centroids_[pos + 1].mean() - centroids_[pos].mean();
+      max = centroids_[pos + 1].mean();
     } else if (pos == centroids_.size() - 1) {
       delta = centroids_[pos].mean() - centroids_[pos - 1].mean();
+      min = centroids_[pos - 1].mean();
     } else {
       delta = (centroids_[pos + 1].mean() - centroids_[pos - 1].mean()) / 2;
+      min = centroids_[pos - 1].mean();
+      max = centroids_[pos + 1].mean();
     }
   }
   auto value = centroids_[pos].mean() +
       ((rank - t) / centroids_[pos].weight() - 0.5) * delta;
-  return clamp(value, min_, max_);
+  return clamp(value, min, max);
 }
 
 double TDigest::Centroid::add(double sum, double weight) {

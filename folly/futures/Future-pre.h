@@ -19,7 +19,8 @@
 
 namespace folly {
 
-template <class> class Promise;
+template <class>
+class Promise;
 
 template <class T>
 class SemiFuture;
@@ -71,7 +72,8 @@ struct isTry<Try<T>> : std::true_type {};
 namespace futures {
 namespace detail {
 
-template <class> class Core;
+template <class>
+class Core;
 
 template <typename...>
 struct ArgType;
@@ -107,30 +109,26 @@ struct callableResult {
 
 template <typename T, typename F>
 struct tryCallableResult {
-  typedef typename std::conditional<
-      is_invocable<F>::value,
-      detail::argResult<false, F>,
-      detail::argResult<true, F, Try<T>&&>>::type Arg;
+  typedef detail::argResult<true, F, Try<T>&&> Arg;
   typedef isFutureOrSemiFuture<typename Arg::Result> ReturnsFuture;
   typedef typename ReturnsFuture::Inner value_type;
+  typedef Future<value_type> Return;
 };
 
 template <typename T, typename F>
 struct valueCallableResult {
-  typedef typename std::conditional<
-      is_invocable<F>::value,
-      detail::argResult<false, F>,
-      detail::argResult<false, F, T&&>>::type Arg;
+  typedef detail::argResult<false, F, T&&> Arg;
   typedef isFutureOrSemiFuture<typename Arg::Result> ReturnsFuture;
   typedef typename ReturnsFuture::Inner value_type;
   typedef typename Arg::ArgList::FirstArg FirstArg;
+  typedef Future<value_type> Return;
 };
 
 template <typename L>
-struct Extract : Extract<decltype(&L::operator())> { };
+struct Extract : Extract<decltype(&L::operator())> {};
 
 template <typename Class, typename R, typename... Args>
-struct Extract<R(Class::*)(Args...) const> {
+struct Extract<R (Class::*)(Args...) const> {
   typedef isFutureOrSemiFuture<R> ReturnsFuture;
   typedef Future<typename ReturnsFuture::Inner> Return;
   typedef typename ReturnsFuture::Inner RawReturn;
@@ -138,7 +136,7 @@ struct Extract<R(Class::*)(Args...) const> {
 };
 
 template <typename Class, typename R, typename... Args>
-struct Extract<R(Class::*)(Args...)> {
+struct Extract<R (Class::*)(Args...)> {
   typedef isFutureOrSemiFuture<R> ReturnsFuture;
   typedef Future<typename ReturnsFuture::Inner> Return;
   typedef typename ReturnsFuture::Inner RawReturn;

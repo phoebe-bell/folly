@@ -1223,6 +1223,12 @@ class IOBuf {
    */
   size_t fillIov(struct iovec* iov, size_t len) const;
 
+  /**
+   * A helper that wraps a number of iovecs into an IOBuf chain.  If count == 0,
+   * then a zero length buf is returned.  This function never returns nullptr.
+   */
+  static std::unique_ptr<IOBuf> wrapIov(const iovec* vec, size_t count);
+
   /*
    * Overridden operator new and delete.
    * These perform specialized memory management to help support
@@ -1232,6 +1238,7 @@ class IOBuf {
   void* operator new(size_t size);
   void* operator new(size_t size, void* ptr);
   void operator delete(void* ptr);
+  void operator delete(void* ptr, void* placement);
 
   /**
    * Destructively convert this IOBuf to a fbstring efficiently.
@@ -1556,7 +1563,6 @@ inline std::unique_ptr<IOBuf> IOBuf::maybeCopyBuffer(
 class IOBuf::Iterator
     : public detail::IteratorFacade<IOBuf::Iterator, ByteRange const> {
  public:
-
   // Note that IOBufs are stored as a circular list without a guard node,
   // so pos == end is ambiguous (it may mean "begin" or "end").  To solve
   // the ambiguity (at the cost of one extra comparison in the "increment"

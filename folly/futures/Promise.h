@@ -56,7 +56,8 @@ class FOLLY_EXPORT BrokenPromise : public PromiseException {
 // forward declaration
 template <class T>
 class SemiFuture;
-template <class T> class Future;
+template <class T>
+class Future;
 
 namespace futures {
 namespace detail {
@@ -86,13 +87,11 @@ class CoreCallbackState;
 ///
 /// That usage pattern looks roughly like this:
 ///
-/// ```
-/// auto [p, f] = makePromiseContract(executor);
-/// g = std::move(f).then([](MyValue&& x) {
-///     ...executor runs this code if/when a MyValue is ready...
-///   });
-/// ...launch the async producer that eventually calls p.setResult()...
-/// ```
+///   auto [p, f] = makePromiseContract(executor);
+///   g = std::move(f).then([](MyValue&& x) {
+///       ...executor runs this code if/when a MyValue is ready...
+///     });
+///   ...launch the async producer that eventually calls p.setResult()...
 ///
 /// This is just one of many potential usage patterns. It has the desired
 /// property of being nonblocking to the caller. Of course the `.then()`
@@ -147,24 +146,24 @@ class Promise {
   ///
   /// Postconditions:
   ///
-  /// RESULT.valid() will be false
-  /// RESULT.isFulfilled() will be true
+  /// - `RESULT.valid() == false`
+  /// - `RESULT.isFulfilled() == true`
   static Promise<T> makeEmpty() noexcept;
 
   /// Constructs a valid but unfulfilled promise.
   ///
   /// Postconditions:
   ///
-  /// - valid() will be true (it will have a shared state)
-  /// - isFulfilled() will be false (its shared state won't have a result)
+  /// - `valid() == true` (it will have a shared state)
+  /// - `isFulfilled() == false` (its shared state won't have a result)
   Promise();
 
   /// Postconditions:
   ///
-  /// - If valid() and !isFulfilled(), the associated future (if any) will be
-  ///   completed with a `BrokenPromise` exception *as if* by
+  /// - If `valid()` and `!isFulfilled()`, the associated future (if any) will
+  ///   be completed with a `BrokenPromise` exception *as if* by
   ///   `setException(...)`.
-  /// - If valid(), releases, possibly destroying, the shared state.
+  /// - If `valid()`, releases, possibly destroying, the shared state.
   ~Promise();
 
   // not copyable
@@ -184,10 +183,10 @@ class Promise {
   ///
   /// Postconditions:
   ///
-  /// - If valid() and !isFulfilled(), the associated future (if any) will be
-  ///   completed with a `BrokenPromise` exception *as if* by
+  /// - If `valid()` and `!isFulfilled()`, the associated future (if any) will
+  ///   be completed with a `BrokenPromise` exception *as if* by
   ///   `setException(...)`.
-  /// - If valid(), releases, possibly destroying, the original shared state.
+  /// - If `valid()`, releases, possibly destroying, the original shared state.
   /// - `this` will have whatever shared-state was previously held by `other`
   ///   (if any)
   /// - `other.valid()` will be false (`other` will not have any shared state)
@@ -198,13 +197,13 @@ class Promise {
   ///
   /// Preconditions:
   ///
-  /// - valid() (else throws PromiseInvalid)
+  /// - `valid() == true` (else throws PromiseInvalid)
   /// - neither getSemiFuture() nor getFuture() may have been called previously
   ///   on `this` Promise (else throws FutureAlreadyRetrieved)
   ///
   /// Postconditions:
   ///
-  /// - RESULT.valid() will be true
+  /// - `RESULT.valid() == true`
   /// - RESULT will share the same shared-state as `this`
   ///
   /// DEPRECATED: use `folly::makePromiseContract()` instead.
@@ -215,13 +214,13 @@ class Promise {
   ///
   /// Preconditions:
   ///
-  /// - valid() (else throws PromiseInvalid)
+  /// - `valid() == true` (else throws PromiseInvalid)
   /// - neither getSemiFuture() nor getFuture() may have been called previously
   ///   on `this` Promise (else throws FutureAlreadyRetrieved)
   ///
   /// Postconditions:
   ///
-  /// - RESULT.valid() will be true
+  /// - `RESULT.valid() == true`
   /// - RESULT will share the same shared-state as `this`
   ///
   /// DEPRECATED: use `folly::makePromiseContract()` instead. If you can't use
@@ -233,25 +232,23 @@ class Promise {
   ///
   /// Sample usage:
   ///
-  /// ```
-  /// Promise<MyValue> p = ...
-  /// ...
-  /// auto const ep = std::exception_ptr();
-  /// auto const ew = exception_wrapper::from_exception_ptr(ep);
-  /// p.setException(ew);
-  /// ```
+  ///   Promise<MyValue> p = ...
+  ///   ...
+  ///   auto const ep = std::exception_ptr();
+  ///   auto const ew = exception_wrapper::from_exception_ptr(ep);
+  ///   p.setException(ew);
   ///
   /// Functionally equivalent to `setTry(Try<T>(std::move(ew)))`
   ///
   /// Preconditions:
   ///
-  /// - valid() (else throws PromiseInvalid)
-  /// - !isFulfilled() (else throws PromiseAlreadySatisfied)
+  /// - `valid() == true` (else throws PromiseInvalid)
+  /// - `isFulfilled() == false` (else throws PromiseAlreadySatisfied)
   ///
   /// Postconditions:
   ///
-  /// - isFulfilled() will be true
-  /// - valid() will be unchanged (true)
+  /// - `isFulfilled() == true`
+  /// - `valid() == true` (unchanged)
   /// - The associated future (if any) will complete with the exception.
   void setException(exception_wrapper ew);
 
@@ -280,7 +277,7 @@ class Promise {
   ///
   /// Preconditions:
   ///
-  /// - valid() (else throws PromiseInvalid)
+  /// - `valid() == true` (else throws PromiseInvalid)
   /// - `fn` must be copyable and must be invocable with
   ///   `exception_wrapper const&`
   /// - the code within `fn()` must be safe to run either synchronously within
@@ -318,16 +315,15 @@ class Promise {
   ///
   /// Preconditions:
   ///
-  /// - valid() (else throws PromiseInvalid)
-  /// - !isFulfilled() (else throws PromiseAlreadySatisfied)
+  /// - `valid() == true` (else throws PromiseInvalid)
+  /// - `isFulfilled() == false` (else throws PromiseAlreadySatisfied)
   ///
   /// Postconditions:
   ///
-  /// - isFulfilled() will be true
-  /// - valid() will be unchanged (true)
+  /// - `isFulfilled() == true`
+  /// - `valid() == true` (unchanged)
   template <class B = T>
-  typename std::enable_if<std::is_same<Unit, B>::value, void>::type
-  setValue() {
+  typename std::enable_if<std::is_same<Unit, B>::value, void>::type setValue() {
     setTry(Try<T>(T()));
   }
 
@@ -337,13 +333,13 @@ class Promise {
   ///
   /// Preconditions:
   ///
-  /// - valid() (else throws PromiseInvalid)
-  /// - !isFulfilled() (else throws PromiseAlreadySatisfied)
+  /// - `valid() == true` (else throws PromiseInvalid)
+  /// - `isFulfilled() == false` (else throws PromiseAlreadySatisfied)
   ///
   /// Postconditions:
   ///
-  /// - isFulfilled() will be true
-  /// - valid() will be unchanged (true)
+  /// - `isFulfilled() == true`
+  /// - `valid() == true` (unchanged)
   /// - The associated future will see the value, e.g., in its continuation.
   template <class M>
   void setValue(M&& value);
@@ -352,13 +348,13 @@ class Promise {
   ///
   /// Preconditions:
   ///
-  /// - valid() (else throws PromiseInvalid)
-  /// - !isFulfilled() (else throws PromiseAlreadySatisfied)
+  /// - `valid() == true` (else throws PromiseInvalid)
+  /// - `isFulfilled() == false` (else throws PromiseAlreadySatisfied)
   ///
   /// Postconditions:
   ///
-  /// - isFulfilled() will be true
-  /// - valid() will be unchanged (true)
+  /// - `isFulfilled() == true`
+  /// - `valid() == true` (unchanged)
   /// - The associated future will see the result, e.g., in its continuation.
   void setTry(Try<T>&& t);
 
@@ -367,16 +363,14 @@ class Promise {
   ///
   /// Example:
   ///
-  /// ```
-  /// p.setWith([] { do something that may throw; return a T; });
-  /// ```
+  ///   p.setWith([] { do something that may throw; return a T; });
   ///
   /// Functionally equivalent to `setTry(makeTryWith(static_cast<F&&>(func)));`
   ///
   /// Preconditions:
   ///
-  /// - valid() (else throws PromiseInvalid)
-  /// - !isFulfilled() (else throws PromiseAlreadySatisfied)
+  /// - `valid() == true` (else throws PromiseInvalid)
+  /// - `isFulfilled() == false` (else throws PromiseAlreadySatisfied)
   ///
   /// Postconditions:
   ///
@@ -385,8 +379,8 @@ class Promise {
   ///   `setValue()`
   /// - If `func()` throws, the exception will be captured as if via
   ///   `setException()`
-  /// - isFulfilled() will be true
-  /// - valid() will be unchanged (true)
+  /// - `isFulfilled() == true`
+  /// - `valid() == true` (unchanged)
   /// - The associated future will see the result, e.g., in its continuation.
   template <class F>
   void setWith(F&& func);
@@ -399,8 +393,8 @@ class Promise {
 
   /// True if either this promise was fulfilled or is invalid.
   ///
-  /// - True if !valid()
-  /// - True if valid() and this was fulfilled (a prior call to `setValue()`,
+  /// - True if `!valid()`
+  /// - True if `valid()` and this was fulfilled (a prior call to `setValue()`,
   ///   `setTry()`, `setException()`, or `setWith()`)
   bool isFulfilled() const noexcept;
 

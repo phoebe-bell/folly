@@ -25,7 +25,8 @@
 #include <folly/synchronization/AtomicStruct.h>
 #include <folly/system/ThreadId.h>
 
-namespace folly { namespace detail {
+namespace folly {
+namespace detail {
 
 /// MemoryIdler provides helper routines that allow routines to return
 /// some assigned memory resources back to the system.  The intended
@@ -35,12 +36,10 @@ namespace folly { namespace detail {
 /// tcmalloc use these for better performance) and unmap the stack pages
 /// that contain no useful data.
 struct MemoryIdler {
-
   /// Returns memory from thread-local allocation pools to the global
   /// pool, if we know how to for the current malloc implementation.
   /// jemalloc is supported.
   static void flushLocalMallocCaches();
-
 
   enum {
     /// This value is a tradeoff between reclaiming memory and triggering
@@ -56,7 +55,6 @@ struct MemoryIdler {
   /// currently doesn't hold any data, trying to ensure that no page
   /// faults will occur during the next retain bytes of stack allocation
   static void unmapUnusedStack(size_t retain = kDefaultStackToRetain);
-
 
   /// The system-wide default for the amount of time a blocking
   /// thread should wait before reclaiming idle memory.  Set this to
@@ -84,8 +82,8 @@ struct MemoryIdler {
         std::chrono::system_clock::now().time_since_epoch().count()));
 
     // multiplying the duration by a floating point doesn't work, grr
-    auto extraFrac =
-        timeoutVariationFrac / std::numeric_limits<uint64_t>::max() * h;
+    auto extraFrac = timeoutVariationFrac /
+        static_cast<float>(std::numeric_limits<uint64_t>::max()) * h;
     auto tics = uint64_t(idleTimeout.count() * (1 + extraFrac));
     return IdleTime(tics);
   }
@@ -99,10 +97,10 @@ struct MemoryIdler {
   /// system with bursty requests. The default is to wait up to 50%
   /// extra, so on average 25% extra.
   template <
-      template <typename> class Atom,
+      typename Futex,
       typename IdleTime = std::chrono::steady_clock::duration>
   static FutexResult futexWait(
-      Futex<Atom>& fut,
+      Futex& fut,
       uint32_t expected,
       uint32_t waitMask = -1,
       IdleTime const& idleTimeout =
@@ -121,7 +119,9 @@ struct MemoryIdler {
             timeoutVariationFrac)) {
       return pre;
     }
-    return fut.futexWait(expected, waitMask);
+
+    using folly::detail::futexWait;
+    return futexWait(&fut, expected, waitMask);
   }
 
   /// Equivalent to fut.futexWaitUntil(expected, deadline, waitMask), but
@@ -133,11 +133,11 @@ struct MemoryIdler {
   /// system with bursty requests. The default is to wait up to 50%
   /// extra, so on average 25% extra.
   template <
-      template <typename> class Atom,
+      typename Futex,
       typename Deadline,
       typename IdleTime = std::chrono::steady_clock::duration>
   static FutexResult futexWaitUntil(
-      Futex<Atom>& fut,
+      Futex& fut,
       uint32_t expected,
       Deadline const& deadline,
       uint32_t waitMask = -1,
@@ -157,17 +157,16 @@ struct MemoryIdler {
             timeoutVariationFrac)) {
       return pre;
     }
-    return fut.futexWaitUntil(expected, deadline, waitMask);
+
+    using folly::detail::futexWaitUntil;
+    return futexWaitUntil(&fut, expected, deadline, waitMask);
   }
 
  private:
-  template <
-      template <typename> class Atom,
-      typename Deadline,
-      typename IdleTime>
+  template <typename Futex, typename Deadline, typename IdleTime>
   static bool futexWaitPreIdle(
       FutexResult& _ret,
-      Futex<Atom>& fut,
+      Futex& fut,
       uint32_t expected,
       Deadline const& deadline,
       uint32_t waitMask,
@@ -189,7 +188,8 @@ struct MemoryIdler {
     if (idleTimeout > IdleTime::zero()) {
       auto idleDeadline = Deadline::clock::now() + idleTimeout;
       if (idleDeadline < deadline) {
-        auto rv = fut.futexWaitUntil(expected, idleDeadline, waitMask);
+        using folly::detail::futexWaitUntil;
+        auto rv = futexWaitUntil(&fut, expected, idleDeadline, waitMask);
         if (rv != FutexResult::TIMEDOUT) {
           // finished before timeout hit, no flush
           _ret = rv;

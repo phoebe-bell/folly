@@ -14,24 +14,23 @@
  * limitations under the License.
  */
 
-#include <folly/container/F14Map-pre.h>
-#include <folly/container/F14Set-pre.h>
-#include <folly/portability/GTest.h>
+#pragma once
 
-namespace {
-template <typename TContainer>
-void foo(TContainer*) {}
-} // namespace
+#include <cstddef>
 
-TEST(F14Pre, simple) {
-  using namespace folly;
-  foo<F14NodeMap<int, int>>(nullptr);
-  foo<F14ValueMap<int, int>>(nullptr);
-  foo<F14VectorMap<int, int>>(nullptr);
-  foo<F14FastMap<int, int>>(nullptr);
+#if __has_include(<demangle.h>)
+#define FOLLY_DETAIL_HAVE_DEMANGLE_H 1
+#else
+#define FOLLY_DETAIL_HAVE_DEMANGLE_H 0
+#endif
 
-  foo<F14NodeSet<int>>(nullptr);
-  foo<F14ValueSet<int>>(nullptr);
-  foo<F14VectorSet<int>>(nullptr);
-  foo<F14FastSet<int>>(nullptr);
-}
+namespace folly {
+namespace detail {
+
+extern int cplus_demangle_v3_callback_wrapper(
+    char const* mangled,
+    void (*cbref)(char const*, std::size_t, void*),
+    void* opaque);
+
+} // namespace detail
+} // namespace folly

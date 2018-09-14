@@ -74,9 +74,9 @@ nobase_follyinclude_HEADERS = \
 	container/Iterator.h \
 	container/Enumerate.h \
 	container/EvictingCacheMap.h \
-	container/F14Map-pre.h \
+	container/F14Map-fwd.h \
 	container/F14Map.h \
-	container/F14Set-pre.h \
+	container/F14Set-fwd.h \
 	container/F14Set.h \
 	container/Foreach.h \
 	container/Foreach-inl.h \
@@ -86,10 +86,12 @@ nobase_follyinclude_HEADERS = \
 	detail/AtFork.h \
 	detail/AtomicHashUtils.h \
 	detail/AtomicUnorderedMapUtils.h \
+	detail/Demangle.h \
 	detail/DiscriminatedPtrDetail.h \
 	detail/FileUtilDetail.h \
 	detail/FingerprintPolynomial.h \
 	detail/Futex.h \
+	detail/Futex-inl.h \
 	detail/GroupVarintDetail.h \
 	detail/IPAddress.h \
 	detail/IPAddressSource.h \
@@ -118,6 +120,7 @@ nobase_follyinclude_HEADERS = \
 	executors/IOExecutor.h \
 	executors/IOObjectCache.h \
 	executors/IOThreadPoolExecutor.h \
+	executors/ManualExecutor.h \
 	executors/QueuedImmediateExecutor.h \
 	executors/ScheduledExecutor.h \
 	executors/SequencedExecutor.h \
@@ -178,11 +181,11 @@ nobase_follyinclude_HEADERS = \
 	experimental/observer/detail/Core.h \
 	experimental/observer/detail/GraphCycleDetector.h \
 	experimental/observer/detail/ObserverManager.h \
-	experimental/observer/detail/Observer-pre.h \
 	experimental/observer/Observable.h \
 	experimental/observer/Observable-inl.h \
 	experimental/observer/Observer.h \
 	experimental/observer/Observer-inl.h \
+	experimental/observer/Observer-pre.h \
 	experimental/observer/SimpleObservable.h \
 	experimental/observer/SimpleObservable-inl.h \
 	experimental/ProgramOptions.h \
@@ -291,6 +294,7 @@ nobase_follyinclude_HEADERS = \
 	io/async/ssl/OpenSSLUtils.h \
 	io/async/ssl/SSLErrors.h \
 	io/async/ssl/TLSDefinitions.h \
+	io/async/PasswordInFile.h \
 	io/async/Request.h \
 	io/async/SSLContext.h \
 	io/async/SSLOptions.h \
@@ -299,6 +303,7 @@ nobase_follyinclude_HEADERS = \
 	io/async/VirtualEventBase.h \
 	io/async/WriteChainAsyncTransportWrapper.h \
 	io/async/test/AsyncSSLSocketTest.h \
+	io/async/test/AsyncSocketTest.h \
 	io/async/test/AsyncSocketTest2.h \
 	io/async/test/BlockingSocket.h \
 	io/async/test/MockAsyncSocket.h \
@@ -330,6 +335,7 @@ nobase_follyinclude_HEADERS = \
 	LockTraits.h \
 	LockTraitsBoost.h \
 	logging/AsyncFileWriter.h \
+	logging/CustomLogFormatter.h \
 	logging/FileHandlerFactory.h \
 	logging/FileWriterFactory.h \
 	logging/GlogStyleFormatter.h \
@@ -363,6 +369,7 @@ nobase_follyinclude_HEADERS = \
 	Memory.h \
 	memory/Arena.h \
 	memory/Arena-inl.h \
+	memory/EnableSharedFromThis.h \
 	memory/MallctlHelper.h \
 	memory/Malloc.h \
 	memory/ThreadCachedArena.h \
@@ -448,6 +455,7 @@ nobase_follyinclude_HEADERS = \
 	stats/detail/BufferedStat.h \
 	stats/detail/DigestBuilder-defs.h \
 	stats/detail/DigestBuilder.h \
+	stats/detail/DoubleRadixSort.h \
 	stats/detail/SlidingWindow-defs.h \
 	stats/detail/SlidingWindow.h \
 	stats/BucketedTimeSeries-defs.h \
@@ -525,14 +533,15 @@ nobase_follyinclude_HEADERS = \
 libfollybasesse42_la_SOURCES = \
 	detail/RangeSse42.cpp \
 	hash/detail/ChecksumDetail.cpp \
-	hash/detail/Crc32cDetail.cpp
+	hash/detail/Crc32cDetail.cpp \
+	hash/detail/Crc32CombineDetail.cpp
 
 libfollybase_la_SOURCES = \
 	Conv.cpp \
 	Demangle.cpp \
+	detail/Demangle.cpp \
 	detail/RangeCommon.cpp \
 	Format.cpp \
-	FormatArg.cpp \
 	memory/MallctlHelper.cpp \
 	String.cpp \
 	Unicode.cpp
@@ -601,6 +610,7 @@ libfolly_la_SOURCES = \
 	io/async/EventBaseManager.cpp \
 	io/async/EventBaseThread.cpp \
 	io/async/EventHandler.cpp \
+	io/async/PasswordInFile.cpp \
 	io/async/Request.cpp \
 	io/async/SSLContext.cpp \
 	io/async/SSLOptions.cpp \
@@ -619,6 +629,7 @@ libfolly_la_SOURCES = \
 	lang/ColdClass.cpp \
 	lang/SafeAssert.cpp \
 	logging/AsyncFileWriter.cpp \
+	logging/CustomLogFormatter.cpp \
 	logging/FileHandlerFactory.cpp \
 	logging/FileWriterFactory.cpp \
 	logging/GlogStyleFormatter.cpp \
@@ -683,6 +694,7 @@ libfolly_la_SOURCES = \
 	stats/QuantileEstimator.cpp \
 	stats/TDigest.cpp \
 	stats/TimeseriesHistogram.cpp \
+	stats/detail/DoubleRadixSort.cpp \
 	synchronization/AsymmetricMemoryBarrier.cpp \
 	synchronization/Hazptr.cpp \
 	synchronization/LifoSem.cpp \

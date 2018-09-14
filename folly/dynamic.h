@@ -57,7 +57,6 @@
 #include <ostream>
 #include <string>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -65,6 +64,7 @@
 
 #include <folly/Range.h>
 #include <folly/Traits.h>
+#include <folly/container/F14Map.h>
 #include <folly/json_pointer.h>
 
 namespace folly {
@@ -86,7 +86,8 @@ struct dynamic : private boost::operators<dynamic> {
     OBJECT,
     STRING,
   };
-  template <class T, class Enable = void> struct NumericTypeHelper;
+  template <class T, class Enable = void>
+  struct NumericTypeHelper;
 
   /*
    * We support direct iteration of arrays, and indirect iteration of objects.
@@ -99,6 +100,19 @@ struct dynamic : private boost::operators<dynamic> {
    */
  private:
   typedef std::vector<dynamic> Array;
+
+  /*
+   * Violating spec, std::vector<bool>::const_reference is not bool in libcpp:
+   * http://howardhinnant.github.io/onvectorbool.html
+   *
+   * This is used to add a public ctor which is only enabled under libcpp taking
+   * std::vector<bool>::const_reference without using the preprocessor.
+   */
+  struct VectorBoolConstRefFake : std::false_type {};
+  using VectorBoolConstRefCtorType = std::conditional_t<
+      std::is_same<std::vector<bool>::const_reference, bool>::value,
+      VectorBoolConstRefFake,
+      std::vector<bool>::const_reference>;
 
  public:
   typedef Array::iterator iterator;
@@ -138,7 +152,7 @@ struct dynamic : private boost::operators<dynamic> {
  public:
   static void array(EmptyArrayTag);
   template <class... Args>
-  static dynamic array(Args&& ...args);
+  static dynamic array(Args&&... args);
 
   static ObjectMaker object();
   static ObjectMaker object(dynamic, dynamic);
@@ -179,6 +193,7 @@ struct dynamic : private boost::operators<dynamic> {
    * hence we explicitly accept the reference proxy.
    */
   /* implicit */ dynamic(std::vector<bool>::reference val);
+  /* implicit */ dynamic(VectorBoolConstRefCtorType val);
 
   /*
    * Create a dynamic that is an array of the values from the supplied
@@ -282,9 +297,9 @@ struct dynamic : private boost::operators<dynamic> {
    * dynamic.
    */
   std::string asString() const;
-  double   asDouble() const;
-  int64_t  asInt() const;
-  bool     asBool() const;
+  double asDouble() const;
+  int64_t asInt() const;
+  bool asBool() const;
 
   /*
    * Extract the value stored in this dynamic without type conversion.
@@ -292,17 +307,17 @@ struct dynamic : private boost::operators<dynamic> {
    * These will throw a TypeError if the dynamic has a different type.
    */
   const std::string& getString() const&;
-  double          getDouble() const&;
-  int64_t         getInt() const&;
-  bool            getBool() const&;
+  double getDouble() const&;
+  int64_t getInt() const&;
+  bool getBool() const&;
   std::string& getString() &;
-  double&   getDouble() &;
-  int64_t&  getInt() &;
-  bool&     getBool() &;
+  double& getDouble() &;
+  int64_t& getInt() &;
+  bool& getBool() &;
   std::string&& getString() &&;
-  double   getDouble() &&;
-  int64_t  getInt() &&;
-  bool     getBool() &&;
+  double getDouble() &&;
+  int64_t getInt() &&;
+  bool getBool() &&;
 
   /*
    * It is occasionally useful to access a string's internal pointer
@@ -310,8 +325,8 @@ struct dynamic : private boost::operators<dynamic> {
    *
    * These will throw a TypeError if the dynamic is not a string.
    */
-  const char* data()  const&;
-  const char* data()  && = delete;
+  const char* data() const&;
+  const char* data() && = delete;
   const char* c_str() const&;
   const char* c_str() && = delete;
   StringPiece stringPiece() const;
@@ -333,8 +348,8 @@ struct dynamic : private boost::operators<dynamic> {
    * You can iterate over the values of the array.  Calling these on
    * non-arrays will throw a TypeError.
    */
-  const_iterator begin()  const;
-  const_iterator end()    const;
+  const_iterator begin() const;
+  const_iterator end() const;
   iterator begin();
   iterator end();
 
@@ -342,7 +357,18 @@ struct dynamic : private boost::operators<dynamic> {
   /*
    * Helper object returned by keys(), values(), and items().
    */
-  template <class T> struct IterableProxy;
+  template <class T>
+  struct IterableProxy;
+
+  /*
+   * Helper for heterogeneous lookup and mutation on objects: at(), find(),
+   * count(), erase(), operator[]
+   */
+  template <typename K, typename T>
+  using IfIsNonStringDynamicConvertible = std::enable_if_t<
+      !std::is_convertible<K, StringPiece>::value &&
+          std::is_convertible<K, dynamic>::value,
+      T>;
 
  public:
   /*
@@ -362,14 +388,22 @@ struct dynamic : private boost::operators<dynamic> {
    * Returns: items().end() if the key is not present, or a
    * const_item_iterator pointing to the item.
    */
-  const_item_iterator find(dynamic const&) const;
-  item_iterator find(dynamic const&);
+  template <typename K>
+  IfIsNonStringDynamicConvertible<K, const_item_iterator> find(K&&) const;
+  template <typename K>
+  IfIsNonStringDynamicConvertible<K, item_iterator> find(K&&);
+
+  const_item_iterator find(StringPiece) const;
+  item_iterator find(StringPiece);
 
   /*
    * If this is an object, returns whether it contains a field with
    * the given name.  Otherwise throws TypeError.
    */
-  std::size_t count(dynamic const&) const;
+  template <typename K>
+  IfIsNonStringDynamicConvertible<K, std::size_t> count(K&&) const;
+
+  std::size_t count(StringPiece) const;
 
   /*
    * For objects or arrays, provides access to sub-fields by index or
@@ -379,9 +413,20 @@ struct dynamic : private boost::operators<dynamic> {
    * will throw a TypeError.  Using an index that is out of range or
    * object-element that's not present throws std::out_of_range.
    */
-  dynamic const& at(dynamic const&) const&;
-  dynamic&       at(dynamic const&) &;
-  dynamic&&      at(dynamic const&) &&;
+ private:
+  dynamic const& atImpl(dynamic const&) const&;
+
+ public:
+  template <typename K>
+  IfIsNonStringDynamicConvertible<K, dynamic const&> at(K&&) const&;
+  template <typename K>
+  IfIsNonStringDynamicConvertible<K, dynamic&> at(K&&) &;
+  template <typename K>
+  IfIsNonStringDynamicConvertible<K, dynamic&&> at(K&&) &&;
+
+  dynamic const& at(StringPiece) const&;
+  dynamic& at(StringPiece) &;
+  dynamic&& at(StringPiece) &&;
 
   /*
    * Locate element using JSON pointer, per RFC 6901. Returns nullptr if
@@ -422,9 +467,16 @@ struct dynamic : private boost::operators<dynamic> {
    * These functions do not invalidate iterators except when a null value
    * is inserted into an object as described above.
    */
-  dynamic&       operator[](dynamic const&) &;
-  dynamic const& operator[](dynamic const&) const&;
-  dynamic&&      operator[](dynamic const&) &&;
+  template <typename K>
+  IfIsNonStringDynamicConvertible<K, dynamic&> operator[](K&&) &;
+  template <typename K>
+  IfIsNonStringDynamicConvertible<K, dynamic const&> operator[](K&&) const&;
+  template <typename K>
+  IfIsNonStringDynamicConvertible<K, dynamic&&> operator[](K&&) &&;
+
+  dynamic& operator[](StringPiece) &;
+  dynamic const& operator[](StringPiece) const&;
+  dynamic&& operator[](StringPiece) &&;
 
   /*
    * Only defined for objects, throws TypeError otherwise.
@@ -434,8 +486,8 @@ struct dynamic : private boost::operators<dynamic> {
    * default if it is not yet set, otherwise leaving it. setDefault returns
    * a reference to the existing value if present, the new value otherwise.
    */
-  dynamic
-  getDefault(const dynamic& k, const dynamic& v = dynamic::object) const&;
+  dynamic getDefault(const dynamic& k, const dynamic& v = dynamic::object)
+      const&;
   dynamic getDefault(const dynamic& k, dynamic&& v) const&;
   dynamic getDefault(const dynamic& k, const dynamic& v = dynamic::object) &&;
   dynamic getDefault(const dynamic& k, dynamic&& v) &&;
@@ -463,11 +515,13 @@ struct dynamic : private boost::operators<dynamic> {
 
   /*
    * Inserts the supplied key-value pair to an object, or throws if
-   * it's not an object.
+   * it's not an object. If the key already exists, insert will overwrite the
+   * value, i.e., similar to insert_or_assign.
    *
    * Invalidates iterators.
    */
-  template <class K, class V> void insert(K&&, V&& val);
+  template <class K, class V>
+  void insert(K&&, V&& val);
 
   /*
    * These functions merge two folly dynamic objects.
@@ -504,7 +558,10 @@ struct dynamic : private boost::operators<dynamic> {
    *
    * Returns the number of elements erased (i.e. 1 or 0).
    */
-  std::size_t erase(dynamic const& key);
+  template <typename K>
+  IfIsNonStringDynamicConvertible<K, std::size_t> erase(K&&);
+
+  std::size_t erase(StringPiece);
 
   /*
    * Erase an element from a dynamic object or array, using an
@@ -557,22 +614,38 @@ struct dynamic : private boost::operators<dynamic> {
  private:
   friend struct TypeError;
   struct ObjectImpl;
-  template <class T> struct TypeInfo;
-  template <class T> struct CompareOp;
-  template <class T> struct GetAddrImpl;
-  template <class T> struct PrintImpl;
+  template <class T>
+  struct TypeInfo;
+  template <class T>
+  struct CompareOp;
+  template <class T>
+  struct GetAddrImpl;
+  template <class T>
+  struct PrintImpl;
 
   explicit dynamic(Array&& array);
 
-  template <class T> T const& get() const;
-  template <class T> T&       get();
-  template <class T> T*       get_nothrow() & noexcept;
-  template <class T> T const* get_nothrow() const& noexcept;
-  template <class T> T*       get_nothrow() && noexcept = delete;
-  template <class T> T*       getAddress() noexcept;
-  template <class T> T const* getAddress() const noexcept;
+  template <class T>
+  T const& get() const;
+  template <class T>
+  T& get();
+  // clang-format off
+  template <class T>
+  T* get_nothrow() & noexcept;
+  // clang-format on
+  template <class T>
+  T const* get_nothrow() const& noexcept;
+  // clang-format off
+  template <class T>
+  T* get_nothrow() && noexcept = delete;
+  // clang-format on
+  template <class T>
+  T* getAddress() noexcept;
+  template <class T>
+  T const* getAddress() const noexcept;
 
-  template <class T> T asImpl() const;
+  template <class T>
+  T asImpl() const;
 
   static char const* typeName(Type);
   void destroy() noexcept;
@@ -594,15 +667,14 @@ struct dynamic : private boost::operators<dynamic> {
 
     /*
      * Objects are placement new'd here.  We have to use a char buffer
-     * because we don't know the type here (std::unordered_map<> with
+     * because we don't know the type here (F14NodeMap<> with
      * dynamic would be parameterizing a std:: template with an
      * incomplete type right now).  (Note that in contrast we know it
      * is ok to do this with fbvector because we own it.)
      */
     std::aligned_storage<
-      sizeof(std::unordered_map<int,int>),
-      alignof(std::unordered_map<int,int>)
-    >::type objectBuffer;
+        sizeof(F14NodeMap<int, int>),
+        alignof(F14NodeMap<int, int>)>::type objectBuffer;
   } u_;
 };
 

@@ -409,6 +409,9 @@ class AlignedSysAllocator : private Align {
  private:
   using Self = AlignedSysAllocator<T, Align>;
 
+  template <typename, typename>
+  friend class AlignedSysAllocator;
+
   constexpr Align const& align() const {
     return *this;
   }
@@ -533,11 +536,11 @@ class allocator_delete : private std::remove_reference<Alloc>::type {
   allocator_delete& operator=(allocator_delete const&) = default;
   allocator_delete& operator=(allocator_delete&&) = default;
 
-  explicit allocator_delete(const allocator_type& allocator)
-      : allocator_type(allocator) {}
+  explicit allocator_delete(const allocator_type& alloc)
+      : allocator_type(alloc) {}
 
-  explicit allocator_delete(allocator_type&& allocator)
-      : allocator_type(std::move(allocator)) {}
+  explicit allocator_delete(allocator_type&& alloc)
+      : allocator_type(std::move(alloc)) {}
 
   template <typename U>
   allocator_delete(const allocator_delete<U>& other)
@@ -562,15 +565,25 @@ std::unique_ptr<T, allocator_delete<Alloc>> allocate_unique(
     Alloc const& alloc,
     Args&&... args) {
   using traits = std::allocator_traits<Alloc>;
+  struct DeferCondDeallocate {
+    bool& cond;
+    Alloc& copy;
+    T* p;
+    ~DeferCondDeallocate() {
+      if (FOLLY_UNLIKELY(!cond)) {
+        traits::deallocate(copy, p, 1);
+      }
+    }
+  };
   auto copy = alloc;
   auto const p = traits::allocate(copy, 1);
-  try {
+  {
+    bool constructed = false;
+    DeferCondDeallocate handler{constructed, copy, p};
     traits::construct(copy, p, static_cast<Args&&>(args)...);
-    return {p, allocator_delete<Alloc>(std::move(copy))};
-  } catch (...) {
-    traits::deallocate(copy, p, 1);
-    throw;
+    constructed = true;
   }
+  return {p, allocator_delete<Alloc>(std::move(copy))};
 }
 
 struct SysBufferDeleter {
@@ -679,93 +692,5 @@ struct AllocatorHasDefaultObjectDestroy
 template <typename Value, typename T>
 struct AllocatorHasDefaultObjectDestroy<std::allocator<Value>, T>
     : std::true_type {};
-
-/*
- * folly::enable_shared_from_this
- *
- * To be removed once C++17 becomes a minimum requirement for folly.
- */
-#if __cplusplus >= 201700L || __cpp_lib_enable_shared_from_this >= 201603L
-
-// Guaranteed to have std::enable_shared_from_this::weak_from_this(). Prefer
-// type alias over our own class.
-/* using override */ using std::enable_shared_from_this;
-
-#else
-
-/**
- * Extends std::enabled_shared_from_this. Offers weak_from_this() to pre-C++17
- * code. Use as drop-in replacement for std::enable_shared_from_this.
- *
- * C++14 has no direct means of creating a std::weak_ptr, one must always
- * create a (temporary) std::shared_ptr first. C++17 adds weak_from_this() to
- * std::enable_shared_from_this to avoid that overhead. Alas code that must
- * compile under different language versions cannot call
- * std::enable_shared_from_this::weak_from_this() directly. Hence this class.
- *
- * @example
- *   class MyClass : public folly::enable_shared_from_this<MyClass> {};
- *
- *   int main() {
- *     std::shared_ptr<MyClass> sp = std::make_shared<MyClass>();
- *     std::weak_ptr<MyClass> wp = sp->weak_from_this();
- *   }
- */
-template <typename T>
-class enable_shared_from_this : public std::enable_shared_from_this<T> {
- public:
-  constexpr enable_shared_from_this() noexcept = default;
-
-  std::weak_ptr<T> weak_from_this() noexcept {
-    return weak_from_this_<T>(this);
-  }
-
-  std::weak_ptr<T const> weak_from_this() const noexcept {
-    return weak_from_this_<T>(this);
-  }
-
- private:
-  // Uses SFINAE to detect and call
-  // std::enable_shared_from_this<T>::weak_from_this() if available. Falls
-  // back to std::enable_shared_from_this<T>::shared_from_this() otherwise.
-  template <typename U>
-  auto weak_from_this_(std::enable_shared_from_this<U>* base_ptr) noexcept
-      -> decltype(base_ptr->weak_from_this()) {
-    return base_ptr->weak_from_this();
-  }
-
-  template <typename U>
-  auto weak_from_this_(std::enable_shared_from_this<U> const* base_ptr) const
-      noexcept -> decltype(base_ptr->weak_from_this()) {
-    return base_ptr->weak_from_this();
-  }
-
-  template <typename U>
-  std::weak_ptr<U> weak_from_this_(...) noexcept {
-    try {
-      return this->shared_from_this();
-    } catch (std::bad_weak_ptr const&) {
-      // C++17 requires that weak_from_this() on an object not owned by a
-      // shared_ptr returns an empty weak_ptr. Sadly, in C++14,
-      // shared_from_this() on such an object is undefined behavior, and there
-      // is nothing we can do to detect and handle the situation in a portable
-      // manner. But in case a compiler is nice enough to implement C++17
-      // semantics of shared_from_this() and throws a bad_weak_ptr, we catch it
-      // and return an empty weak_ptr.
-      return std::weak_ptr<U>{};
-    }
-  }
-
-  template <typename U>
-  std::weak_ptr<U const> weak_from_this_(...) const noexcept {
-    try {
-      return this->shared_from_this();
-    } catch (std::bad_weak_ptr const&) {
-      return std::weak_ptr<U const>{};
-    }
-  }
-};
-
-#endif
 
 } // namespace folly

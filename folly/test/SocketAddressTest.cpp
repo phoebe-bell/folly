@@ -27,13 +27,12 @@
 #include <folly/portability/Sockets.h>
 #include <folly/test/SocketAddressTestHelper.h>
 
-using namespace boost;
-using std::string;
-using std::cerr;
-using std::endl;
 using folly::SocketAddress;
 using folly::SocketAddressTestHelper;
 using folly::test::TemporaryDirectory;
+using std::cerr;
+using std::endl;
+using std::string;
 
 namespace fsp = folly::portability::sockets;
 
@@ -673,12 +672,9 @@ TEST(SocketAddress, AnonymousUnix) {
   EXPECT_NE(addr0, addr0);
 }
 
-#define REQUIRE_ERRNO(cond, msg)                                   \
-  if (!(cond)) {                                                   \
-    int _requireErrnoCopy_ = errno;                                \
-    std::ostringstream _requireMsg_;                               \
-    _requireMsg_ << (msg) << ": " << strerror(_requireErrnoCopy_); \
-    ADD_FAILURE();                                                 \
+#define REQUIRE_ERRNO(cond, msg)                                \
+  if (!(cond)) {                                                \
+    ADD_FAILURE() << (msg) << ": " << ::folly::errnoStr(errno); \
   }
 
 void testSetFromSocket(

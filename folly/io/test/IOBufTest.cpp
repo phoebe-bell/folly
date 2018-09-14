@@ -1001,6 +1001,40 @@ TEST(IOBuf, getIov) {
   EXPECT_EQ(buf->next()->next()->data(), iov[2].iov_base);
 }
 
+TEST(IOBuf, wrapIov) {
+  // Test wrapping IOVs
+  constexpr folly::StringPiece hello = "hello";
+  constexpr folly::StringPiece world = "world!";
+  folly::fbvector<struct iovec> iov;
+  iov.push_back({nullptr, 0});
+  iov.push_back({(void*)hello.data(), hello.size()});
+  iov.push_back({(void*)world.data(), world.size()});
+  auto wrapped = IOBuf::wrapIov(iov.data(), iov.size());
+  EXPECT_EQ(iov.size() - 1, wrapped->countChainElements());
+  IOBuf const* w = wrapped.get();
+  // skip the first iovec, which is empty/null, as it is ignored by
+  // IOBuf::wrapIov
+  for (size_t i = 0; i < wrapped->countChainElements(); ++i, w = w->next()) {
+    EXPECT_EQ(w->data(), iov[i + 1].iov_base);
+    EXPECT_EQ(w->length(), iov[i + 1].iov_len);
+  }
+}
+
+TEST(IOBuf, wrapZeroLenIov) {
+  folly::fbvector<struct iovec> iov;
+  iov.push_back({nullptr, 0});
+  iov.push_back({nullptr, 0});
+  auto wrapped = IOBuf::wrapIov(iov.data(), iov.size());
+  EXPECT_NE(nullptr, wrapped);
+  EXPECT_EQ(wrapped->countChainElements(), 1);
+  EXPECT_EQ(wrapped->length(), 0);
+
+  wrapped = IOBuf::wrapIov(nullptr, 0);
+  EXPECT_NE(nullptr, wrapped);
+  EXPECT_EQ(wrapped->countChainElements(), 1);
+  EXPECT_EQ(wrapped->length(), 0);
+}
+
 TEST(IOBuf, move) {
   // Default allocate an IOBuf on the stack
   IOBuf outerBuf;

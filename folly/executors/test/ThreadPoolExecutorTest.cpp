@@ -14,8 +14,11 @@
  * limitations under the License.
  */
 
+#include <atomic>
 #include <memory>
 #include <thread>
+
+#include <boost/thread.hpp>
 
 #include <folly/Exception.h>
 #include <folly/VirtualExecutor.h>
@@ -28,6 +31,7 @@
 #include <folly/executors/thread_factory/InitThreadFactory.h>
 #include <folly/executors/thread_factory/PriorityThreadFactory.h>
 #include <folly/portability/GTest.h>
+#include <folly/synchronization/detail/Spin.h>
 
 using namespace folly;
 using namespace std::chrono;
@@ -130,6 +134,47 @@ TEST(ThreadPoolExecutorTest, CPUJoin) {
 
 TEST(ThreadPoolExecutorTest, IOJoin) {
   join<IOThreadPoolExecutor>();
+}
+
+template <class TPE>
+static void destroy() {
+  TPE tpe(1);
+  std::atomic<int> completed(0);
+  auto f = [&]() {
+    burnMs(10)();
+    completed++;
+  };
+  for (int i = 0; i < 1000; i++) {
+    tpe.add(f);
+  }
+  tpe.stop();
+  EXPECT_GT(1000, completed);
+}
+
+// IOThreadPoolExecutor's destuctor joins all tasks. Outstanding tasks belong
+// to the event base, will be executed upon its destruction, and cannot be
+// taken back.
+template <>
+void destroy<IOThreadPoolExecutor>() {
+  Optional<IOThreadPoolExecutor> tpe(in_place, 1);
+  std::atomic<int> completed(0);
+  auto f = [&]() {
+    burnMs(10)();
+    completed++;
+  };
+  for (int i = 0; i < 10; i++) {
+    tpe->add(f);
+  }
+  tpe.clear();
+  EXPECT_EQ(10, completed);
+}
+
+TEST(ThreadPoolExecutorTest, CPUDestroy) {
+  destroy<CPUThreadPoolExecutor>();
+}
+
+TEST(ThreadPoolExecutorTest, IODestroy) {
+  destroy<IOThreadPoolExecutor>();
 }
 
 template <class TPE>
@@ -728,16 +773,22 @@ TEST(ThreadPoolExecutorTest, testUsesNameFromNamedThreadFactoryCPU) {
 }
 
 TEST(ThreadPoolExecutorTest, DynamicThreadsTest) {
+  boost::barrier barrier{3};
+  auto twice_waiting_task = [&] { barrier.wait(), barrier.wait(); };
   CPUThreadPoolExecutor e(2);
   e.setThreadDeathTimeout(std::chrono::milliseconds(100));
-  e.add([] { /* sleep override */ usleep(1000); });
-  e.add([] { /* sleep override */ usleep(1000); });
-  auto stats = e.getPoolStats();
-  EXPECT_GE(2, stats.activeThreadCount);
-  /* sleep override */ sleep(1);
-  e.add([] {});
-  stats = e.getPoolStats();
-  EXPECT_LE(stats.activeThreadCount, 0);
+  e.add(twice_waiting_task);
+  e.add(twice_waiting_task);
+  barrier.wait(); // ensure both tasks are mid-flight
+  EXPECT_EQ(2, e.getPoolStats().activeThreadCount) << "sanity check";
+
+  auto pred = [&] { return e.getPoolStats().activeThreadCount == 0; };
+  EXPECT_FALSE(pred()) << "sanity check";
+  barrier.wait(); // let both mid-flight tasks complete
+  EXPECT_EQ(
+      folly::detail::spin_result::success,
+      folly::detail::spin_yield_until(
+          std::chrono::steady_clock::now() + std::chrono::seconds(1), pred));
 }
 
 TEST(ThreadPoolExecutorTest, DynamicThreadAddRemoveRace) {

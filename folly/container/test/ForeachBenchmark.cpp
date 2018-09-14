@@ -280,9 +280,11 @@ BENCHMARK(ForEachKVNoMacroAssign, iters) {
   int sumKeys = 0;
   std::string sumValues;
 
-  BENCHMARK_SUSPEND { setupBenchmark(iters); }
+  BENCHMARK_SUSPEND {
+    setupBenchmark(iters);
+  }
 
-  FOR_EACH(iter, bmMap) {
+  FOR_EACH (iter, bmMap) {
     const int k = iter->first;
     const std::string v = iter->second;
     sumKeys += k;
@@ -294,9 +296,11 @@ BENCHMARK(ForEachKVNoMacroNoAssign, iters) {
   int sumKeys = 0;
   std::string sumValues;
 
-  BENCHMARK_SUSPEND { setupBenchmark(iters); }
+  BENCHMARK_SUSPEND {
+    setupBenchmark(iters);
+  }
 
-  FOR_EACH(iter, bmMap) {
+  FOR_EACH (iter, bmMap) {
     sumKeys += iter->first;
     sumValues += iter->second;
   }
@@ -306,9 +310,11 @@ BENCHMARK(ForEachKVMacro, iters) {
   int sumKeys = 0;
   std::string sumValues;
 
-  BENCHMARK_SUSPEND { setupBenchmark(iters); }
+  BENCHMARK_SUSPEND {
+    setupBenchmark(iters);
+  }
 
-  FOR_EACH_KV(k, v, bmMap) {
+  FOR_EACH_KV (k, v, bmMap) {
     sumKeys += k;
     sumValues += v;
   }
@@ -324,7 +330,7 @@ BENCHMARK(ForEachManual, iters) {
 
 BENCHMARK(ForEachRange, iters) {
   int sum = 1;
-  FOR_EACH_RANGE(i, 1, iters) { sum *= i; }
+  FOR_EACH_RANGE (i, 1, iters) { sum *= i; }
   doNotOptimizeAway(sum);
 }
 
@@ -338,7 +344,7 @@ BENCHMARK(ForEachDescendingManual, iters) {
 
 BENCHMARK(ForEachRangeR, iters) {
   int sum = 1;
-  FOR_EACH_RANGE_R(i, 1U, iters) { sum *= i; }
+  FOR_EACH_RANGE_R (i, 1U, iters) { sum *= i; }
   doNotOptimizeAway(sum);
 }
 

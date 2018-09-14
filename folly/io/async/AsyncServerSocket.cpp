@@ -39,6 +39,14 @@ namespace fsp = folly::portability::sockets;
 
 namespace folly {
 
+#ifndef TCP_SAVE_SYN
+#define TCP_SAVE_SYN 27
+#endif
+
+#ifndef TCP_SAVED_SYN
+#define TCP_SAVED_SYN 28
+#endif
+
 static constexpr bool msgErrQueueSupported =
 #ifdef FOLLY_HAVE_MSG_ERRQUEUE
     true;
@@ -742,6 +750,35 @@ int AsyncServerSocket::createSocket(int family) {
   return fd;
 }
 
+/**
+ * Enable/Disable TOS reflection for the server socket
+ * If enabled, the 'accepted' connections will reflect the
+ * TOS derived from the client's connect request
+ */
+void AsyncServerSocket::setTosReflect(bool enable) {
+  if (!kIsLinux || enable == false) {
+    tosReflect_ = false;
+    return;
+  }
+
+  for (auto& handler : sockets_) {
+    if (handler.socket_ < 0) {
+      continue;
+    }
+
+    int val = (enable) ? 1 : 0;
+    int ret = setsockopt(
+        handler.socket_, IPPROTO_TCP, TCP_SAVE_SYN, &val, sizeof(val));
+
+    if (ret == 0) {
+      VLOG(10) << "Enabled SYN save for socket " << handler.socket_;
+    } else {
+      folly::throwSystemError(errno, "failed to enable TOS reflect");
+    }
+  }
+  tosReflect_ = true;
+}
+
 void AsyncServerSocket::setupSocket(int fd, int family) {
   // Put the socket in non-blocking mode
   if (fcntl(fd, F_SETFL, O_NONBLOCK) != 0) {
@@ -760,7 +797,7 @@ void AsyncServerSocket::setupSocket(int fd, int family) {
   if (reusePortEnabled_ &&
       setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(int)) != 0) {
     LOG(ERROR) << "failed to set SO_REUSEPORT on async server socket "
-               << strerror(errno);
+               << errnoStr(errno);
 #ifdef WIN32
     folly::throwSystemError(errno, "failed to bind to the async server socket");
 #else
@@ -779,13 +816,13 @@ void AsyncServerSocket::setupSocket(int fd, int family) {
           (keepAliveEnabled_) ? &one : &zero,
           sizeof(int)) != 0) {
     LOG(ERROR) << "failed to set SO_KEEPALIVE on async server socket: "
-               << strerror(errno);
+               << errnoStr(errno);
   }
 
   // Setup FD_CLOEXEC flag
   if (closeOnExec_ && (-1 == folly::setCloseOnExec(fd, closeOnExec_))) {
     LOG(ERROR) << "failed to set FD_CLOEXEC on async server socket: "
-               << strerror(errno);
+               << errnoStr(errno);
   }
 
   // Set TCP nodelay if available, MAC OS X Hack
@@ -795,7 +832,7 @@ void AsyncServerSocket::setupSocket(int fd, int family) {
     if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) != 0) {
       // This isn't a fatal error; just log an error message and continue
       LOG(ERROR) << "failed to set TCP_NODELAY on async server socket: "
-                 << strerror(errno);
+                 << errnoStr(errno);
     }
   }
 #else
@@ -848,6 +885,40 @@ void AsyncServerSocket::handlerReady(
 
     if (clientSocket >= 0 && connectionEventCallback_) {
       connectionEventCallback_->onConnectionAccepted(clientSocket, address);
+    }
+
+    // Connection accepted, get the SYN packet from the client if
+    // TOS reflect is enabled
+    if (kIsLinux && clientSocket >= 0 && tosReflect_) {
+      std::array<uint32_t, 64> buffer;
+      socklen_t len = sizeof(buffer);
+      int ret =
+          getsockopt(clientSocket, IPPROTO_TCP, TCP_SAVED_SYN, &buffer, &len);
+
+      if (ret == 0) {
+        uint32_t tosWord = folly::Endian::big(buffer[0]);
+        if (addressFamily == AF_INET6) {
+          tosWord = (tosWord & 0x0FC00000) >> 20;
+          ret = setsockopt(
+              clientSocket,
+              IPPROTO_IPV6,
+              IPV6_TCLASS,
+              &tosWord,
+              sizeof(tosWord));
+        } else if (addressFamily == AF_INET) {
+          tosWord = (tosWord & 0x00FC0000) >> 16;
+          ret = setsockopt(
+              clientSocket, IPPROTO_IP, IP_TOS, &tosWord, sizeof(tosWord));
+        }
+
+        if (ret != 0) {
+          LOG(ERROR) << "Unable to set TOS for accepted socket "
+                     << clientSocket;
+        }
+      } else {
+        LOG(ERROR) << "Unable to get SYN packet for accepted socket "
+                   << clientSocket;
+      }
     }
 
     std::chrono::time_point<std::chrono::steady_clock> nowMs =
@@ -927,7 +998,7 @@ void AsyncServerSocket::dispatchSocket(int socket, SocketAddress&& address) {
   // Short circuit if the callback is in the primary EventBase thread
 
   CallbackInfo* info = nextCallback();
-  if (info->eventBase == nullptr) {
+  if (info->eventBase == nullptr || info->eventBase == this->eventBase_) {
     info->callback->connectionAccepted(socket, address);
     return;
   }
@@ -994,7 +1065,7 @@ void AsyncServerSocket::dispatchError(const char* msgstr, int errnoValue) {
 
   while (true) {
     // Short circuit if the callback is in the primary EventBase thread
-    if (info->eventBase == nullptr) {
+    if (info->eventBase == nullptr || info->eventBase == this->eventBase_) {
       std::runtime_error ex(
           std::string(msgstr) + folly::to<std::string>(errnoValue));
       info->callback->acceptError(ex);

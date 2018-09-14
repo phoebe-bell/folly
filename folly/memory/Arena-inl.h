@@ -48,7 +48,7 @@ void* Arena<Alloc>::allocateSlow(size_t size) {
   size_t allocSize = std::max(size, minBlockSize()) + sizeof(Block);
   if (sizeLimit_ != kNoSizeLimit &&
       allocSize > sizeLimit_ - totalAllocatedSize_) {
-    throw std::bad_alloc();
+    throw_exception(std::bad_alloc());
   }
 
   if (size > minBlockSize()) {
@@ -84,7 +84,7 @@ void Arena<Alloc>::merge(Arena<Alloc>&& other) {
 
 template <class Alloc>
 Arena<Alloc>::~Arena() {
-  auto disposer = [this] (Block* b) { b->deallocate(this->alloc()); };
+  auto disposer = [this](Block* b) { b->deallocate(this->alloc()); };
   while (!blocks_.empty()) {
     blocks_.pop_front_and_dispose(disposer);
   }

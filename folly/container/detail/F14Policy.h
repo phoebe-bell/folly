@@ -17,7 +17,6 @@
 #pragma once
 
 #include <memory>
-#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -48,6 +47,39 @@ using SetOrMapValueType = std::conditional_t<
     KeyType,
     MapValueType<KeyType, MappedTypeOrVoid>>;
 
+// Used to enable EBO for Hasher, KeyEqual, and Alloc.  std::tuple of
+// all empty objects is empty in libstdc++ but not libc++.
+template <
+    char Tag,
+    typename T,
+    bool Inherit = std::is_empty<T>::value && !std::is_final<T>::value>
+struct ObjectHolder {
+  T value_;
+
+  template <typename... Args>
+  ObjectHolder(Args&&... args) : value_{std::forward<Args>(args)...} {}
+
+  T& operator*() {
+    return value_;
+  }
+  T const& operator*() const {
+    return value_;
+  }
+};
+
+template <char Tag, typename T>
+struct ObjectHolder<Tag, T, true> : private T {
+  template <typename... Args>
+  ObjectHolder(Args&&... args) : T{std::forward<Args>(args)...} {}
+
+  T& operator*() {
+    return *this;
+  }
+  T const& operator*() const {
+    return *this;
+  }
+};
+
 // Policy provides the functionality of hasher, key_equal, and
 // allocator_type.  In addition, it can add indirection to the values
 // contained in the base table by defining a non-trivial value() method.
@@ -76,9 +108,14 @@ template <
     typename AllocOrVoid,
     typename ItemType>
 struct BasePolicy
-    : std::tuple<
-          Defaulted<HasherOrVoid, DefaultHasher<KeyType>>,
-          Defaulted<KeyEqualOrVoid, DefaultKeyEqual<KeyType>>,
+    : private ObjectHolder<
+          'H',
+          Defaulted<HasherOrVoid, DefaultHasher<KeyType>>>,
+      private ObjectHolder<
+          'E',
+          Defaulted<KeyEqualOrVoid, DefaultKeyEqual<KeyType>>>,
+      private ObjectHolder<
+          'A',
           Defaulted<
               AllocOrVoid,
               DefaultAlloc<SetOrMapValueType<KeyType, MappedTypeOrVoid>>>> {
@@ -104,6 +141,10 @@ struct BasePolicy
       "wrong allocator value_type");
 
  private:
+  using HasherHolder = ObjectHolder<'H', Hasher>;
+  using KeyEqualHolder = ObjectHolder<'E', KeyEqual>;
+  using AllocHolder = ObjectHolder<'A', Alloc>;
+
   // emulate c++17's std::allocator_traits<A>::is_always_equal
 
   template <typename A, typename = void>
@@ -139,8 +180,6 @@ struct BasePolicy
 
   using InternalSizeType = std::size_t;
 
-  using Super = std::tuple<Hasher, KeyEqual, Alloc>;
-
   // if false, F14Table will be smaller but F14Table::begin() won't work
   static constexpr bool kEnableItemIteration = true;
 
@@ -159,24 +198,28 @@ struct BasePolicy
   //////// methods
 
   BasePolicy(Hasher const& hasher, KeyEqual const& keyEqual, Alloc const& alloc)
-      : Super{hasher, keyEqual, alloc} {}
+      : HasherHolder{hasher}, KeyEqualHolder{keyEqual}, AllocHolder{alloc} {}
 
   BasePolicy(BasePolicy const& rhs)
-      : Super{rhs.hasher(),
-              rhs.keyEqual(),
-              AllocTraits::select_on_container_copy_construction(rhs.alloc())} {
-  }
+      : HasherHolder{rhs.hasher()},
+        KeyEqualHolder{rhs.keyEqual()},
+        AllocHolder{
+            AllocTraits::select_on_container_copy_construction(rhs.alloc())} {}
 
   BasePolicy(BasePolicy const& rhs, Alloc const& alloc)
-      : Super{rhs.hasher(), rhs.keyEqual(), alloc} {}
+      : HasherHolder{rhs.hasher()},
+        KeyEqualHolder{rhs.keyEqual()},
+        AllocHolder{alloc} {}
 
   BasePolicy(BasePolicy&& rhs) noexcept
-      : Super{std::move(rhs.hasher()),
-              std::move(rhs.keyEqual()),
-              std::move(rhs.alloc())} {}
+      : HasherHolder{std::move(rhs.hasher())},
+        KeyEqualHolder{std::move(rhs.keyEqual())},
+        AllocHolder{std::move(rhs.alloc())} {}
 
   BasePolicy(BasePolicy&& rhs, Alloc const& alloc) noexcept
-      : Super{std::move(rhs.hasher()), std::move(rhs.keyEqual()), alloc} {}
+      : HasherHolder{std::move(rhs.hasher())},
+        KeyEqualHolder{std::move(rhs.keyEqual())},
+        AllocHolder{alloc} {}
 
   BasePolicy& operator=(BasePolicy const& rhs) {
     hasher() = rhs.hasher();
@@ -206,22 +249,22 @@ struct BasePolicy
   }
 
   Hasher& hasher() {
-    return std::get<0>(*this);
+    return *static_cast<HasherHolder&>(*this);
   }
   Hasher const& hasher() const {
-    return std::get<0>(*this);
+    return *static_cast<HasherHolder const&>(*this);
   }
   KeyEqual& keyEqual() {
-    return std::get<1>(*this);
+    return *static_cast<KeyEqualHolder&>(*this);
   }
   KeyEqual const& keyEqual() const {
-    return std::get<1>(*this);
+    return *static_cast<KeyEqualHolder const&>(*this);
   }
   Alloc& alloc() {
-    return std::get<2>(*this);
+    return *static_cast<AllocHolder&>(*this);
   }
   Alloc const& alloc() const {
-    return std::get<2>(*this);
+    return *static_cast<AllocHolder const&>(*this);
   }
 
   template <typename K>
@@ -375,13 +418,13 @@ using ValueContainerIteratorBase = BaseIter<
 template <typename ValuePtr>
 class ValueContainerIterator : public ValueContainerIteratorBase<ValuePtr> {
   using Super = ValueContainerIteratorBase<ValuePtr>;
-  using typename Super::ItemIter;
-  using typename Super::ValueConstPtr;
+  using ItemIter = typename Super::ItemIter;
+  using ValueConstPtr = typename Super::ValueConstPtr;
 
  public:
-  using typename Super::pointer;
-  using typename Super::reference;
-  using typename Super::value_type;
+  using pointer = typename Super::pointer;
+  using reference = typename Super::reference;
+  using value_type = typename Super::value_type;
 
   ValueContainerIterator() = default;
   ValueContainerIterator(ValueContainerIterator const&) = default;
@@ -454,14 +497,14 @@ class ValueContainerPolicy : public BasePolicy<
       KeyEqualOrVoid,
       AllocOrVoid,
       SetOrMapValueType<Key, MappedTypeOrVoid>>;
-  using typename Super::Alloc;
-  using typename Super::AllocTraits;
-  using typename Super::Item;
-  using typename Super::ItemIter;
-  using typename Super::Value;
+  using Alloc = typename Super::Alloc;
+  using AllocTraits = typename Super::AllocTraits;
+  using Item = typename Super::Item;
+  using ItemIter = typename Super::ItemIter;
+  using Value = typename Super::Value;
 
  private:
-  using typename Super::ByteAlloc;
+  using ByteAlloc = typename Super::ByteAlloc;
 
   using Super::kIsMap;
 
@@ -615,13 +658,13 @@ class NodeContainerPolicy;
 template <typename ValuePtr>
 class NodeContainerIterator : public BaseIter<ValuePtr, NonConstPtr<ValuePtr>> {
   using Super = BaseIter<ValuePtr, NonConstPtr<ValuePtr>>;
-  using typename Super::ItemIter;
-  using typename Super::ValueConstPtr;
+  using ItemIter = typename Super::ItemIter;
+  using ValueConstPtr = typename Super::ValueConstPtr;
 
  public:
-  using typename Super::pointer;
-  using typename Super::reference;
-  using typename Super::value_type;
+  using pointer = typename Super::pointer;
+  using reference = typename Super::reference;
+  using value_type = typename Super::value_type;
 
   NodeContainerIterator() = default;
   NodeContainerIterator(NodeContainerIterator const&) = default;
@@ -705,14 +748,14 @@ class NodeContainerPolicy
               std::is_void<MappedTypeOrVoid>::value,
               Key,
               MapValueType<Key, MappedTypeOrVoid>>>>>::pointer>;
-  using typename Super::Alloc;
-  using typename Super::AllocTraits;
-  using typename Super::Item;
-  using typename Super::ItemIter;
-  using typename Super::Value;
+  using Alloc = typename Super::Alloc;
+  using AllocTraits = typename Super::AllocTraits;
+  using Item = typename Super::Item;
+  using ItemIter = typename Super::ItemIter;
+  using Value = typename Super::Value;
 
  private:
-  using typename Super::ByteAlloc;
+  using ByteAlloc = typename Super::ByteAlloc;
 
   using Super::kIsMap;
 
@@ -851,12 +894,12 @@ class VectorContainerPolicy;
 template <typename ValuePtr>
 class VectorContainerIterator : public BaseIter<ValuePtr, uint32_t> {
   using Super = BaseIter<ValuePtr, uint32_t>;
-  using typename Super::ValueConstPtr;
+  using ValueConstPtr = typename Super::ValueConstPtr;
 
  public:
-  using typename Super::pointer;
-  using typename Super::reference;
-  using typename Super::value_type;
+  using pointer = typename Super::pointer;
+  using reference = typename Super::reference;
+  using value_type = typename Super::value_type;
 
   VectorContainerIterator() = default;
   VectorContainerIterator(VectorContainerIterator const&) = default;
@@ -942,16 +985,16 @@ class VectorContainerPolicy : public BasePolicy<
       KeyEqualOrVoid,
       AllocOrVoid,
       uint32_t>;
-  using typename Super::Alloc;
-  using typename Super::AllocTraits;
-  using typename Super::ByteAlloc;
-  using typename Super::ByteAllocTraits;
-  using typename Super::BytePtr;
-  using typename Super::Hasher;
-  using typename Super::Item;
-  using typename Super::ItemIter;
-  using typename Super::KeyEqual;
-  using typename Super::Value;
+  using Alloc = typename Super::Alloc;
+  using AllocTraits = typename Super::AllocTraits;
+  using ByteAlloc = typename Super::ByteAlloc;
+  using ByteAllocTraits = typename Super::ByteAllocTraits;
+  using BytePtr = typename Super::BytePtr;
+  using Hasher = typename Super::Hasher;
+  using Item = typename Super::Item;
+  using ItemIter = typename Super::ItemIter;
+  using KeyEqual = typename Super::KeyEqual;
+  using Value = typename Super::Value;
 
   using Super::kAllocIsAlwaysEqual;
 
@@ -1067,8 +1110,7 @@ class VectorContainerPolicy : public BasePolicy<
   template <typename K>
   std::size_t computeKeyHash(K const& key) const {
     static_assert(
-        Super::isAvalanchingHasher() ==
-            IsAvalanchingHasher<typename Super::Hasher, K>::value,
+        Super::isAvalanchingHasher() == IsAvalanchingHasher<Hasher, K>::value,
         "");
     return this->hasher()(key);
   }
@@ -1115,7 +1157,8 @@ class VectorContainerPolicy : public BasePolicy<
   template <typename... Args>
   void constructValueAtItem(std::size_t size, Item* itemAddr, Args&&... args) {
     Alloc& a = this->alloc();
-    *itemAddr = size;
+    FOLLY_SAFE_DCHECK(size < std::numeric_limits<InternalSizeType>::max(), "");
+    *itemAddr = static_cast<InternalSizeType>(size);
     auto dst = std::addressof(values_[size]);
     // TODO(T31574848): clean up assume-s used to optimize placement new
     assume(dst != nullptr);
@@ -1147,7 +1190,7 @@ class VectorContainerPolicy : public BasePolicy<
     complainUnlessNothrowMove<lift_unit_t<MappedTypeOrVoid>>();
 
     if (valueIsTriviallyCopyable()) {
-      std::memcpy(dst, src, n * sizeof(Value));
+      std::memcpy(static_cast<void*>(dst), src, n * sizeof(Value));
     } else {
       for (std::size_t i = 0; i < n; ++i, ++src, ++dst) {
         // TODO(T31574848): clean up assume-s used to optimize placement new

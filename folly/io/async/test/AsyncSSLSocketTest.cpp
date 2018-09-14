@@ -16,6 +16,7 @@
 #include <folly/io/async/test/AsyncSSLSocketTest.h>
 
 #include <folly/SocketAddress.h>
+#include <folly/String.h>
 #include <folly/io/Cursor.h>
 #include <folly/io/async/AsyncPipe.h>
 #include <folly/io/async/AsyncSSLSocket.h>
@@ -109,17 +110,17 @@ constexpr size_t SSLClient::kMaxReadsPerEvent;
 
 void getfds(int fds[2]) {
   if (socketpair(PF_LOCAL, SOCK_STREAM, 0, fds) != 0) {
-    FAIL() << "failed to create socketpair: " << strerror(errno);
+    FAIL() << "failed to create socketpair: " << errnoStr(errno);
   }
   for (int idx = 0; idx < 2; ++idx) {
     int flags = fcntl(fds[idx], F_GETFL, 0);
     if (flags == -1) {
       FAIL() << "failed to get flags for socket " << idx << ": "
-             << strerror(errno);
+             << errnoStr(errno);
     }
     if (fcntl(fds[idx], F_SETFL, flags | O_NONBLOCK) != 0) {
       FAIL() << "failed to put socket " << idx
-             << " in non-blocking mode: " << strerror(errno);
+             << " in non-blocking mode: " << errnoStr(errno);
     }
   }
 }
@@ -176,33 +177,6 @@ std::string getFileAsBuf(const char* fileName) {
   std::string buffer;
   folly::readFile(fileName, buffer);
   return buffer;
-}
-
-std::string getCommonName(X509* cert) {
-  X509_NAME* subject = X509_get_subject_name(cert);
-  std::string cn;
-  cn.resize(ub_common_name);
-  X509_NAME_get_text_by_NID(
-      subject, NID_commonName, const_cast<char*>(cn.data()), ub_common_name);
-  return cn;
-}
-
-TEST(AsyncSSLSocketTest, ClientCertValidationResultTest) {
-  EventBase ev;
-  int fd = 0;
-
-  AsyncSSLSocket::UniquePtr sock(
-      new AsyncSSLSocket(std::make_shared<SSLContext>(), &ev, fd, false));
-
-  // Initially the cert is not validated, so no result is available.
-  EXPECT_EQ(nullptr, get_pointer(sock->getClientCertValidationResult()));
-
-  sock->setClientCertValidationResult(
-      make_optional(AsyncSSLSocket::CertValidationResult::CERT_VALID));
-
-  EXPECT_EQ(
-      AsyncSSLSocket::CertValidationResult::CERT_VALID,
-      *sock->getClientCertValidationResult());
 }
 
 /**
@@ -1603,6 +1577,23 @@ TEST(AsyncSSLSocketTest, ClientCertHandshakeSuccess) {
   EXPECT_TRUE(server.handshakeSuccess_);
   EXPECT_FALSE(server.handshakeError_);
   EXPECT_LE(0, server.handshakeTime.count());
+
+  // check certificates
+  auto clientSsl = std::move(client).moveSocket();
+  auto serverSsl = std::move(server).moveSocket();
+
+  auto clientPeer = clientSsl->getPeerCertificate();
+  auto clientSelf = clientSsl->getSelfCertificate();
+  auto serverPeer = serverSsl->getPeerCertificate();
+  auto serverSelf = serverSsl->getSelfCertificate();
+
+  EXPECT_NE(clientPeer, nullptr);
+  EXPECT_NE(clientSelf, nullptr);
+  EXPECT_NE(serverPeer, nullptr);
+  EXPECT_NE(serverSelf, nullptr);
+
+  EXPECT_EQ(clientPeer->getIdentity(), serverSelf->getIdentity());
+  EXPECT_EQ(clientSelf->getIdentity(), serverPeer->getIdentity());
 }
 
 /**
@@ -1895,6 +1886,7 @@ TEST(AsyncSSLSocketTest, OpenSSL110AsyncTestFailure) {
 #endif // FOLLY_OPENSSL_IS_110
 
 TEST(AsyncSSLSocketTest, LoadCertFromMemory) {
+  using folly::ssl::OpenSSLUtils;
   auto cert = getFileAsBuf(kTestCert);
   auto key = getFileAsBuf(kTestKey);
 
@@ -1911,7 +1903,7 @@ TEST(AsyncSSLSocketTest, LoadCertFromMemory) {
   certBio = nullptr;
   keyBio = nullptr;
 
-  auto origCommonName = getCommonName(certStruct.get());
+  auto origCommonName = OpenSSLUtils::getCommonName(certStruct.get());
   auto origKeySize = EVP_PKEY_bits(keyStruct.get());
   certStruct = nullptr;
   keyStruct = nullptr;
@@ -1927,7 +1919,7 @@ TEST(AsyncSSLSocketTest, LoadCertFromMemory) {
   auto newKey = SSL_get_privatekey(ssl.get());
 
   // Get properties from SSL struct
-  auto newCommonName = getCommonName(newCert);
+  auto newCommonName = OpenSSLUtils::getCommonName(newCert);
   auto newKeySize = EVP_PKEY_bits(newKey);
 
   // Check that the key and cert have the expected properties

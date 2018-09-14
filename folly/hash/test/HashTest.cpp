@@ -409,14 +409,14 @@ TEST(Hash, float_types) {
 // Not a full hasher since only handles one type
 class TestHasher {
  public:
-  static size_t hash(const std::pair<int, int>& p) {
+  size_t operator()(const std::pair<int, int>& p) const {
     return p.first + p.second;
   }
 };
 
 template <typename T, typename... Ts>
 size_t hash_combine_test(const T& t, const Ts&... ts) {
-  return hash_combine_generic<TestHasher>(t, ts...);
+  return hash_combine_generic(TestHasher{}, t, ts...);
 }
 
 TEST(Hash, pair) {
@@ -448,6 +448,7 @@ TEST(Hash, pair) {
 }
 
 TEST(Hash, hash_combine) {
+  EXPECT_TRUE(noexcept(hash_combine(1, 2)));
   EXPECT_NE(hash_combine(1, 2), hash_combine(2, 1));
 }
 

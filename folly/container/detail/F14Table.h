@@ -48,23 +48,30 @@
 #include <folly/container/detail/F14IntrinsicsAvailability.h>
 
 #if FOLLY_F14_VECTOR_INTRINSICS_AVAILABLE
+
+#if FOLLY_F14_CRC_INTRINSIC_AVAILABLE
 #if FOLLY_NEON
-#ifdef __ARM_FEATURE_CRC32
 #include <arm_acle.h> // __crc32cd
+#else
+#include <nmmintrin.h> // _mm_crc32_u64
 #endif
+#else
+#ifdef _WIN32
+#include <intrin.h> // _mul128 in fallback bit mixer
+#endif
+#endif
+
+#if FOLLY_NEON
 #include <arm_neon.h> // uint8x16t intrinsics
 #else // SSE2
 #include <immintrin.h> // __m128i intrinsics
-#include <nmmintrin.h> // _mm_crc32_u64
 #include <xmmintrin.h> // _mm_prefetch
 #endif
-#endif
 
-#ifdef _WIN32
-#include <intrin.h> // for _mul128
 #endif
 
 namespace folly {
+
 struct F14TableStats {
   char const* policy;
   std::size_t size{0};
@@ -98,6 +105,24 @@ struct F14TableStats {
 
 namespace f14 {
 namespace detail {
+
+template <F14IntrinsicsMode>
+struct F14LinkCheck {};
+
+template <>
+struct F14LinkCheck<getF14IntrinsicsMode()> {
+  // The purpose of this method is to trigger a link failure if
+  // compilation flags vary across compilation units.  The definition
+  // is in F14Table.cpp, so only one of F14LinkCheck<None>::check,
+  // F14LinkCheck<Simd>::check, or F14LinkCheck<SimdAndCrc>::check will
+  // be available at link time.
+  //
+  // To cause a link failure the function must be invoked in code that
+  // is not optimized away, so we call it on a couple of cold paths
+  // (exception handling paths in copy construction and rehash).  LTO may
+  // remove it entirely, but that's fine.
+  static void check() noexcept;
+};
 
 #if defined(_LIBCPP_VERSION)
 
@@ -156,7 +181,7 @@ class F14HashToken final {
   F14HashToken() = default;
 
  private:
-  using HashPair = std::pair<std::size_t, uint8_t>;
+  using HashPair = std::pair<std::size_t, std::size_t>;
 
   explicit F14HashToken(HashPair hp) : hp_(hp) {}
   explicit operator HashPair() const {
@@ -552,7 +577,7 @@ struct alignas(kRequiredVectorAlignment) F14Chunk {
 
   void copyOverflowInfoFrom(F14Chunk const& rhs) {
     FOLLY_SAFE_DCHECK(hostedOverflowCount() == 0, "");
-    control_ += rhs.control_ & 0xf0;
+    control_ += static_cast<uint8_t>(rhs.control_ & 0xf0);
     outboundOverflowCount_ = rhs.outboundOverflowCount_;
   }
 
@@ -600,13 +625,14 @@ struct alignas(kRequiredVectorAlignment) F14Chunk {
     }
   }
 
-  uint8_t tag(std::size_t index) const {
+  std::size_t tag(std::size_t index) const {
     return tags_[index];
   }
 
-  void setTag(std::size_t index, uint8_t tag) {
-    FOLLY_SAFE_DCHECK(this != emptyInstance() && (tag & 0x80) != 0, "");
-    tags_[index] = tag;
+  void setTag(std::size_t index, std::size_t tag) {
+    FOLLY_SAFE_DCHECK(
+        this != emptyInstance() && tag >= 0x80 && tag <= 0xff, "");
+    tags_[index] = static_cast<uint8_t>(tag);
   }
 
   void clearTag(std::size_t index) {
@@ -617,10 +643,10 @@ struct alignas(kRequiredVectorAlignment) F14Chunk {
   ////////
   // Tag filtering using NEON intrinsics
 
-  SparseMaskIter tagMatchIter(uint8_t needle) const {
-    FOLLY_SAFE_DCHECK((needle & 0x80) != 0, "");
+  SparseMaskIter tagMatchIter(std::size_t needle) const {
+    FOLLY_SAFE_DCHECK(needle >= 0x80 && needle < 0x100, "");
     uint8x16_t tagV = vld1q_u8(&tags_[0]);
-    auto needleV = vdupq_n_u8(needle);
+    auto needleV = vdupq_n_u8(static_cast<uint8_t>(needle));
     auto eqV = vceqq_u8(tagV, needleV);
     // get info from every byte into the bottom half of every uint16_t
     // by shifting right 4, then round to get it into a 64-bit vector
@@ -645,10 +671,27 @@ struct alignas(kRequiredVectorAlignment) F14Chunk {
     return static_cast<TagVector const*>(static_cast<void const*>(&tags_[0]));
   }
 
-  SparseMaskIter tagMatchIter(uint8_t needle) const {
-    FOLLY_SAFE_DCHECK((needle & 0x80) != 0, "");
+  SparseMaskIter tagMatchIter(std::size_t needle) const {
+    FOLLY_SAFE_DCHECK(needle >= 0x80 && needle < 0x100, "");
     auto tagV = _mm_load_si128(tagVector());
-    auto needleV = _mm_set1_epi8(needle);
+
+    // TRICKY!  It may seem strange to have a std::size_t needle and narrow
+    // it at the last moment, rather than making HashPair::second be a
+    // uint8_t, but the latter choice sometimes leads to a performance
+    // problem.
+    //
+    // On architectures with SSE2 but not AVX2, _mm_set1_epi8 expands
+    // to multiple instructions.  One of those is a MOVD of either 4 or
+    // 8 byte width.  Only the bottom byte of that move actually affects
+    // the result, but if a 1-byte needle has been spilled then this will
+    // be a 4 byte load.  GCC 5.5 has been observed to reload needle
+    // (or perhaps fuse a reload and part of a previous static_cast)
+    // needle using a MOVZX with a 1 byte load in parallel with the MOVD.
+    // This combination causes a failure of store-to-load forwarding,
+    // which has a big performance penalty (60 nanoseconds per find on
+    // a microbenchmark).  Keeping needle >= 4 bytes avoids the problem
+    // and also happens to result in slightly more compact assembly.
+    auto needleV = _mm_set1_epi8(static_cast<uint8_t>(needle));
     auto eqV = _mm_cmpeq_epi8(tagV, needleV);
     auto mask = _mm_movemask_epi8(eqV) & kFullMask;
     return SparseMaskIter{mask};
@@ -1028,16 +1071,28 @@ struct SizeAndPackedBegin<SizeType, ItemIter, false> {
 template <typename Policy>
 class F14Table : public Policy {
  public:
-  using typename Policy::Item;
+  using Item = typename Policy::Item;
+
   using value_type = typename Policy::Value;
   using allocator_type = typename Policy::Alloc;
 
  private:
+  using Alloc = typename Policy::Alloc;
+  using AllocTraits = typename Policy::AllocTraits;
+  using Hasher = typename Policy::Hasher;
+  using InternalSizeType = typename Policy::InternalSizeType;
+  using KeyEqual = typename Policy::KeyEqual;
+
   using Policy::kAllocIsAlwaysEqual;
   using Policy::kDefaultConstructIsNoexcept;
+  using Policy::kEnableItemIteration;
   using Policy::kSwapIsNoexcept;
 
-  using AllocTraits = typename Policy::AllocTraits;
+  using Policy::destroyItemOnClear;
+  using Policy::isAvalanchingHasher;
+  using Policy::prefetchBeforeCopy;
+  using Policy::prefetchBeforeDestroy;
+  using Policy::prefetchBeforeRehash;
 
   using ByteAlloc = typename AllocTraits::template rebind_alloc<uint8_t>;
   using BytePtr = typename std::allocator_traits<ByteAlloc>::pointer;
@@ -1055,11 +1110,8 @@ class F14Table : public Policy {
   //////// begin fields
 
   ChunkPtr chunks_{Chunk::emptyInstance()};
-  typename Policy::InternalSizeType chunkMask_{0};
-  SizeAndPackedBegin<
-      typename Policy::InternalSizeType,
-      ItemIter,
-      Policy::kEnableItemIteration>
+  InternalSizeType chunkMask_{0};
+  SizeAndPackedBegin<InternalSizeType, ItemIter, kEnableItemIteration>
       sizeAndPackedBegin_;
 
   //////// end fields
@@ -1069,7 +1121,7 @@ class F14Table : public Policy {
     swap(chunks_, rhs.chunks_);
     swap(chunkMask_, rhs.chunkMask_);
     swap(sizeAndPackedBegin_.size_, rhs.sizeAndPackedBegin_.size_);
-    if (Policy::kEnableItemIteration) {
+    if (kEnableItemIteration) {
       swap(
           sizeAndPackedBegin_.packedBegin(),
           rhs.sizeAndPackedBegin_.packedBegin());
@@ -1079,9 +1131,9 @@ class F14Table : public Policy {
  public:
   F14Table(
       std::size_t initialCapacity,
-      typename Policy::Hasher const& hasher,
-      typename Policy::KeyEqual const& keyEqual,
-      typename Policy::Alloc const& alloc)
+      Hasher const& hasher,
+      KeyEqual const& keyEqual,
+      Alloc const& alloc)
       : Policy{hasher, keyEqual, alloc} {
     if (initialCapacity > 0) {
       reserve(initialCapacity);
@@ -1092,21 +1144,19 @@ class F14Table : public Policy {
     buildFromF14Table(rhs);
   }
 
-  F14Table(F14Table const& rhs, typename Policy::Alloc const& alloc)
-      : Policy{rhs, alloc} {
+  F14Table(F14Table const& rhs, Alloc const& alloc) : Policy{rhs, alloc} {
     buildFromF14Table(rhs);
   }
 
   F14Table(F14Table&& rhs) noexcept(
-      std::is_nothrow_move_constructible<typename Policy::Hasher>::value&&
-          std::is_nothrow_move_constructible<typename Policy::KeyEqual>::value&&
-              std::is_nothrow_move_constructible<typename Policy::Alloc>::value)
+      std::is_nothrow_move_constructible<Hasher>::value&&
+          std::is_nothrow_move_constructible<KeyEqual>::value&&
+              std::is_nothrow_move_constructible<Alloc>::value)
       : Policy{std::move(rhs)} {
     swapContents(rhs);
   }
 
-  F14Table(F14Table&& rhs, typename Policy::Alloc const& alloc) noexcept(
-      kAllocIsAlwaysEqual)
+  F14Table(F14Table&& rhs, Alloc const& alloc) noexcept(kAllocIsAlwaysEqual)
       : Policy{std::move(rhs), alloc} {
     if (kAllocIsAlwaysEqual || this->alloc() == rhs.alloc()) {
       // move storage (common case)
@@ -1127,11 +1177,11 @@ class F14Table : public Policy {
   }
 
   F14Table& operator=(F14Table&& rhs) noexcept(
-      std::is_nothrow_move_assignable<typename Policy::Hasher>::value&&
-          std::is_nothrow_move_assignable<typename Policy::KeyEqual>::value &&
+      std::is_nothrow_move_assignable<Hasher>::value&&
+          std::is_nothrow_move_assignable<KeyEqual>::value &&
       (kAllocIsAlwaysEqual ||
        (AllocTraits::propagate_on_container_move_assignment::value &&
-        std::is_nothrow_move_assignable<typename Policy::Alloc>::value))) {
+        std::is_nothrow_move_assignable<Alloc>::value))) {
     if (this != &rhs) {
       reset();
       static_cast<Policy&>(*this) = std::move(rhs);
@@ -1204,18 +1254,20 @@ class F14Table : public Policy {
   // 64-bit
   static HashPair splitHash(std::size_t hash) {
     static_assert(sizeof(std::size_t) == sizeof(uint64_t), "");
-    uint8_t tag;
-    if (!Policy::isAvalanchingHasher()) {
-#if FOLLY_SSE_PREREQ(4, 2)
+    std::size_t tag;
+    if (!isAvalanchingHasher()) {
+#if FOLLY_F14_CRC_INTRINSIC_AVAILABLE
+#if FOLLY_SSE
       // SSE4.2 CRC
-      auto c = _mm_crc32_u64(0, hash);
-      tag = static_cast<uint8_t>(~(c >> 25));
+      std::size_t c = _mm_crc32_u64(0, hash);
+      tag = (c >> 24) | 0x80;
       hash += c;
-#elif __ARM_FEATURE_CRC32
+#else
       // CRC is optional on armv8 (-march=armv8-a+crc), standard on armv8.1
-      auto c = __crc32cd(0, hash);
-      tag = static_cast<uint8_t>(~(c >> 25));
+      std::size_t c = __crc32cd(0, hash);
+      tag = (c >> 24) | 0x80;
       hash += c;
+#endif
 #else
       // The mixer below is not fully avalanching for all 64 bits of
       // output, but looks quite good for bits 18..63 and puts plenty
@@ -1240,7 +1292,7 @@ class F14Table : public Policy {
 #endif
       hash = hi ^ lo;
       hash *= kMul;
-      tag = static_cast<uint8_t>(hash >> 15) | 0x80;
+      tag = ((hash >> 15) & 0x7f) | 0x80;
       hash >>= 22;
 #endif
     } else {
@@ -1254,16 +1306,18 @@ class F14Table : public Policy {
   static HashPair splitHash(std::size_t hash) {
     static_assert(sizeof(std::size_t) == sizeof(uint32_t), "");
     uint8_t tag;
-    if (!Policy::isAvalanchingHasher()) {
-#if FOLLY_SSE_PREREQ(4, 2)
+    if (!isAvalanchingHasher()) {
+#if FOLLY_F14_CRC_INTRINSIC_AVAILABLE
+#if FOLLY_SSE
       // SSE4.2 CRC
       auto c = _mm_crc32_u32(0, hash);
       tag = static_cast<uint8_t>(~(c >> 25));
       hash += c;
-#elif __ARM_FEATURE_CRC32
+#else
       auto c = __crc32cw(0, hash);
       tag = static_cast<uint8_t>(~(c >> 25));
       hash += c;
+#endif
 #else
       // finalizer for 32-bit murmur2
       hash ^= hash >> 13;
@@ -1308,7 +1362,7 @@ class F14Table : public Policy {
 
  public:
   ItemIter begin() const noexcept {
-    FOLLY_SAFE_DCHECK(Policy::kEnableItemIteration, "");
+    FOLLY_SAFE_DCHECK(kEnableItemIteration, "");
     return ItemIter{sizeAndPackedBegin_.packedBegin()};
   }
 
@@ -1320,14 +1374,14 @@ class F14Table : public Policy {
     return size() == 0;
   }
 
-  std::size_t size() const noexcept {
+  InternalSizeType size() const noexcept {
     return sizeAndPackedBegin_.size_;
   }
 
   std::size_t max_size() const noexcept {
     auto& a = this->alloc();
     return std::min<std::size_t>(
-        (std::numeric_limits<typename Policy::InternalSizeType>::max)(),
+        (std::numeric_limits<InternalSizeType>::max)(),
         AllocTraits::max_size(a));
   }
 
@@ -1475,7 +1529,7 @@ class F14Table : public Policy {
 
  private:
   void adjustSizeAndBeginAfterInsert(ItemIter iter) {
-    if (Policy::kEnableItemIteration) {
+    if (kEnableItemIteration) {
       // packedBegin is the max of all valid ItemIter::pack()
       auto packed = iter.pack();
       if (sizeAndPackedBegin_.packedBegin() < packed) {
@@ -1510,7 +1564,7 @@ class F14Table : public Policy {
 
   void adjustSizeAndBeginBeforeErase(ItemIter iter) {
     --sizeAndPackedBegin_.size_;
-    if (Policy::kEnableItemIteration) {
+    if (kEnableItemIteration) {
       if (iter.pack() == sizeAndPackedBegin_.packedBegin()) {
         if (size() == 0) {
           iter = ItemIter{};
@@ -1558,7 +1612,7 @@ class F14Table : public Policy {
 
   ChunkPtr lastOccupiedChunk() const {
     FOLLY_SAFE_DCHECK(size() > 0, "");
-    if (Policy::kEnableItemIteration) {
+    if (kEnableItemIteration) {
       return begin().chunk();
     } else {
       return chunks_ + chunkMask_;
@@ -1598,7 +1652,7 @@ class F14Table : public Policy {
       auto n = chunkAllocSize(chunkMask_ + 1, bucket_count());
       std::memcpy(&chunks_[0], &src.chunks_[0], n);
       sizeAndPackedBegin_.size_ = src.size();
-      if (Policy::kEnableItemIteration) {
+      if (kEnableItemIteration) {
         auto srcBegin = src.begin();
         sizeAndPackedBegin_.packedBegin() =
             ItemIter{chunks_ + (srcBegin.chunk() - src.chunks_),
@@ -1616,7 +1670,7 @@ class F14Table : public Policy {
         dstChunk->copyOverflowInfoFrom(*srcChunk);
 
         auto iter = srcChunk->occupiedIter();
-        if (Policy::prefetchBeforeCopy()) {
+        if (prefetchBeforeCopy()) {
           for (auto piter = iter; piter.hasNext();) {
             this->prefetchValue(srcChunk->citem(piter.next()));
           }
@@ -1639,7 +1693,7 @@ class F14Table : public Policy {
       } while (size() != src.size());
 
       // reset doesn't care about packedBegin, so we don't fix it until the end
-      if (Policy::kEnableItemIteration) {
+      if (kEnableItemIteration) {
         sizeAndPackedBegin_.packedBegin() =
             ItemIter{chunks_ + maxChunkIndex,
                      chunks_[maxChunkIndex].lastOccupied().index()}
@@ -1702,7 +1756,7 @@ class F14Table : public Policy {
     while (true) {
       auto srcChunk = &src.chunks_[srcChunkIndex];
       auto iter = srcChunk->occupiedIter();
-      if (Policy::prefetchBeforeRehash()) {
+      if (prefetchBeforeRehash()) {
         for (auto piter = iter; piter.hasNext();) {
           this->prefetchValue(srcChunk->item(piter.next()));
         }
@@ -1760,6 +1814,7 @@ class F14Table : public Policy {
       }
     } catch (...) {
       reset();
+      F14LinkCheck<getF14IntrinsicsMode()>::check();
       throw;
     }
   }
@@ -1810,7 +1865,10 @@ class F14Table : public Policy {
         rawAllocation);
     chunks_ =
         initializeChunks(rawAllocation, newChunkCount, newMaxSizeWithoutRehash);
-    chunkMask_ = newChunkCount - 1;
+
+    FOLLY_SAFE_DCHECK(
+        newChunkCount < std::numeric_limits<InternalSizeType>::max(), "");
+    chunkMask_ = static_cast<InternalSizeType>(newChunkCount - 1);
 
     bool success = false;
     SCOPE_EXIT {
@@ -1829,7 +1887,10 @@ class F14Table : public Policy {
         finishedAllocSize =
             chunkAllocSize(newChunkCount, newMaxSizeWithoutRehash);
         chunks_ = origChunks;
-        chunkMask_ = origChunkCount - 1;
+        FOLLY_SAFE_DCHECK(
+            origChunkCount < std::numeric_limits<InternalSizeType>::max(), "");
+        chunkMask_ = static_cast<InternalSizeType>(origChunkCount - 1);
+        F14LinkCheck<getF14IntrinsicsMode()>::check();
       }
 
       this->afterRehash(
@@ -1859,7 +1920,7 @@ class F14Table : public Policy {
         }
         ++srcI;
       }
-      if (Policy::kEnableItemIteration) {
+      if (kEnableItemIteration) {
         sizeAndPackedBegin_.packedBegin() = ItemIter{dstChunk, dstI - 1}.pack();
       }
     } else {
@@ -1890,7 +1951,7 @@ class F14Table : public Policy {
       std::size_t remaining = size();
       while (remaining > 0) {
         auto iter = srcChunk->occupiedIter();
-        if (Policy::prefetchBeforeRehash()) {
+        if (prefetchBeforeRehash()) {
           for (auto piter = iter; piter.hasNext();) {
             this->prefetchValue(srcChunk->item(piter.next()));
           }
@@ -1909,7 +1970,7 @@ class F14Table : public Policy {
         --srcChunk;
       }
 
-      if (Policy::kEnableItemIteration) {
+      if (kEnableItemIteration) {
         // this code replaces size invocations of adjustSizeAndBeginAfterInsert
         std::size_t i = chunkMask_;
         while (fullness[i] == 0) {
@@ -2008,11 +2069,11 @@ class F14Table : public Policy {
     }
 
     if (!empty()) {
-      if (Policy::destroyItemOnClear()) {
+      if (destroyItemOnClear()) {
         for (std::size_t ci = 0; ci <= chunkMask_; ++ci) {
           ChunkPtr chunk = chunks_ + ci;
           auto iter = chunk->occupiedIter();
-          if (Policy::prefetchBeforeDestroy()) {
+          if (prefetchBeforeDestroy()) {
             for (auto piter = iter; piter.hasNext();) {
               this->prefetchValue(chunk->item(piter.next()));
             }
@@ -2032,7 +2093,7 @@ class F14Table : public Policy {
         }
         chunks_[0].markEof(c0c);
       }
-      if (Policy::kEnableItemIteration) {
+      if (kEnableItemIteration) {
         sizeAndPackedBegin_.packedBegin() = ItemIter{}.pack();
       }
       sizeAndPackedBegin_.size_ = 0;
@@ -2147,7 +2208,7 @@ class F14Table : public Policy {
     auto chunk = &chunks_[0];
     for (std::size_t i = 0; i <= maxChunkIndex; ++i, ++chunk) {
       auto iter = chunk->occupiedIter();
-      if (Policy::prefetchBeforeCopy()) {
+      if (prefetchBeforeCopy()) {
         for (auto piter = iter; piter.hasNext();) {
           this->prefetchValue(chunk->citem(piter.next()));
         }
@@ -2192,7 +2253,7 @@ class F14Table : public Policy {
   F14TableStats computeStats() const {
     F14TableStats stats;
 
-    if (kIsDebug && Policy::kEnableItemIteration) {
+    if (kIsDebug && kEnableItemIteration) {
       // validate iteration
       std::size_t n = 0;
       ItemIter prev;

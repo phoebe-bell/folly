@@ -72,6 +72,7 @@ set(
   "${CMAKE_CURRENT_SOURCE_DIR}:${CMAKE_CURRENT_BINARY_DIR}"
 )
 
+include(GNUInstallDirs)
 include(folly-deps) # Find the required packages
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
@@ -114,12 +115,13 @@ REMOVE_MATCHES_FROM_LISTS(files hfiles
 list(REMOVE_ITEM files
   ${FOLLY_DIR}/experimental/JSONSchemaTester.cpp
   ${FOLLY_DIR}/experimental/io/HugePageUtil.cpp
-  ${FOLLY_DIR}/experimental/symbolizer/ElfUtil.cpp
+  ${FOLLY_DIR}/python/fibers.cpp
   ${FOLLY_DIR}/python/GILAwareManualExecutor.cpp
 )
 list(REMOVE_ITEM hfiles
   ${FOLLY_DIR}/detail/SlowFingerprint.h
   ${FOLLY_DIR}/detail/FingerprintPolynomial.h
+  ${FOLLY_DIR}/python/fibers.h
   ${FOLLY_DIR}/python/GILAwareManualExecutor.h
 )
 
@@ -204,6 +206,11 @@ source_group("folly" FILES ${CMAKE_CURRENT_BINARY_DIR}/folly/folly-config.h)
 source_group("folly\\build" FILES
   ${CMAKE_CURRENT_BINARY_DIR}/folly/build/FingerprintTables.cpp
 )
+
+# Generate pkg-config variables from folly_deps before we add our own
+# build/install-time include directory generator expressions
+include(GenPkgConfig)
+gen_pkgconfig_vars(FOLLY_PKGCONFIG folly_deps)
 
 target_include_directories(folly_deps
   INTERFACE
@@ -311,6 +318,19 @@ install(
   COMPONENT dev
 )
 
+# Generate a pkg-config file so that downstream projects that don't use
+# CMake can depend on folly using pkg-config.
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/CMake/libfolly.pc.in
+  ${CMAKE_CURRENT_BINARY_DIR}/libfolly.pc
+  @ONLY
+)
+install(
+  FILES ${CMAKE_CURRENT_BINARY_DIR}/libfolly.pc
+  DESTINATION ${LIB_INSTALL_DIR}/pkgconfig
+  COMPONENT dev
+)
+
 option(BUILD_TESTS "If enabled, compile the tests." OFF)
 option(BUILD_BROKEN_TESTS "If enabled, compile tests that are known to be broken." OFF)
 option(BUILD_HANGING_TESTS "If enabled, compile tests that are known to hang." OFF)
@@ -390,7 +410,8 @@ if (BUILD_TESTS)
 
   folly_define_tests(
     DIRECTORY chrono/test/
-      TEST chrono_conv_test SOURCES ConvTest.cpp
+      TEST chrono_conv_test WINDOWS_DISABLED
+        SOURCES ConvTest.cpp
 
     DIRECTORY compression/test/
       TEST compression_test SLOW SOURCES CompressionTest.cpp
@@ -403,7 +424,7 @@ if (BUILD_TESTS)
       # EnumerateTest.cpp since it uses macros to define tests.
       #TEST enumerate_test SOURCES EnumerateTest.cpp
       TEST evicting_cache_map_test SOURCES EvictingCacheMapTest.cpp
-      TEST f14_pre_test SOURCES F14PreTest.cpp
+      TEST f14_fwd_test SOURCES F14FwdTest.cpp
       TEST f14_map_test SOURCES F14MapTest.cpp
       TEST f14_set_test SOURCES F14SetTest.cpp
       TEST foreach_test SOURCES ForeachTest.cpp
@@ -415,8 +436,12 @@ if (BUILD_TESTS)
       TEST cache_locality_test SOURCES CacheLocalityTest.cpp
       TEST core_cached_shared_ptr_test SOURCES CoreCachedSharedPtrTest.cpp
       TEST concurrent_hash_map_test SOURCES ConcurrentHashMapTest.cpp
-      TEST dynamic_bounded_queue_test SOURCES DynamicBoundedQueueTest.cpp
+      TEST dynamic_bounded_queue_test WINDOWS_DISABLED
+        SOURCES DynamicBoundedQueueTest.cpp
       TEST unbounded_queue_test SOURCES UnboundedQueueTest.cpp
+
+    DIRECTORY detail/test/
+      TEST static_singleton_manager_test SOURCES StaticSingletonManagerTest.cpp
 
     DIRECTORY executors/test/
       TEST async_helpers_test SOURCES AsyncTest.cpp
@@ -425,7 +450,8 @@ if (BUILD_TESTS)
       TEST fiber_io_executor_test SOURCES FiberIOExecutorTest.cpp
       TEST global_executor_test SOURCES GlobalExecutorTest.cpp
       TEST serial_executor_test SOURCES SerialExecutorTest.cpp
-      TEST thread_pool_executor_test SOURCES ThreadPoolExecutorTest.cpp
+      TEST thread_pool_executor_test WINDOWS_DISABLED
+        SOURCES ThreadPoolExecutorTest.cpp
       TEST threaded_executor_test SOURCES ThreadedExecutorTest.cpp
       TEST timed_drivable_executor_test SOURCES TimedDrivableExecutorTest.cpp
 
@@ -450,6 +476,7 @@ if (BUILD_TESTS)
       # Depends on liburcu
       #TEST read_mostly_shared_ptr_test SOURCES ReadMostlySharedPtrTest.cpp
       #TEST ref_count_test SOURCES RefCountTest.cpp
+      TEST select64_test SOURCES Select64Test.cpp
       TEST stringkeyed_test SOURCES StringKeyedTest.cpp
       TEST test_util_test SOURCES TestUtilTest.cpp
       TEST tuple_ops_test SOURCES TupleOpsTest.cpp
@@ -489,7 +516,8 @@ if (BUILD_TESTS)
       TEST fibers_test SOURCES FibersTest.cpp
 
     DIRECTORY functional/test/
-      TEST apply_tuple_test SOURCES ApplyTupleTest.cpp
+      TEST apply_tuple_test WINDOWS_DISABLED
+        SOURCES ApplyTupleTest.cpp
       TEST partial_test SOURCES PartialTest.cpp
 
     DIRECTORY futures/test/
@@ -501,8 +529,8 @@ if (BUILD_TESTS)
       TEST ensure_test SOURCES EnsureTest.cpp
       TEST filter_test SOURCES FilterTest.cpp
       TEST future_splitter_test SOURCES FutureSplitterTest.cpp
-      # MSVC SFINAE bug
-      #TEST future_test SOURCES FutureTest.cpp
+      TEST future_test WINDOWS_DISABLED
+        SOURCES FutureTest.cpp
       TEST header_compile_test SOURCES HeaderCompileTest.cpp
       TEST interrupt_test SOURCES InterruptTest.cpp
       TEST map_test SOURCES MapTest.cpp
@@ -510,8 +538,7 @@ if (BUILD_TESTS)
       TEST poll_test SOURCES PollTest.cpp
       TEST promise_test SOURCES PromiseTest.cpp
       TEST reduce_test SOURCES ReduceTest.cpp
-      # MSVC SFINAE bug
-      #TEST retrying_test SOURCES RetryingTest.cpp
+      TEST retrying_test SOURCES RetryingTest.cpp
       TEST self_destruct_test SOURCES SelfDestructTest.cpp
       TEST shared_promise_test SOURCES SharedPromiseTest.cpp
       TEST test_executor_test SOURCES TestExecutorTest.cpp
@@ -529,7 +556,8 @@ if (BUILD_TESTS)
       TEST when_test SOURCES WhenTest.cpp
       TEST while_do_test SOURCES WhileDoTest.cpp
       TEST will_equal_test SOURCES WillEqualTest.cpp
-      TEST window_test SOURCES WindowTest.cpp
+      TEST window_test WINDOWS_DISABLED
+        SOURCES WindowTest.cpp
 
     DIRECTORY gen/test/
       # MSVC bug can't resolve initializer_list constructor properly
@@ -540,7 +568,8 @@ if (BUILD_TESTS)
 
     DIRECTORY hash/test/
       TEST checksum_test SOURCES ChecksumTest.cpp
-      TEST hash_test SOURCES HashTest.cpp
+      TEST hash_test WINDOWS_DISABLED
+        SOURCES HashTest.cpp
       TEST spooky_hash_v1_test SOURCES SpookyHashV1Test.cpp
       TEST spooky_hash_v2_test SOURCES SpookyHashV2Test.cpp
 
@@ -605,7 +634,8 @@ if (BUILD_TESTS)
 
     DIRECTORY memory/test/
       TEST arena_test SOURCES ArenaTest.cpp
-      TEST thread_cached_arena_test SOURCES ThreadCachedArenaTest.cpp
+      TEST thread_cached_arena_test WINDOWS_DISABLED
+        SOURCES ThreadCachedArenaTest.cpp
       TEST mallctl_helper_test SOURCES MallctlHelperTest.cpp
 
     DIRECTORY portability/test/
@@ -671,10 +701,12 @@ if (BUILD_TESTS)
       TEST expected_test SOURCES ExpectedTest.cpp
       TEST fbvector_test SOURCES FBVectorTest.cpp
       TEST file_test SOURCES FileTest.cpp
+      # Open-source linux build can't handle running this.
       #TEST file_lock_test SOURCES FileLockTest.cpp
       TEST file_util_test HANGING
         SOURCES FileUtilTest.cpp
-      # TEST fingerprint_test SOURCES FingerprintTest.cpp
+      # Linux is apparently unhappy about this.. Should probably figure out why.
+      #TEST fingerprint_test SOURCES FingerprintTest.cpp
       TEST format_other_test SOURCES FormatOtherTest.cpp
       TEST format_test SOURCES FormatTest.cpp
       TEST function_test BROKEN
@@ -703,7 +735,8 @@ if (BUILD_TESTS)
       TEST map_util_test SOURCES MapUtilTest.cpp
       TEST memcpy_test SOURCES MemcpyTest.cpp
       TEST memory_idler_test SOURCES MemoryIdlerTest.cpp
-      TEST memory_test SOURCES MemoryTest.cpp
+      TEST memory_test WINDOWS_DISABLED
+        SOURCES MemoryTest.cpp
       TEST move_wrapper_test SOURCES MoveWrapperTest.cpp
       TEST mpmc_pipeline_test SOURCES MPMCPipelineTest.cpp
       TEST mpmc_queue_test SLOW
@@ -730,10 +763,12 @@ if (BUILD_TESTS)
       #TEST singleton_test SOURCES SingletonTest.cpp
       TEST singleton_test_global SOURCES SingletonTestGlobal.cpp
       TEST singleton_thread_local_test SOURCES SingletonThreadLocalTest.cpp
-      TEST small_vector_test SOURCES small_vector_test.cpp
+      TEST small_vector_test WINDOWS_DISABLED
+        SOURCES small_vector_test.cpp
       TEST sorted_vector_types_test SOURCES sorted_vector_test.cpp
       TEST string_test SOURCES StringTest.cpp
-      TEST synchronized_test SOURCES SynchronizedTest.cpp
+      TEST synchronized_test WINDOWS_DISABLED
+        SOURCES SynchronizedTest.cpp
       TEST thread_cached_int_test SOURCES ThreadCachedIntTest.cpp
       TEST thread_local_test SOURCES ThreadLocalTest.cpp
       TEST timeout_queue_test SOURCES TimeoutQueueTest.cpp

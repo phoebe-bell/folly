@@ -134,12 +134,12 @@ TEST(TDigest, MergeLargeAsDigests) {
     values.push_back(i);
   }
   // Ensure that the values do not monotonically increase across digests.
-  std::random_shuffle(values.begin(), values.end());
+  std::shuffle(
+      values.begin(), values.end(), std::mt19937(std::random_device()()));
   for (int i = 0; i < 10; ++i) {
-    std::vector<double> sorted(
+    std::vector<double> unsorted_values(
         values.begin() + (i * 100), values.begin() + (i + 1) * 100);
-    std::sort(sorted.begin(), sorted.end());
-    digests.push_back(digest.merge(sorted));
+    digests.push_back(digest.merge(unsorted_values));
   }
 
   digest = TDigest::merge(digests);
@@ -165,8 +165,6 @@ TEST(TDigest, NegativeValues) {
     values.push_back(i);
     values.push_back(-i);
   }
-
-  std::sort(values.begin(), values.end());
 
   digest = digest.merge(values);
 
@@ -194,9 +192,6 @@ TEST(TDigest, NegativeValuesMergeDigests) {
     values.push_back(i);
     negativeValues.push_back(-i);
   }
-
-  std::sort(values.begin(), values.end());
-  std::sort(negativeValues.begin(), negativeValues.end());
 
   auto digest1 = digest.merge(values);
   auto digest2 = digest.merge(negativeValues);
@@ -259,6 +254,57 @@ TEST(TDigest, ConstructFromCentroids) {
   EXPECT_NE(digest1.getCentroids().size(), digest3.getCentroids().size());
 }
 
+TEST(TDigest, LargeOutlierTest) {
+  folly::TDigest digest(100);
+
+  std::vector<double> values;
+  for (double i = 0; i < 19; ++i) {
+    values.push_back(i);
+  }
+  values.push_back(1000000);
+
+  std::sort(values.begin(), values.end());
+  digest = digest.merge(values);
+  EXPECT_LT(
+      (int64_t)digest.estimateQuantile(0.5),
+      (int64_t)digest.estimateQuantile(0.90));
+}
+
+TEST(TDigest, FloatingPointSortedTest) {
+  // When combining centroids, floating point accuracy can lead to us building
+  // and unsorted digest if we are not careful. This tests that we are properly
+  // sorting the digest.
+  double val = 1.4;
+  TDigest digest1(100);
+  std::vector<double> values1;
+  for (int i = 1; i <= 100; ++i) {
+    values1.push_back(val);
+  }
+  digest1 = digest1.merge(values1);
+
+  TDigest digest2(100);
+  std::vector<double> values2;
+  for (int i = 1; i <= 100; ++i) {
+    values2.push_back(val);
+  }
+  digest2 = digest2.merge(values2);
+
+  std::array<TDigest, 2> a{{digest1, digest2}};
+  auto mergeDigest1 = TDigest::merge(a);
+
+  TDigest digest3(100);
+  std::vector<double> values3;
+  for (int i = 1; i <= 100; ++i) {
+    values3.push_back(val);
+  }
+  digest3 = digest2.merge(values3);
+  std::array<TDigest, 2> b{{digest3, mergeDigest1}};
+  auto mergeDigest2 = TDigest::merge(b);
+
+  auto centroids = mergeDigest2.getCentroids();
+  EXPECT_EQ(std::is_sorted(centroids.begin(), centroids.end()), true);
+}
+
 class DistributionTest
     : public ::testing::TestWithParam<
           std::tuple<std::pair<bool, size_t>, double, bool>> {};
@@ -314,9 +360,6 @@ TEST_P(DistributionTest, ReasonableError) {
 
     std::vector<TDigest> digests;
     for (size_t i = 0; i < kNumSamples / 1000; ++i) {
-      auto it_l = values.begin() + (i * 1000);
-      auto it_r = it_l + 1000;
-      std::sort(it_l, it_r);
       folly::Range<const double*> r(values, i * 1000, 1000);
       if (digestMerge) {
         digests.push_back(digest.merge(r));

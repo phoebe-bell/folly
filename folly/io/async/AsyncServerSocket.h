@@ -17,6 +17,7 @@
 #pragma once
 
 #include <folly/SocketAddress.h>
+#include <folly/String.h>
 #include <folly/io/ShutdownSocketSet.h>
 #include <folly/io/async/AsyncSocketBase.h>
 #include <folly/io/async/AsyncTimeout.h>
@@ -577,6 +578,15 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
   }
 
   /**
+   * Enable/Disable TOS reflection for the server socket
+   */
+  void setTosReflect(bool enable);
+
+  bool getTosReflect() {
+    return tosReflect_;
+  }
+
+  /**
    * Get the number of connections dropped by the AsyncServerSocket
    */
   std::size_t getNumDroppedConnections() const {
@@ -597,7 +607,9 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
     }
     int64_t numMsgs = 0;
     for (const auto& callback : callbacks_) {
-      numMsgs += callback.consumer->getQueue()->size();
+      if (callback.consumer) {
+        numMsgs += callback.consumer->getQueue()->size();
+      }
     }
     return numMsgs;
   }
@@ -624,7 +636,7 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
               handler.socket_, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val)) !=
           0) {
         LOG(ERROR) << "failed to set SO_KEEPALIVE on async server socket: %s"
-                   << strerror(errno);
+                   << errnoStr(errno);
       }
     }
   }
@@ -875,6 +887,7 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
   uint32_t tfoMaxQueueSize_{0};
   std::weak_ptr<ShutdownSocketSet> wShutdownSocketSet_;
   ConnectionEventCallback* connectionEventCallback_{nullptr};
+  bool tosReflect_{false};
 };
 
 } // namespace folly

@@ -64,6 +64,10 @@ class TestLogWriter : public LogWriter {
     return messages_;
   }
 
+  bool ttyOutput() const override {
+    return false;
+  }
+
  private:
   std::vector<std::string> messages_;
 };
@@ -82,6 +86,7 @@ TEST(StandardLogHandler, simple) {
                  LogLevel::DBG8,
                  "src/test.cpp",
                  1234,
+                 "testMethod",
                  std::string{"hello world"}};
   handler.handleMessage(msg, handlerCategory);
   ASSERT_EQ(1, writer->getMessages().size());
@@ -100,7 +105,8 @@ TEST(StandardLogHandler, levelCheck) {
   auto handlerCategory = db.getCategory("handler_cat");
 
   auto logMsg = [&](LogLevel level, folly::StringPiece message) {
-    LogMessage msg{logCategory, level, "src/test.cpp", 1234, message};
+    LogMessage msg{
+        logCategory, level, "src/test.cpp", 1234, "testMethod", message};
     handler.handleMessage(msg, handlerCategory);
   };
 

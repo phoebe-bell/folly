@@ -88,7 +88,7 @@ TEST(AsyncFileWriter, simpleMessages) {
     AsyncFileWriter writer{folly::File{tmpFile.fd(), false}};
     for (int n = 0; n < 10; ++n) {
       writer.writeMessage(folly::to<std::string>("message ", n, "\n"));
-      sched_yield();
+      std::this_thread::yield();
     }
   }
   tmpFile.close();
@@ -143,7 +143,7 @@ TEST(AsyncFileWriter, ioError) {
     AsyncFileWriter writer{folly::File{fds[1], true}};
     for (size_t n = 0; n < numMessages; ++n) {
       writer.writeMessage(folly::to<std::string>("message ", n, "\n"));
-      sched_yield();
+      std::this_thread::yield();
     }
   }
 
@@ -253,7 +253,8 @@ TEST(AsyncFileWriter, flush) {
   // Now read from the pipe
   std::vector<char> buf;
   buf.resize(paddingSize);
-  readFull(readPipe.fd(), buf.data(), buf.size());
+  auto bytesRead = readFull(readPipe.fd(), buf.data(), buf.size());
+  EXPECT_EQ(bytesRead, paddingSize);
 
   // Make sure flush completes successfully now
   std::move(future).get(10ms);

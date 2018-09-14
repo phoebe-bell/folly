@@ -53,31 +53,56 @@ template <
     typename K>
 void runAllocatedMemorySizeTest() {
   using namespace folly::f14;
+  using namespace folly::f14::detail;
   using A = SwapTrackingAlloc<K>;
 
   resetTracking();
-  TSet<K, DefaultHasher<K>, DefaultKeyEqual<K>, A> m;
-  EXPECT_EQ(testAllocatedMemorySize, m.getAllocatedMemorySize());
+  {
+    TSet<K, DefaultHasher<K>, DefaultKeyEqual<K>, A> s;
 
-  for (size_t i = 0; i < 1000; ++i) {
-    m.insert(folly::to<K>(i));
-    m.erase(folly::to<K>(i / 10 + 2));
-    EXPECT_EQ(testAllocatedMemorySize, m.getAllocatedMemorySize());
-    std::size_t size = 0;
-    std::size_t count = 0;
-    m.visitAllocationClasses([&](std::size_t, std::size_t) mutable {});
-    m.visitAllocationClasses([&](std::size_t bytes, std::size_t n) {
-      size += bytes * n;
-      count += n;
-    });
-    EXPECT_EQ(testAllocatedMemorySize, size);
-    EXPECT_EQ(testAllocatedBlockCount, count);
+    // if F14 intrinsics are not available then we fall back to using
+    // std::unordered_set underneath, but in that case the allocation
+    // info is only best effort
+    bool preciseAllocInfo = getF14IntrinsicsMode() != F14IntrinsicsMode::None;
+
+    if (preciseAllocInfo) {
+      EXPECT_EQ(testAllocatedMemorySize, 0);
+      EXPECT_EQ(s.getAllocatedMemorySize(), 0);
+    }
+    auto emptySetAllocatedMemorySize = testAllocatedMemorySize;
+    auto emptySetAllocatedBlockCount = testAllocatedBlockCount;
+
+    for (size_t i = 0; i < 1000; ++i) {
+      s.insert(folly::to<K>(i));
+      s.erase(folly::to<K>(i / 10 + 2));
+      if (preciseAllocInfo) {
+        EXPECT_EQ(testAllocatedMemorySize, s.getAllocatedMemorySize());
+      }
+      EXPECT_GE(s.getAllocatedMemorySize(), sizeof(K) * s.size());
+      std::size_t size = 0;
+      std::size_t count = 0;
+      s.visitAllocationClasses([&](std::size_t, std::size_t) mutable {});
+      s.visitAllocationClasses([&](std::size_t bytes, std::size_t n) {
+        size += bytes * n;
+        count += n;
+      });
+      if (preciseAllocInfo) {
+        EXPECT_EQ(testAllocatedMemorySize, size);
+        EXPECT_EQ(testAllocatedBlockCount, count);
+      }
+    }
+
+    s = decltype(s){};
+    EXPECT_EQ(testAllocatedMemorySize, emptySetAllocatedMemorySize);
+    EXPECT_EQ(testAllocatedBlockCount, emptySetAllocatedBlockCount);
+
+    s.reserve(5);
+    EXPECT_GT(testAllocatedMemorySize, 0);
+    s = {};
+    EXPECT_GT(testAllocatedMemorySize, 0);
   }
-
-  m = decltype(m){};
   EXPECT_EQ(testAllocatedMemorySize, 0);
   EXPECT_EQ(testAllocatedBlockCount, 0);
-  m.visitAllocationClasses([](std::size_t, std::size_t n) { EXPECT_EQ(n, 0); });
 }
 
 template <typename K>
@@ -93,40 +118,9 @@ TEST(F14Set, getAllocatedMemorySize) {
   runAllocatedMemorySizeTests<bool>();
   runAllocatedMemorySizeTests<int>();
   runAllocatedMemorySizeTests<long>();
-  runAllocatedMemorySizeTests<long double>();
+  runAllocatedMemorySizeTests<double>();
   runAllocatedMemorySizeTests<std::string>();
   runAllocatedMemorySizeTests<folly::fbstring>();
-
-  {
-    folly::F14ValueSet<int> set;
-    set.insert(10);
-    EXPECT_EQ(sizeof(set), 4 * sizeof(void*));
-    if (alignof(folly::max_align_t) == 16) {
-      // chunks will be allocated as 2 max_align_t-s
-      EXPECT_EQ(set.getAllocatedMemorySize(), 32);
-    } else {
-      // chunks will be allocated using aligned_malloc with the true size
-      EXPECT_EQ(set.getAllocatedMemorySize(), 24);
-    }
-  }
-  {
-    folly::F14NodeSet<int> set;
-    set.insert(10);
-    EXPECT_EQ(sizeof(set), 4 * sizeof(void*));
-    if (alignof(folly::max_align_t) == 16) {
-      // chunks will be allocated as 2 max_align_t-s
-      EXPECT_EQ(set.getAllocatedMemorySize(), 36);
-    } else {
-      // chunks will be allocated using aligned_malloc with the true size
-      EXPECT_EQ(set.getAllocatedMemorySize(), 20 + 2 * sizeof(void*));
-    }
-  }
-  {
-    folly::F14VectorSet<int> set;
-    set.insert(10);
-    EXPECT_EQ(sizeof(set), 8 + 2 * sizeof(void*));
-    EXPECT_EQ(set.getAllocatedMemorySize(), 32);
-  }
 }
 
 template <typename S>
@@ -239,7 +233,7 @@ void runSimple() {
   EXPECT_TRUE(h3.find(s("xxx")) == h3.end());
 
   for (uint64_t i = 0; i < 1000; ++i) {
-    h.insert(std::move(std::to_string(i * i * i)));
+    h.insert(std::move(to<std::string>(i * i * i)));
     EXPECT_EQ(h.size(), i + 1);
   }
   {
@@ -247,9 +241,9 @@ void runSimple() {
     swap(h, h2);
   }
   for (uint64_t i = 0; i < 1000; ++i) {
-    EXPECT_TRUE(h2.find(std::to_string(i * i * i)) != h2.end());
-    EXPECT_EQ(*h2.find(std::to_string(i * i * i)), std::to_string(i * i * i));
-    EXPECT_TRUE(h2.find(std::to_string(i * i * i + 2)) == h2.end());
+    EXPECT_TRUE(h2.find(to<std::string>(i * i * i)) != h2.end());
+    EXPECT_EQ(*h2.find(to<std::string>(i * i * i)), to<std::string>(i * i * i));
+    EXPECT_TRUE(h2.find(to<std::string>(i * i * i + 2)) == h2.end());
   }
 
   T h4{h2};
@@ -278,12 +272,26 @@ void runSimple() {
   EXPECT_TRUE(h2.empty());
   EXPECT_TRUE(h7.empty());
   for (uint64_t i = 0; i < 1000; ++i) {
-    auto k = std::to_string(i * i * i);
+    auto k = to<std::string>(i * i * i);
     EXPECT_EQ(h4.count(k), 1);
     EXPECT_EQ(h5.count(k), 1);
     EXPECT_EQ(h6.count(k), 1);
     EXPECT_EQ(h8.count(k), 1);
   }
+
+  h8.clear();
+  h8.emplace(s("abc"));
+  EXPECT_GT(h8.bucket_count(), 1);
+  h8 = {};
+  EXPECT_GT(h8.bucket_count(), 1);
+  h9 = {s("abc"), s("def")};
+  EXPECT_TRUE(h8.empty());
+  EXPECT_EQ(h9.size(), 2);
+
+  auto expectH8 = [&](T& ref) { EXPECT_EQ(&ref, &h8); };
+  expectH8((h8 = h2));
+  expectH8((h8 = std::move(h2)));
+  expectH8((h8 = {}));
 
   F14TableStats::compute(h);
   F14TableStats::compute(h2);
@@ -300,7 +308,7 @@ void runRehash() {
   unsigned n = 10000;
   T h;
   for (unsigned i = 0; i < n; ++i) {
-    h.insert(std::to_string(i));
+    h.insert(to<std::string>(i));
   }
   EXPECT_EQ(h.size(), n);
   F14TableStats::compute(h);
@@ -511,6 +519,39 @@ TEST(F14FastSet, simple) {
   // F14FastSet inherits from a conditional typedef. Verify it compiles.
   runRandom<F14FastSet<uint64_t>>();
   runSimple<F14FastSet<std::string>>();
+}
+
+TEST(F14Set, ContainerSize) {
+  {
+    folly::F14ValueSet<int> set;
+    set.insert(10);
+    EXPECT_EQ(sizeof(set), 4 * sizeof(void*));
+    if (alignof(folly::max_align_t) == 16) {
+      // chunks will be allocated as 2 max_align_t-s
+      EXPECT_EQ(set.getAllocatedMemorySize(), 32);
+    } else {
+      // chunks will be allocated using aligned_malloc with the true size
+      EXPECT_EQ(set.getAllocatedMemorySize(), 24);
+    }
+  }
+  {
+    folly::F14NodeSet<int> set;
+    set.insert(10);
+    EXPECT_EQ(sizeof(set), 4 * sizeof(void*));
+    if (alignof(folly::max_align_t) == 16) {
+      // chunks will be allocated as 2 max_align_t-s
+      EXPECT_EQ(set.getAllocatedMemorySize(), 36);
+    } else {
+      // chunks will be allocated using aligned_malloc with the true size
+      EXPECT_EQ(set.getAllocatedMemorySize(), 20 + 2 * sizeof(void*));
+    }
+  }
+  {
+    folly::F14VectorSet<int> set;
+    set.insert(10);
+    EXPECT_EQ(sizeof(set), 8 + 2 * sizeof(void*));
+    EXPECT_EQ(set.getAllocatedMemorySize(), 32);
+  }
 }
 
 TEST(F14VectorMap, reverse_iterator) {
@@ -878,8 +919,8 @@ TEST(F14ValueSet, heterogeneous) {
   constexpr auto world = "world"_sp;
 
   F14ValueSet<std::string, Hasher, KeyEqual> set;
-  set.emplace(hello.str());
-  set.emplace(world.str());
+  set.emplace(hello);
+  set.emplace(world);
 
   auto checks = [hello, buddy](auto& ref) {
     // count
@@ -1025,11 +1066,39 @@ void runHeterogeneousInsertTest() {
       << Tracked<1>::counts;
 }
 
+template <typename S>
+void runHeterogeneousInsertStringTest() {
+  S set;
+  StringPiece k{"foo"};
+  std::vector<StringPiece> v{k};
+
+  set.insert(k);
+  set.insert("foo");
+  set.insert(StringPiece{"foo"});
+  set.insert(v.begin(), v.end());
+  set.insert(
+      std::make_move_iterator(v.begin()), std::make_move_iterator(v.end()));
+
+  set.emplace();
+  set.emplace(k);
+  set.emplace("foo");
+  set.emplace(StringPiece("foo"));
+
+  set.erase("");
+  set.erase(k);
+  set.erase(StringPiece{"foo"});
+  EXPECT_TRUE(set.empty());
+}
+
 TEST(F14ValueSet, heterogeneousInsert) {
   runHeterogeneousInsertTest<F14ValueSet<
       Tracked<1>,
       TransparentTrackedHash<1>,
       TransparentTrackedEqual<1>>>();
+  runHeterogeneousInsertStringTest<F14ValueSet<
+      std::string,
+      transparent<hasher<StringPiece>>,
+      transparent<DefaultKeyEqual<StringPiece>>>>();
 }
 
 TEST(F14NodeSet, heterogeneousInsert) {
@@ -1037,6 +1106,10 @@ TEST(F14NodeSet, heterogeneousInsert) {
       Tracked<1>,
       TransparentTrackedHash<1>,
       TransparentTrackedEqual<1>>>();
+  runHeterogeneousInsertStringTest<F14NodeSet<
+      std::string,
+      transparent<hasher<StringPiece>>,
+      transparent<DefaultKeyEqual<StringPiece>>>>();
 }
 
 TEST(F14VectorSet, heterogeneousInsert) {
@@ -1044,6 +1117,10 @@ TEST(F14VectorSet, heterogeneousInsert) {
       Tracked<1>,
       TransparentTrackedHash<1>,
       TransparentTrackedEqual<1>>>();
+  runHeterogeneousInsertStringTest<F14VectorSet<
+      std::string,
+      transparent<hasher<StringPiece>>,
+      transparent<DefaultKeyEqual<StringPiece>>>>();
 }
 
 TEST(F14FastSet, heterogeneousInsert) {
@@ -1051,13 +1128,18 @@ TEST(F14FastSet, heterogeneousInsert) {
       Tracked<1>,
       TransparentTrackedHash<1>,
       TransparentTrackedEqual<1>>>();
+  runHeterogeneousInsertStringTest<F14FastSet<
+      std::string,
+      transparent<hasher<StringPiece>>,
+      transparent<DefaultKeyEqual<StringPiece>>>>();
 }
 
 namespace {
 struct CharArrayHasher {
   template <std::size_t N>
   std::size_t operator()(std::array<char, N> const& value) const {
-    return folly::Hash{}(StringPiece{value.begin(), value.end()});
+    return folly::Hash{}(
+        StringPiece{value.data(), &value.data()[value.size()]});
   }
 };
 

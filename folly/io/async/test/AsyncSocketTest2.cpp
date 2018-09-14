@@ -22,6 +22,7 @@
 #include <folly/io/async/AsyncSocket.h>
 #include <folly/io/async/AsyncTimeout.h>
 #include <folly/io/async/EventBase.h>
+#include <folly/io/async/ScopedEventBaseThread.h>
 
 #include <folly/experimental/TestUtil.h>
 #include <folly/io/IOBuf.h>
@@ -31,17 +32,15 @@
 #include <folly/portability/GTest.h>
 #include <folly/portability/Sockets.h>
 #include <folly/portability/Unistd.h>
+#include <folly/synchronization/Baton.h>
 #include <folly/test/SocketAddressTestHelper.h>
 
-#include <boost/scoped_array.hpp>
 #include <fcntl.h>
 #include <sys/types.h>
 #include <iostream>
+#include <memory>
 #include <thread>
 
-using namespace boost;
-
-using boost::scoped_array;
 using std::cerr;
 using std::endl;
 using std::min;
@@ -875,7 +874,7 @@ void testConnectOptWrite(size_t size1, size_t size2, bool close = false) {
 
   // Tell the connect callback to perform a write when the connect succeeds
   WriteCallback wcb2;
-  scoped_array<char> buf2(new char[size2]);
+  std::unique_ptr<char[]> buf2(new char[size2]);
   memset(buf2.get(), 'b', size2);
   if (size2 > 0) {
     ccb.successCallback = [&] { socket->write(&wcb2, buf2.get(), size2); };
@@ -884,7 +883,7 @@ void testConnectOptWrite(size_t size1, size_t size2, bool close = false) {
   }
 
   // Schedule one write() immediately, before the connect finishes
-  scoped_array<char> buf1(new char[size1]);
+  std::unique_ptr<char[]> buf1(new char[size1]);
   memset(buf1.get(), 'a', size1);
   WriteCallback wcb1;
   if (size1 > 0) {
@@ -1034,7 +1033,7 @@ TEST(AsyncSocketTest, WriteTimeout) {
   size_t writeLength = 32 * 1024 * 1024;
   uint32_t timeout = 200;
   socket->setSendTimeout(timeout);
-  scoped_array<char> buf(new char[writeLength]);
+  std::unique_ptr<char[]> buf(new char[writeLength]);
   memset(buf.get(), 'a', writeLength);
   WriteCallback wcb;
   socket->write(&wcb, buf.get(), writeLength);
@@ -1089,7 +1088,7 @@ TEST(AsyncSocketTest, WritePipeError) {
 
   // write() a large chunk of data
   size_t writeLength = 32 * 1024 * 1024;
-  scoped_array<char> buf(new char[writeLength]);
+  std::unique_ptr<char[]> buf(new char[writeLength]);
   memset(buf.get(), 'a', writeLength);
   WriteCallback wcb;
   socket->write(&wcb, buf.get(), writeLength);
@@ -2161,8 +2160,8 @@ TEST(AsyncSocketTest, ConnectionEventCallbackDefault) {
   ASSERT_EQ(connectionEventCallback.getConnectionAcceptedError(), 0);
   ASSERT_EQ(connectionEventCallback.getConnectionDropped(), 0);
   ASSERT_EQ(
-      connectionEventCallback.getConnectionEnqueuedForAcceptCallback(), 1);
-  ASSERT_EQ(connectionEventCallback.getConnectionDequeuedByAcceptCallback(), 1);
+      connectionEventCallback.getConnectionEnqueuedForAcceptCallback(), 0);
+  ASSERT_EQ(connectionEventCallback.getConnectionDequeuedByAcceptCallback(), 0);
   ASSERT_EQ(connectionEventCallback.getBackoffStarted(), 0);
   ASSERT_EQ(connectionEventCallback.getBackoffEnded(), 0);
   ASSERT_EQ(connectionEventCallback.getBackoffError(), 0);
@@ -2219,6 +2218,59 @@ TEST(AsyncSocketTest, CallbackInPrimaryEventBase) {
   ASSERT_EQ(connectionEventCallback.getBackoffError(), 0);
 }
 
+TEST(AsyncSocketTest, CallbackInSecondaryEventBase) {
+  EventBase eventBase;
+  TestConnectionEventCallback connectionEventCallback;
+
+  // Create a server socket
+  std::shared_ptr<AsyncServerSocket> serverSocket(
+      AsyncServerSocket::newSocket(&eventBase));
+  serverSocket->setConnectionEventCallback(&connectionEventCallback);
+  serverSocket->bind(0);
+  serverSocket->listen(16);
+  SocketAddress serverAddress;
+  serverSocket->getAddress(&serverAddress);
+
+  // Add a callback to accept one connection then stop the loop
+  TestAcceptCallback acceptCallback;
+  ScopedEventBaseThread cobThread("ioworker_test");
+  acceptCallback.setConnectionAcceptedFn(
+      [&](int /* fd */, const SocketAddress& /* addr */) {
+        eventBase.runInEventBaseThread([&] {
+          serverSocket->removeAcceptCallback(&acceptCallback, nullptr);
+        });
+      });
+  acceptCallback.setAcceptErrorFn([&](const std::exception& /* ex */) {
+    eventBase.runInEventBaseThread(
+        [&] { serverSocket->removeAcceptCallback(&acceptCallback, nullptr); });
+  });
+  std::atomic<bool> acceptStartedFlag{false};
+  acceptCallback.setAcceptStartedFn([&]() { acceptStartedFlag = true; });
+  Baton<> acceptStoppedFlag;
+  acceptCallback.setAcceptStoppedFn([&]() { acceptStoppedFlag.post(); });
+  serverSocket->addAcceptCallback(&acceptCallback, cobThread.getEventBase());
+  serverSocket->startAccepting();
+
+  // Connect to the server socket
+  std::shared_ptr<AsyncSocket> socket(
+      AsyncSocket::newSocket(&eventBase, serverAddress));
+
+  eventBase.loop();
+
+  ASSERT_TRUE(acceptStoppedFlag.try_wait_for(std::chrono::seconds(1)));
+  ASSERT_TRUE(acceptStartedFlag);
+  // Validate the connection event counters
+  ASSERT_EQ(connectionEventCallback.getConnectionAccepted(), 1);
+  ASSERT_EQ(connectionEventCallback.getConnectionAcceptedError(), 0);
+  ASSERT_EQ(connectionEventCallback.getConnectionDropped(), 0);
+  ASSERT_EQ(
+      connectionEventCallback.getConnectionEnqueuedForAcceptCallback(), 1);
+  ASSERT_EQ(connectionEventCallback.getConnectionDequeuedByAcceptCallback(), 1);
+  ASSERT_EQ(connectionEventCallback.getBackoffStarted(), 0);
+  ASSERT_EQ(connectionEventCallback.getBackoffEnded(), 0);
+  ASSERT_EQ(connectionEventCallback.getBackoffError(), 0);
+}
+
 /**
  * Test AsyncServerSocket::getNumPendingMessagesInQueue()
  */
@@ -2236,21 +2288,25 @@ TEST(AsyncSocketTest, NumPendingMessagesInQueue) {
   serverSocket->getAddress(&serverAddress);
 
   // Add a callback to accept connections
+  folly::ScopedEventBaseThread cobThread("ioworker_test");
   TestAcceptCallback acceptCallback;
   acceptCallback.setConnectionAcceptedFn(
       [&](int /* fd */, const folly::SocketAddress& /* addr */) {
         count++;
-        ASSERT_EQ(4 - count, serverSocket->getNumPendingMessagesInQueue());
-
+        eventBase.runInEventBaseThreadAndWait([&] {
+          ASSERT_EQ(4 - count, serverSocket->getNumPendingMessagesInQueue());
+        });
         if (count == 4) {
-          // all messages are processed, remove accept callback
-          serverSocket->removeAcceptCallback(&acceptCallback, &eventBase);
+          eventBase.runInEventBaseThread([&] {
+            serverSocket->removeAcceptCallback(&acceptCallback, nullptr);
+          });
         }
       });
   acceptCallback.setAcceptErrorFn([&](const std::exception& /* ex */) {
-    serverSocket->removeAcceptCallback(&acceptCallback, &eventBase);
+    eventBase.runInEventBaseThread(
+        [&] { serverSocket->removeAcceptCallback(&acceptCallback, nullptr); });
   });
-  serverSocket->addAcceptCallback(&acceptCallback, &eventBase);
+  serverSocket->addAcceptCallback(&acceptCallback, cobThread.getEventBase());
   serverSocket->startAccepting();
 
   // Connect to the server socket, 4 clients, there are 4 connections
@@ -2260,6 +2316,90 @@ TEST(AsyncSocketTest, NumPendingMessagesInQueue) {
   auto socket4(AsyncSocket::newSocket(&eventBase, serverAddress));
 
   eventBase.loop();
+  ASSERT_EQ(4, count);
+}
+
+TEST(AsyncSocketTest, ConnectionsStorm) {
+  enum class AcceptCobLocation {
+    Default,
+    Primary,
+    Secondary,
+  };
+
+  auto testFunc = [](AcceptCobLocation mode) {
+    EventBase eventBase;
+
+    // Counter of how many connections have been accepted
+    std::atomic<size_t> count{0};
+
+    // Create a server socket
+    auto serverSocket(AsyncServerSocket::newSocket(&eventBase));
+    serverSocket->bind(0);
+    serverSocket->listen(100);
+    folly::SocketAddress serverAddress;
+    serverSocket->getAddress(&serverAddress);
+
+    TestConnectionEventCallback connectionEventCallback;
+    serverSocket->setConnectionEventCallback(&connectionEventCallback);
+
+    // Add a callback to accept connections
+    std::shared_ptr<ScopedEventBaseThread> thread;
+    TestAcceptCallback acceptCallback;
+    bool stopAccepting = false;
+    const size_t maxSockets = 2000;
+    acceptCallback.setConnectionAcceptedFn(
+        [&](int /* fd */, const folly::SocketAddress& /* addr */) {
+          count++;
+          if (!stopAccepting &&
+              (count == maxSockets ||
+               connectionEventCallback.getConnectionDropped() > 0)) {
+            stopAccepting = true;
+            eventBase.runInEventBaseThread([&] {
+              serverSocket->removeAcceptCallback(&acceptCallback, nullptr);
+            });
+          }
+        });
+    acceptCallback.setAcceptErrorFn([&](const std::exception& /* ex */) {
+      eventBase.runInEventBaseThread([&] {
+        stopAccepting = true;
+        serverSocket->removeAcceptCallback(&acceptCallback, nullptr);
+      });
+    });
+    if (mode == AcceptCobLocation::Default) {
+      serverSocket->addAcceptCallback(&acceptCallback, nullptr);
+    } else if (mode == AcceptCobLocation::Primary) {
+      serverSocket->addAcceptCallback(&acceptCallback, &eventBase);
+    } else if (mode == AcceptCobLocation::Secondary) {
+      thread = std::make_shared<ScopedEventBaseThread>();
+      serverSocket->addAcceptCallback(&acceptCallback, thread->getEventBase());
+    }
+    serverSocket->startAccepting();
+
+    // Create connection storm to create connections fast but
+    // also pace it to not overflow servers' listening queue.
+    vector<std::shared_ptr<AsyncSocket>> sockets;
+    folly::Function<void()> fnOpenSockets = [&]() {
+      // Counter of connections pending the invocation of accept callback.
+      auto pending = serverSocket->getNumPendingMessagesInQueue();
+      while (sockets.size() < std::min(maxSockets, pending + count + 30)) {
+        auto socket = folly::AsyncSocket::newSocket(&eventBase);
+        socket->connect(nullptr, serverAddress, 5000);
+        sockets.push_back(socket);
+      }
+      if (sockets.size() < maxSockets && !stopAccepting) {
+        eventBase.runInEventBaseThread([&] { fnOpenSockets(); });
+      }
+    };
+
+    eventBase.runInEventBaseThread([&] { fnOpenSockets(); });
+
+    eventBase.loop();
+    ASSERT_EQ(maxSockets, count);
+  };
+
+  testFunc(AcceptCobLocation::Default);
+  testFunc(AcceptCobLocation::Primary);
+  testFunc(AcceptCobLocation::Secondary);
 }
 
 /**
@@ -3364,5 +3504,123 @@ TEST(AsyncSocketTest, UnixDomainSocketErrMessageCB) {
   ASSERT_NE(recvmsg(fd[1], &msgh, MSG_ERRQUEUE), -1);
   ASSERT_EQ(recv_data, test_data);
 #endif // FOLLY_HAVE_MSG_ERRQUEUE
+}
+
+TEST(AsyncSocketTest, V6TosReflectTest) {
+  EventBase eventBase;
+
+  // Create a server socket
+  std::shared_ptr<AsyncServerSocket> serverSocket(
+      AsyncServerSocket::newSocket(&eventBase));
+  folly::IPAddress ip("::1");
+  std::vector<folly::IPAddress> serverIp;
+  serverIp.push_back(ip);
+  serverSocket->bind(serverIp, 0);
+  serverSocket->listen(16);
+  folly::SocketAddress serverAddress;
+  serverSocket->getAddress(&serverAddress);
+
+  // Enable TOS reflect
+  serverSocket->setTosReflect(true);
+
+  // Add a callback to accept one connection then stop the loop
+  TestAcceptCallback acceptCallback;
+  acceptCallback.setConnectionAcceptedFn(
+      [&](int /* fd */, const folly::SocketAddress& /* addr */) {
+        serverSocket->removeAcceptCallback(&acceptCallback, &eventBase);
+      });
+  acceptCallback.setAcceptErrorFn([&](const std::exception& /* ex */) {
+    serverSocket->removeAcceptCallback(&acceptCallback, &eventBase);
+  });
+  serverSocket->addAcceptCallback(&acceptCallback, &eventBase);
+  serverSocket->startAccepting();
+
+  // Create a client socket, setsockopt() the TOS before connecting
+  auto clientThread = [](std::shared_ptr<AsyncSocket>& clientSock,
+                         ConnCallback* ccb,
+                         EventBase* evb,
+                         folly::SocketAddress sAddr) {
+    clientSock = AsyncSocket::newSocket(evb);
+    AsyncSocket::OptionKey v6Opts = {IPPROTO_IPV6, IPV6_TCLASS};
+    AsyncSocket::OptionMap optionMap;
+    optionMap.insert({v6Opts, 0x2c});
+    SocketAddress bindAddr("0.0.0.0", 0);
+    clientSock->connect(ccb, sAddr, 30, optionMap, bindAddr);
+  };
+
+  std::shared_ptr<AsyncSocket> socket(nullptr);
+  ConnCallback cb;
+  clientThread(socket, &cb, &eventBase, serverAddress);
+
+  eventBase.loop();
+
+  // Verify if the connection is accepted and if the accepted socket has
+  // setsockopt on the TOS for the same value that was on the client socket
+  int fd = acceptCallback.getEvents()->at(1).fd;
+  ASSERT_GE(fd, 0);
+  int value;
+  socklen_t valueLength = sizeof(value);
+  int rc = getsockopt(fd, IPPROTO_IPV6, IPV6_TCLASS, &value, &valueLength);
+  ASSERT_EQ(rc, 0);
+  ASSERT_EQ(value, 0x2c);
+}
+
+TEST(AsyncSocketTest, V4TosReflectTest) {
+  EventBase eventBase;
+
+  // Create a server socket
+  std::shared_ptr<AsyncServerSocket> serverSocket(
+      AsyncServerSocket::newSocket(&eventBase));
+  folly::IPAddress ip("127.0.0.1");
+  std::vector<folly::IPAddress> serverIp;
+  serverIp.push_back(ip);
+  serverSocket->bind(serverIp, 0);
+  serverSocket->listen(16);
+  folly::SocketAddress serverAddress;
+  serverSocket->getAddress(&serverAddress);
+
+  // Enable TOS reflect
+  serverSocket->setTosReflect(true);
+
+  // Add a callback to accept one connection then stop the loop
+  TestAcceptCallback acceptCallback;
+  acceptCallback.setConnectionAcceptedFn(
+      [&](int /* fd */, const folly::SocketAddress& /* addr */) {
+        serverSocket->removeAcceptCallback(&acceptCallback, &eventBase);
+      });
+  acceptCallback.setAcceptErrorFn([&](const std::exception& /* ex */) {
+    serverSocket->removeAcceptCallback(&acceptCallback, &eventBase);
+  });
+  serverSocket->addAcceptCallback(&acceptCallback, &eventBase);
+  serverSocket->startAccepting();
+
+  // Create a client socket, setsockopt() the TOS before connecting
+  auto clientThread = [](std::shared_ptr<AsyncSocket>& clientSock,
+                         ConnCallback* ccb,
+                         EventBase* evb,
+                         folly::SocketAddress sAddr) {
+    clientSock = AsyncSocket::newSocket(evb);
+    AsyncSocket::OptionKey v4Opts = {IPPROTO_IP, IP_TOS};
+    AsyncSocket::OptionMap optionMap;
+    optionMap.insert({v4Opts, 0x2c});
+    SocketAddress bindAddr("0.0.0.0", 0);
+    clientSock->connect(ccb, sAddr, 30, optionMap, bindAddr);
+  };
+
+  std::shared_ptr<AsyncSocket> socket(nullptr);
+  ConnCallback cb;
+  clientThread(socket, &cb, &eventBase, serverAddress);
+
+  eventBase.loop();
+
+  // Verify if the connection is accepted and if the accepted socket has
+  // setsockopt on the TOS for the same value that was on the client socket
+  int fd = acceptCallback.getEvents()->at(1).fd;
+  ASSERT_GE(fd, 0);
+  int value;
+  socklen_t valueLength = sizeof(value);
+  int rc = getsockopt(fd, IPPROTO_IP, IP_TOS, &value, &valueLength);
+  ASSERT_EQ(rc, 0);
+  ASSERT_EQ(value, 0x2c);
 }
 #endif
