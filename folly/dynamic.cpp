@@ -29,7 +29,7 @@
 namespace folly {
 
 //////////////////////////////////////////////////////////////////////
-
+/*
 #define FOLLY_DYNAMIC_DEF_TYPEINFO(T)                 \
   constexpr const char* dynamic::TypeInfo<T>::name;   \
   constexpr dynamic::Type dynamic::TypeInfo<T>::type; \
@@ -44,7 +44,7 @@ FOLLY_DYNAMIC_DEF_TYPEINFO(int64_t)
 FOLLY_DYNAMIC_DEF_TYPEINFO(dynamic::ObjectImpl)
 
 #undef FOLLY_DYNAMIC_DEF_TYPEINFO
-
+*/
 const char* dynamic::typeName() const {
   return typeName(type_);
 }
