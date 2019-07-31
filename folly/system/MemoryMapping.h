@@ -16,8 +16,7 @@
 
 #pragma once
 
-#include <boost/noncopyable.hpp>
-#include <glog/logging.h>
+#include <cassert>
 
 #include <folly/File.h>
 #include <folly/Range.h>
@@ -29,7 +28,7 @@ namespace folly {
  *
  * @author Tudor Bosman (tudorb@fb.com)
  */
-class MemoryMapping : boost::noncopyable {
+class MemoryMapping {
  public:
   /**
    * Lock the pages in memory?
@@ -41,8 +40,8 @@ class MemoryMapping : boost::noncopyable {
     MUST_LOCK,
   };
   /**
-   * Map a portion of the file indicated by filename in memory, causing a CHECK
-   * failure on error.
+   * Map a portion of the file indicated by filename in memory, causing SIGABRT
+   * on error.
    *
    * By default, map the whole file.  length=-1: map from offset to EOF.
    * Unlike the mmap() system call, offset and length don't need to be
@@ -147,11 +146,13 @@ class MemoryMapping : boost::noncopyable {
       off_t length = -1,
       Options options = Options());
 
+  MemoryMapping(const MemoryMapping&) = delete;
   MemoryMapping(MemoryMapping&&) noexcept;
 
   ~MemoryMapping();
 
-  MemoryMapping& operator=(MemoryMapping);
+  MemoryMapping& operator=(const MemoryMapping&) = delete;
+  MemoryMapping& operator=(MemoryMapping&&);
 
   void swap(MemoryMapping& other) noexcept;
 
@@ -203,7 +204,7 @@ class MemoryMapping : boost::noncopyable {
    */
   template <class T>
   Range<T*> asWritableRange() const {
-    DCHECK(options_.writable); // you'll segfault anyway...
+    assert(options_.writable); // you'll segfault anyway...
     size_t count = data_.size() / sizeof(T);
     return Range<T*>(static_cast<T*>(static_cast<void*>(data_.data())), count);
   }
@@ -212,7 +213,7 @@ class MemoryMapping : boost::noncopyable {
    * A range of mutable bytes mapped by this mapping.
    */
   MutableByteRange writableRange() const {
-    DCHECK(options_.writable); // you'll segfault anyway...
+    assert(options_.writable); // you'll segfault anyway...
     return data_;
   }
 

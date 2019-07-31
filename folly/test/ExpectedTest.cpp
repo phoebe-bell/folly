@@ -517,24 +517,15 @@ TEST(Expected, MakeOptional) {
   EXPECT_EQ(**exIntPtr, 3);
 }
 
-#if __CLANG_PREREQ(3, 6)
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wself-move"
-#endif
-
 TEST(Expected, SelfAssignment) {
   Expected<std::string, E> a = "42";
-  a = a;
+  a = static_cast<decltype(a)&>(a); // suppress self-assign warning
   ASSERT_TRUE(a.hasValue() && a.value() == "42");
 
   Expected<std::string, E> b = "23333333";
-  b = std::move(b);
+  b = static_cast<decltype(b)&&>(b); // suppress self-move warning
   ASSERT_TRUE(b.hasValue() && b.value() == "23333333");
 }
-
-#if __CLANG_PREREQ(3, 6)
-#pragma clang diagnostic pop
-#endif
 
 class ContainsExpected {
  public:
@@ -641,13 +632,12 @@ struct NoSelfAssign {
 #ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpragmas"
-#pragma GCC diagnostic ignored "-Wself-move"
 #endif
 
 TEST(Expected, NoSelfAssign) {
   folly::Expected<NoSelfAssign, int> e{NoSelfAssign{}};
-  e = e; // @nolint
-  e = std::move(e); // @nolint
+  e = static_cast<decltype(e)&>(e); // suppress self-assign warning
+  e = static_cast<decltype(e)&&>(e); // @nolint suppress self-move warning
 }
 
 #ifdef __GNUC__
@@ -678,7 +668,7 @@ struct WithConstructor {
 
 // libstdc++ with GCC 4.x doesn't have std::is_trivially_copyable
 #if (defined(__clang__) && !defined(_LIBCPP_VERSION)) || \
-    !(defined(__GNUC__) && !defined(__clang__) && __GNUC__ < 5)
+    !(defined(__GNUC__) && !defined(__clang__))
 TEST(Expected, TriviallyCopyable) {
   // These could all be static_asserts but EXPECT_* give much nicer output on
   // failure.
@@ -802,6 +792,94 @@ TEST(Expected, ThenOrThrow) {
         (Expected<std::unique_ptr<int>, E>{unexpected, E::E1}.thenOrThrow(
             [](std::unique_ptr<int> p) { return *p; }, [](E) {})),
         Unexpected<E>::BadExpectedAccess);
+  }
+}
+
+namespace {
+struct Source {};
+
+struct SmallPODConstructTo {
+  SmallPODConstructTo() = default;
+  explicit SmallPODConstructTo(Source) {}
+};
+
+struct LargePODConstructTo {
+  explicit LargePODConstructTo(Source) {}
+  int64_t array[10];
+};
+
+struct NonPODConstructTo {
+  explicit NonPODConstructTo(Source) {}
+  NonPODConstructTo(NonPODConstructTo const&) {}
+  NonPODConstructTo& operator=(NonPODConstructTo const&) { return *this; }
+};
+
+struct ConvertTo {
+  explicit ConvertTo(Source) {}
+  ConvertTo& operator=(Source) { return *this; }
+};
+
+static_assert(
+    expected_detail::getStorageType<int, SmallPODConstructTo>() ==
+        expected_detail::StorageType::ePODStruct,
+    "SmallPODConstructTo is ePODStruct");
+static_assert(
+    expected_detail::getStorageType<int, LargePODConstructTo>() ==
+        expected_detail::StorageType::ePODUnion,
+    "LargePODConstructTo is ePODUnion");
+static_assert(
+    expected_detail::getStorageType<int, NonPODConstructTo>() ==
+        expected_detail::StorageType::eUnion,
+    "NonPODConstructTo is eUnion");
+
+template <typename Target>
+constexpr bool constructibleNotConvertible() {
+  return std::is_constructible<Target, Source>() &&
+      !expected_detail::IsConvertible<Source, Target>();
+}
+
+static_assert(constructibleNotConvertible<SmallPODConstructTo>(), "");
+static_assert(constructibleNotConvertible<LargePODConstructTo>(), "");
+static_assert(constructibleNotConvertible<NonPODConstructTo>(), "");
+
+static_assert(expected_detail::IsConvertible<Source, ConvertTo>(),
+    "convertible");
+} // namespace
+
+TEST(Expected, GitHubIssue1111) {
+  // See https://github.com/facebook/folly/issues/1111
+  Expected<int, SmallPODConstructTo> a = folly::makeExpected<Source>(5);
+  EXPECT_EQ(a.value(), 5);
+}
+
+TEST(Expected, ConstructorConstructibleNotConvertible) {
+  const Expected<int, Source> v = makeExpected<Source>(5);
+  const Expected<int, Source> e = makeUnexpected(Source());
+  // Test construction and assignment for each ExpectedStorage backend
+  {
+    folly::Expected<int, SmallPODConstructTo> cv(v);
+    folly::Expected<int, SmallPODConstructTo> ce(e);
+    cv = v;
+    ce = e;
+  }
+  {
+    folly::Expected<int, LargePODConstructTo> cv(v);
+    folly::Expected<int, LargePODConstructTo> ce(e);
+    cv = v;
+    ce = e;
+  }
+  {
+    folly::Expected<int, NonPODConstructTo> cv(v);
+    folly::Expected<int, NonPODConstructTo> ce(e);
+    cv = v;
+    ce = e;
+  }
+  // Test convertible construction and assignment
+  {
+    folly::Expected<int, ConvertTo> cv(v);
+    folly::Expected<int, ConvertTo> ce(e);
+    cv = v;
+    ce = e;
   }
 }
 } // namespace folly

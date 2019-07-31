@@ -210,6 +210,18 @@ TEST(ManualExecutor, drainsOnDestruction) {
   EXPECT_EQ(1, count);
 }
 
+TEST(ManualExecutor, keepAlive) {
+  auto future = [] {
+    ManualExecutor ex;
+    return futures::sleep(std::chrono::milliseconds{100})
+        .via(&ex)
+        .thenValue([](auto) { return 42; })
+        .semi();
+  }();
+  EXPECT_TRUE(future.isReady());
+  EXPECT_EQ(42, std::move(future).get());
+}
+
 TEST(Executor, InlineExecutor) {
   InlineExecutor x;
   size_t counter = 0;
@@ -255,7 +267,8 @@ TEST(Executor, Runnable) {
 
 TEST(Executor, ThrowableThen) {
   InlineExecutor x;
-  auto f = Future<Unit>().then([]() { throw std::runtime_error("Faildog"); });
+  auto f = Future<Unit>().thenValue(
+      [](auto&&) { throw std::runtime_error("Faildog"); });
 
   /*
   auto f = Future<Unit>().via(&x).then([](){
@@ -274,10 +287,11 @@ class CrappyExecutor : public Executor {
 TEST(Executor, CrappyExecutor) {
   CrappyExecutor x;
   bool flag = false;
-  auto f = folly::via(&x).onError([&](std::runtime_error& e) {
-    EXPECT_STREQ("bad", e.what());
-    flag = true;
-  });
+  auto f = folly::via(&x).thenError(
+      folly::tag_t<std::runtime_error>{}, [&](std::runtime_error&& e) {
+        EXPECT_STREQ("bad", e.what());
+        flag = true;
+      });
   EXPECT_TRUE(flag);
 }
 
@@ -295,7 +309,7 @@ TEST(Executor, DoNothingExecutor) {
   DoNothingExecutor x;
 
   // Submit future callback to DoNothingExecutor
-  auto f = folly::via(&x).then([] { return 42; });
+  auto f = folly::via(&x).thenValue([](auto&&) { return 42; });
 
   // Callback function is stored in DoNothingExecutor, but not executed.
   EXPECT_FALSE(f.isReady());

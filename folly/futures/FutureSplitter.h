@@ -51,9 +51,8 @@ class FutureSplitter {
    */
   explicit FutureSplitter(Future<T>&& future)
       : promise_(std::make_shared<SharedPromise<T>>()),
-        e_(getExecutorFrom(future)),
-        priority_(future.getPriority()) {
-    std::move(future).then([promise = promise_](Try<T>&& theTry) {
+        e_(getExecutorFrom(future)) {
+    std::move(future).thenTry([promise = promise_](Try<T>&& theTry) {
       promise->setTry(std::move(theTry));
     });
   }
@@ -65,7 +64,7 @@ class FutureSplitter {
     if (promise_ == nullptr) {
       throw_exception<FutureSplitterInvalid>();
     }
-    return promise_->getSemiFuture().via(e_, priority_);
+    return promise_->getSemiFuture().via(e_);
   }
 
   /**
@@ -80,8 +79,7 @@ class FutureSplitter {
 
  private:
   std::shared_ptr<SharedPromise<T>> promise_;
-  Executor* e_ = nullptr;
-  int8_t priority_{-1};
+  Executor::KeepAlive<> e_;
 
   static Executor* getExecutorFrom(Future<T>& f) {
     // If the passed future had a null executor, use an inline executor

@@ -56,10 +56,11 @@ struct WTCallback : public std::enable_shared_from_this<WTCallback>,
   }
 
  protected:
-  EventBase* base_;
+  folly::Synchronized<EventBase*> base_;
   Promise<Unit> promise_;
 
   void timeoutExpired() noexcept override {
+    base_ = nullptr;
     // Don't need Promise anymore, break the circular reference
     auto promise = stealPromise();
     if (!promise.isFulfilled()) {
@@ -68,6 +69,7 @@ struct WTCallback : public std::enable_shared_from_this<WTCallback>,
   }
 
   void callbackCanceled() noexcept override {
+    base_ = nullptr;
     // Don't need Promise anymore, break the circular reference
     auto promise = stealPromise();
     if (!promise.isFulfilled()) {
@@ -76,19 +78,24 @@ struct WTCallback : public std::enable_shared_from_this<WTCallback>,
   }
 
   void interruptHandler(exception_wrapper ew) {
+    auto rBase = base_.rlock();
+    if (!*rBase) {
+      return;
+    }
     // Capture shared_ptr of self in lambda, if we don't do this, object
     // may go away before the lambda is executed from event base thread.
     // This is not racing with timeoutExpired anymore because this is called
     // through Future, which means Core is still alive and keeping a ref count
     // on us, so what timeouExpired is doing won't make the object go away
-    base_->runInEventBaseThread([me = shared_from_this(), ew = std::move(ew)] {
-      me->cancelTimeout();
-      // Don't need Promise anymore, break the circular reference
-      auto promise = me->stealPromise();
-      if (!promise.isFulfilled()) {
-        promise.setException(std::move(ew));
-      }
-    });
+    (*rBase)->runInEventBaseThread(
+        [me = shared_from_this(), ew = std::move(ew)]() mutable {
+          me->cancelTimeout();
+          // Don't need Promise anymore, break the circular reference
+          auto promise = me->stealPromise();
+          if (!promise.isFulfilled()) {
+            promise.setException(std::move(ew));
+          }
+        });
   }
 };
 
@@ -130,20 +137,8 @@ Future<Unit> ThreadWheelTimekeeper::after(Duration dur) {
   // callback has either been executed, or will never be executed. So we are
   // fine here.
   //
-  if (!eventBase_.runInEventBaseThread(
-          [this, cob, dur] { wheelTimer_->scheduleTimeout(cob.get(), dur); })) {
-    // Release promise to break the circular reference. Because if
-    // scheduleTimeout fails, there is nothing to *promise*. Internally
-    // Core would automatically set an exception result when Promise is
-    // destructed before fulfilling.
-    // This is either called from EventBase thread, or here.
-    // They are somewhat racy but given the rare chance this could fail,
-    // I don't see it is introducing any problem yet.
-    auto promise = cob->stealPromise();
-    if (!promise.isFulfilled()) {
-      promise.setException(FutureNoTimekeeper{});
-    }
-  }
+  eventBase_.runInEventBaseThread(
+      [this, cob, dur] { wheelTimer_->scheduleTimeout(cob.get(), dur); });
   return f;
 }
 

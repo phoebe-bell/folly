@@ -25,17 +25,6 @@
 
 #include <folly/Portability.h>
 
-// libc++ doesn't provide this header, nor does msvc
-#if __has_include(<bits/c++config.h>)
-// This file appears in two locations: inside fbcode and in the
-// libstdc++ source code (when embedding fbstring as std::string).
-// To aid in this schizophrenic use, two macros are defined in
-// c++config.h:
-//   _LIBSTDCXX_FBSTRING - Set inside libstdc++.  This is useful to
-//      gate use inside fbcode v. libstdc++
-#include <bits/c++config.h>
-#endif
-
 #define FOLLY_CREATE_HAS_MEMBER_TYPE_TRAITS(classname, type_name)              \
   template <typename TTheClass_>                                               \
   struct classname##__folly_traits_impl__ {                                    \
@@ -133,6 +122,16 @@
                    template test<TTheClass_>(nullptr))
 
 namespace folly {
+
+template <typename...>
+struct tag_t {};
+
+#if __cplusplus >= 201703L
+
+template <typename... T>
+inline constexpr tag_t<T...> tag;
+
+#endif
 
 #if __cpp_lib_bool_constant || _MSC_VER
 
@@ -301,13 +300,14 @@ using type_t = typename traits_detail::type_t_<T, Ts...>::type;
 template <class... Ts>
 using void_t = type_t<void, Ts...>;
 
+template <typename T>
+using aligned_storage_for_t =
+    typename std::aligned_storage<sizeof(T), alignof(T)>::type;
+
 // Older versions of libstdc++ do not provide std::is_trivially_copyable
 #if defined(__clang__) && !defined(_LIBCPP_VERSION)
 template <class T>
 struct is_trivially_copyable : bool_constant<__is_trivially_copyable(T)> {};
-#elif defined(__GNUC__) && !defined(__clang__) && __GNUC__ < 5
-template <class T>
-struct is_trivially_copyable : std::is_trivial<T> {};
 #else
 template <class T>
 using is_trivially_copyable = std::is_trivially_copyable<T>;
@@ -415,15 +415,15 @@ struct IsLessThanComparable
 
 namespace traits_detail_IsNothrowSwappable {
 #if defined(__cpp_lib_is_swappable) || (_CPPLIB_VER && _HAS_CXX17)
-// MSVC 2015+ already implements the C++17 P0185R1 proposal which
-// adds std::is_nothrow_swappable, so use it instead if C++17 mode
-// is enabled.
+// MSVC already implements the C++17 P0185R1 proposal which adds
+// std::is_nothrow_swappable, so use it instead if C++17 mode is
+// enabled.
 template <typename T>
 using IsNothrowSwappable = std::is_nothrow_swappable<T>;
 #elif _CPPLIB_VER
-// MSVC 2015+ defines the base even if C++17 is disabled, and
-// MSVC 2015 has issues with our fallback implementation due to
-// over-eager evaluation of noexcept.
+// MSVC defines the base even if C++17 is disabled, and MSVC has
+// issues with our fallback implementation due to over-eager
+// evaluation of noexcept.
 template <typename T>
 using IsNothrowSwappable = std::_Is_nothrow_swappable<T>;
 #else
@@ -453,6 +453,31 @@ struct IsZeroInitializable
           traits_detail::has_IsZeroInitializable<T>::value,
           traits_detail::has_true_IsZeroInitializable<T>,
           bool_constant<!std::is_class<T>::value>>::type {};
+
+namespace detail {
+template <bool>
+struct conditional_;
+template <>
+struct conditional_<false> {
+  template <typename, typename T>
+  using apply = T;
+};
+template <>
+struct conditional_<true> {
+  template <typename T, typename>
+  using apply = T;
+};
+} // namespace detail
+
+//  conditional_t
+//
+//  Like std::conditional_t but with only two total class template instances,
+//  rather than as many class template instances as there are uses.
+//
+//  As one effect, the result can be used in deducible contexts, allowing
+//  deduction of conditional_t<V, T, F> to work when T or F is a template param.
+template <bool V, typename T, typename F>
+using conditional_t = typename detail::conditional_<V>::template apply<T, F>;
 
 template <typename...>
 struct Conjunction : std::true_type {};
@@ -490,6 +515,21 @@ template <class... Ts>
 struct StrictDisjunction
     : Negation<
           std::is_same<Bools<Ts::value...>, Bools<(Ts::value && false)...>>> {};
+
+namespace detail {
+template <typename, typename>
+struct is_transparent_ : std::false_type {};
+template <typename T>
+struct is_transparent_<void_t<typename T::is_transparent>, T> : std::true_type {
+};
+} // namespace detail
+
+//  is_transparent
+//
+//  To test whether a less, equal-to, or hash type follows the is-transparent
+//  protocol used by containers with optional heterogeneous access.
+template <typename T>
+struct is_transparent : detail::is_transparent_<void, T> {};
 
 } // namespace folly
 
@@ -575,15 +615,6 @@ FOLLY_NAMESPACE_STD_BEGIN
 
 template <class T, class U>
 struct pair;
-#ifndef _GLIBCXX_USE_FB
-FOLLY_GLIBCXX_NAMESPACE_CXX11_BEGIN
-template <class T, class R, class A>
-class basic_string;
-FOLLY_GLIBCXX_NAMESPACE_CXX11_END
-#else
-template <class T, class R, class A, class S>
-class basic_string;
-#endif
 template <class T, class A>
 class vector;
 template <class T, class A>
@@ -620,29 +651,13 @@ using IsOneOf = StrictDisjunction<std::is_same<T, Ts>...>;
 
 namespace detail {
 
-template <typename T, bool>
-struct is_negative_impl {
-  constexpr static bool check(T x) {
-    return x < 0;
-  }
-};
-
-template <typename T>
-struct is_negative_impl<T, false> {
-  constexpr static bool check(T) {
-    return false;
-  }
-};
-
 // folly::to integral specializations can end up generating code
 // inside what are really static ifs (not executed because of the templated
 // types) that violate -Wsign-compare and/or -Wbool-compare so suppress them
 // in order to not prevent all calling code from using it.
 FOLLY_PUSH_WARNING
 FOLLY_GNU_DISABLE_WARNING("-Wsign-compare")
-#if __GNUC_PREREQ(5, 0)
-FOLLY_GNU_DISABLE_WARNING("-Wbool-compare")
-#endif
+FOLLY_GCC_DISABLE_WARNING("-Wbool-compare")
 FOLLY_MSVC_DISABLE_WARNING(4388) // sign-compare
 FOLLY_MSVC_DISABLE_WARNING(4804) // bool-compare
 
@@ -673,7 +688,7 @@ FOLLY_POP_WARNING
 // same as `x < 0`
 template <typename T>
 constexpr bool is_negative(T x) {
-  return folly::detail::is_negative_impl<T, std::is_signed<T>::value>::check(x);
+  return std::is_signed<T>::value && x < T(0);
 }
 
 // same as `x <= 0`
@@ -710,10 +725,6 @@ bool greater_than(LHS const lhs) {
 
 // Assume nothing when compiling with MSVC.
 #ifndef _MSC_VER
-// gcc-5.0 changed string's implementation in libstdc++ to be non-relocatable
-#if !_GLIBCXX_USE_CXX11_ABI
-FOLLY_ASSUME_FBVECTOR_COMPATIBLE_3(std::basic_string)
-#endif
 FOLLY_ASSUME_FBVECTOR_COMPATIBLE_2(std::vector)
 FOLLY_ASSUME_FBVECTOR_COMPATIBLE_2(std::deque)
 FOLLY_ASSUME_FBVECTOR_COMPATIBLE_2(std::unique_ptr)

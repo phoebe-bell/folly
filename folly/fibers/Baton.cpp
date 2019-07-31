@@ -24,7 +24,6 @@
 namespace folly {
 namespace fibers {
 
-using folly::detail::futexWaitUntil;
 using folly::detail::futexWake;
 
 void Baton::setWaiter(Waiter& waiter) {
@@ -47,11 +46,10 @@ void Baton::wait() {
 }
 
 void Baton::wait(TimeoutHandler& timeoutHandler) {
-  auto timeoutFunc = [this, &timeoutHandler] {
+  auto timeoutFunc = [this] {
     if (!try_wait()) {
       postHelper(TIMEOUT);
     }
-    timeoutHandler.timeoutPtr_ = 0;
   };
   timeoutHandler.timeoutFunc_ = std::ref(timeoutFunc);
   timeoutHandler.fiberManager_ = FiberManager::getFiberManagerUnsafe();
@@ -60,11 +58,6 @@ void Baton::wait(TimeoutHandler& timeoutHandler) {
 }
 
 void Baton::waitThread() {
-  if (spinWaitForEarlyPost()) {
-    assert(waiter_.load(std::memory_order_acquire) == POSTED);
-    return;
-  }
-
   auto waiter = waiter_.load();
 
   if (LIKELY(
@@ -91,62 +84,6 @@ void Baton::waitThread() {
   throw std::logic_error("Other waiter is already waiting on this baton");
 }
 
-bool Baton::spinWaitForEarlyPost() {
-  static_assert(
-      PreBlockAttempts > 0,
-      "isn't this assert clearer than an uninitialized variable warning?");
-  for (int i = 0; i < PreBlockAttempts; ++i) {
-    if (try_wait()) {
-      // hooray!
-      return true;
-    }
-    // The pause instruction is the polite way to spin, but it doesn't
-    // actually affect correctness to omit it if we don't have it.
-    // Pausing donates the full capabilities of the current core to
-    // its other hyperthreads for a dozen cycles or so
-    asm_volatile_pause();
-  }
-
-  return false;
-}
-
-bool Baton::timedWaitThread(TimeoutController::Duration timeout) {
-  if (spinWaitForEarlyPost()) {
-    assert(waiter_.load(std::memory_order_acquire) == POSTED);
-    return true;
-  }
-
-  auto waiter = waiter_.load();
-
-  if (LIKELY(
-          waiter == NO_WAITER &&
-          waiter_.compare_exchange_strong(waiter, THREAD_WAITING))) {
-    auto deadline = TimeoutController::Clock::now() + timeout;
-    do {
-      auto* futex = &futex_.futex;
-      const auto wait_rv =
-          futexWaitUntil(futex, uint32_t(THREAD_WAITING), deadline);
-      if (wait_rv == folly::detail::FutexResult::TIMEDOUT) {
-        return false;
-      }
-      waiter = waiter_.load(std::memory_order_relaxed);
-    } while (waiter == THREAD_WAITING);
-  }
-
-  if (LIKELY(waiter == POSTED)) {
-    return true;
-  }
-
-  // Handle errors
-  if (waiter == TIMEOUT) {
-    throw std::logic_error("Thread baton can't have timeout status");
-  }
-  if (waiter == THREAD_WAITING) {
-    throw std::logic_error("Other thread is already waiting on this baton");
-  }
-  throw std::logic_error("Other waiter is already waiting on this baton");
-}
-
 void Baton::post() {
   postHelper(POSTED);
 }
@@ -161,12 +98,12 @@ void Baton::postHelper(intptr_t new_value) {
       return postThread();
     }
 
-    if (waiter == POSTED || waiter == TIMEOUT) {
+    if (waiter == POSTED) {
       return;
     }
   } while (!waiter_.compare_exchange_weak(waiter, new_value));
 
-  if (waiter != NO_WAITER) {
+  if (waiter != NO_WAITER && waiter != TIMEOUT) {
     reinterpret_cast<Waiter*>(waiter)->post();
   }
 }
@@ -189,22 +126,14 @@ void Baton::reset() {
   waiter_.store(NO_WAITER, std::memory_order_relaxed);
 }
 
-void Baton::TimeoutHandler::scheduleTimeout(
-    TimeoutController::Duration timeout) {
+void Baton::TimeoutHandler::scheduleTimeout(std::chrono::milliseconds timeout) {
   assert(fiberManager_ != nullptr);
   assert(timeoutFunc_ != nullptr);
-  assert(timeoutPtr_ == 0);
 
   if (timeout.count() > 0) {
-    timeoutPtr_ =
-        fiberManager_->timeoutManager_->registerTimeout(timeoutFunc_, timeout);
+    fiberManager_->loopController_->timer().scheduleTimeout(this, timeout);
   }
 }
 
-void Baton::TimeoutHandler::cancelTimeout() {
-  if (timeoutPtr_) {
-    fiberManager_->timeoutManager_->cancel(timeoutPtr_);
-  }
-}
 } // namespace fibers
 } // namespace folly

@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <boost/noncopyable.hpp>
 #include <folly/Synchronized.h>
 #include <folly/io/async/EventBase.h>
 #include <memory>
@@ -28,9 +27,11 @@ namespace folly {
 
 namespace detail {
 
-class EventBaseLocalBase : public EventBaseLocalBaseBase, boost::noncopyable {
+class EventBaseLocalBase : public EventBaseLocalBaseBase {
  public:
   EventBaseLocalBase() {}
+  EventBaseLocalBase(const EventBaseLocalBase&) = delete;
+  EventBaseLocalBase& operator=(const EventBaseLocalBase&) = delete;
   ~EventBaseLocalBase() override;
   void erase(EventBase& evb);
   void onEventBaseDestruction(EventBase& evb) override;
@@ -102,7 +103,7 @@ class EventBaseLocal : public detail::EventBaseLocalBase {
   }
 
   template <typename Func>
-  T& getOrCreateFn(EventBase& evb, Func& fn) {
+  T& getOrCreateFn(EventBase& evb, Func fn) {
     // If this looks like it's copy/pasted from above, that's because it is.
     // gcc has a bug (fixed in 4.9) that doesn't allow capturing variadic
     // params in a lambda.

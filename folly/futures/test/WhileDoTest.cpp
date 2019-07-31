@@ -69,8 +69,10 @@ TEST(WhileDo, success) {
   auto pred = makePred(i);
   auto thunk = makeThunk(ps, interrupt, ps_mutex);
   auto f = folly::whileDo(pred, thunk)
-               .then([&]() mutable { complete = true; })
-               .onError([&](FutureException& /* e */) { failure = true; });
+               .thenValue([&](auto&&) mutable { complete = true; })
+               .thenError(folly::tag_t<FutureException>{}, [&](auto&& /* e */) {
+                 failure = true;
+               });
 
   popAndFulfillPromise(ps, ps_mutex);
   EXPECT_FALSE(complete);
@@ -97,8 +99,10 @@ TEST(WhileDo, failure) {
   auto pred = makePred(i);
   auto thunk = makeThunk(ps, interrupt, ps_mutex);
   auto f = folly::whileDo(pred, thunk)
-               .then([&]() mutable { complete = true; })
-               .onError([&](FutureException& /* e */) { failure = true; });
+               .thenValue([&](auto&&) mutable { complete = true; })
+               .thenError(folly::tag_t<FutureException>{}, [&](auto&& /* e */) {
+                 failure = true;
+               });
 
   popAndFulfillPromise(ps, ps_mutex);
   EXPECT_FALSE(complete);
@@ -127,8 +131,10 @@ TEST(WhileDo, interrupt) {
   auto pred = makePred(i);
   auto thunk = makeThunk(ps, interrupt, ps_mutex);
   auto f = folly::whileDo(pred, thunk)
-               .then([&]() mutable { complete = true; })
-               .onError([&](FutureException& /* e */) { failure = true; });
+               .thenValue([&](auto&&) mutable { complete = true; })
+               .thenError(folly::tag_t<FutureException>{}, [&](auto&& /* e */) {
+                 failure = true;
+               });
 
   EXPECT_EQ(0, interrupt);
 

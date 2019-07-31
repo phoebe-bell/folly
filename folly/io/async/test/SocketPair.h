@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/net/NetworkSocket.h>
+
 namespace folly {
 
 class SocketPair {
@@ -26,26 +28,38 @@ class SocketPair {
   ~SocketPair();
 
   int operator[](int index) const {
-    return fds_[index];
+    return fds_[index].toFd();
   }
 
   void closeFD0();
   void closeFD1();
 
+  NetworkSocket extractNetworkSocket0() {
+    return extractNetworkSocket(0);
+  }
+  NetworkSocket extractNetworkSocket1() {
+    return extractNetworkSocket(1);
+  }
+
   int extractFD0() {
-    return extractFD(0);
+    return extractNetworkSocket0().toFd();
   }
   int extractFD1() {
-    return extractFD(1);
+    return extractNetworkSocket1().toFd();
   }
-  int extractFD(int index) {
-    int fd = fds_[index];
-    fds_[index] = -1;
+
+  NetworkSocket extractNetworkSocket(int index) {
+    auto fd = fds_[index];
+    fds_[index] = NetworkSocket();
     return fd;
   }
 
+  int extractFD(int index) {
+    return extractNetworkSocket(index).toFd();
+  }
+
  private:
-  int fds_[2];
+  NetworkSocket fds_[2];
 };
 
 } // namespace folly

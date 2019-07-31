@@ -28,9 +28,11 @@
 
 #include <folly/Random.h>
 #include <folly/portability/Asm.h>
+#include <folly/portability/GFlags.h>
 #include <folly/portability/GTest.h>
 #include <folly/portability/PThread.h>
 #include <folly/portability/Unistd.h>
+#include <folly/test/TestUtils.h>
 
 using folly::MicroLock;
 using folly::MicroSpinLock;
@@ -40,6 +42,11 @@ using std::string;
 #ifdef FOLLY_PICO_SPIN_LOCK_H_
 using folly::PicoSpinLock;
 #endif
+
+DEFINE_int64(
+    stress_test_seconds,
+    2,
+    "Number of seconds for which to run stress tests");
 
 namespace {
 
@@ -305,4 +312,146 @@ TEST(SmallLocks, MicroLockTryLock) {
   EXPECT_TRUE(lock.try_lock());
   EXPECT_FALSE(lock.try_lock());
   lock.unlock();
+}
+
+namespace {
+template <typename Mutex, typename Duration>
+void simpleStressTest(Duration duration, int numThreads) {
+  auto&& mutex = Mutex{};
+  auto&& data = std::atomic<std::uint64_t>{0};
+  auto&& threads = std::vector<std::thread>{};
+  auto&& stop = std::atomic<bool>{true};
+
+  for (auto i = 0; i < numThreads; ++i) {
+    threads.emplace_back([&mutex, &data, &stop] {
+      while (!stop.load(std::memory_order_relaxed)) {
+        auto lck = std::unique_lock<Mutex>{mutex};
+        EXPECT_EQ(data.fetch_add(1, std::memory_order_relaxed), 0);
+        EXPECT_EQ(data.fetch_sub(1, std::memory_order_relaxed), 1);
+      }
+    });
+  }
+
+  std::this_thread::sleep_for(duration);
+  stop.store(true);
+  for (auto& thread : threads) {
+    thread.join();
+  }
+}
+} // namespace
+
+TEST(SmallLocks, MicroSpinLockStressTestLockTwoThreads) {
+  auto duration = std::chrono::seconds{FLAGS_stress_test_seconds};
+  simpleStressTest<MicroSpinLock>(duration, 2);
+}
+
+TEST(SmallLocks, MicroSpinLockStressTestLockHardwareConcurrency) {
+  auto duration = std::chrono::seconds{FLAGS_stress_test_seconds};
+  auto threads = std::thread::hardware_concurrency();
+  simpleStressTest<MicroSpinLock>(duration, threads);
+}
+
+TEST(SmallLocks, PicoSpinLockStressTestLockTwoThreads) {
+  auto duration = std::chrono::seconds{FLAGS_stress_test_seconds};
+  simpleStressTest<PicoSpinLock<std::uint16_t>>(duration, 2);
+}
+
+TEST(SmallLocks, PicoSpinLockStressTestLockHardwareConcurrency) {
+  auto duration = std::chrono::seconds{FLAGS_stress_test_seconds};
+  auto threads = std::thread::hardware_concurrency();
+  simpleStressTest<PicoSpinLock<std::uint16_t>>(duration, threads);
+}
+
+namespace {
+template <typename Mutex>
+class MutexWrapper {
+ public:
+  void lock() {
+    while (!mutex_.try_lock()) {
+    }
+  }
+  void unlock() {
+    mutex_.unlock();
+  }
+
+  Mutex mutex_;
+};
+
+template <typename Mutex, typename Duration>
+void simpleStressTestTryLock(Duration duration, int numThreads) {
+  simpleStressTest<MutexWrapper<Mutex>>(duration, numThreads);
+}
+} // namespace
+
+TEST(SmallLocks, MicroSpinLockStressTestTryLockTwoThreads) {
+  auto duration = std::chrono::seconds{FLAGS_stress_test_seconds};
+  simpleStressTestTryLock<MicroSpinLock>(duration, 2);
+}
+
+TEST(SmallLocks, MicroSpinLockStressTestTryLockHardwareConcurrency) {
+  auto duration = std::chrono::seconds{FLAGS_stress_test_seconds};
+  auto threads = std::thread::hardware_concurrency();
+  simpleStressTestTryLock<MicroSpinLock>(duration, threads);
+}
+
+TEST(SmallLocksk, MicroSpinLockThreadSanitizer) {
+  SKIP_IF(!folly::kIsSanitizeThread) << "Enabled in TSAN mode only";
+
+  uint8_t val = 0;
+  static_assert(sizeof(uint8_t) == sizeof(MicroSpinLock), "sanity check");
+  // make sure TSAN handles this case too:
+  // same lock but initialized via setting a value
+  for (int i = 0; i < 10; i++) {
+    val = 0;
+    std::lock_guard<MicroSpinLock> g(*reinterpret_cast<MicroSpinLock*>(&val));
+  }
+
+  {
+    MicroSpinLock a;
+    MicroSpinLock b;
+    a.init();
+    b.init();
+    {
+      std::lock_guard<MicroSpinLock> ga(a);
+      std::lock_guard<MicroSpinLock> gb(b);
+    }
+    {
+      std::lock_guard<MicroSpinLock> gb(b);
+      EXPECT_DEATH(
+          [&]() { std::lock_guard<MicroSpinLock> ga(a); }(),
+          "Cycle in lock order graph");
+    }
+  }
+
+  {
+    uint8_t a = 0;
+    uint8_t b = 0;
+    {
+      std::lock_guard<MicroSpinLock> ga(*reinterpret_cast<MicroSpinLock*>(&a));
+      std::lock_guard<MicroSpinLock> gb(*reinterpret_cast<MicroSpinLock*>(&b));
+    }
+
+    a = 0;
+    b = 0;
+    {
+      std::lock_guard<MicroSpinLock> gb(*reinterpret_cast<MicroSpinLock*>(&b));
+      EXPECT_DEATH(
+          [&]() {
+            std::lock_guard<MicroSpinLock> ga(
+                *reinterpret_cast<MicroSpinLock*>(&a));
+          }(),
+          "Cycle in lock order graph");
+    }
+  }
+}
+
+TEST(SmallLocks, PicoSpinLockStressTestTryLockTwoThreads) {
+  auto duration = std::chrono::seconds{FLAGS_stress_test_seconds};
+  simpleStressTestTryLock<PicoSpinLock<std::uint16_t>>(duration, 2);
+}
+
+TEST(SmallLocks, PicoSpinLockStressTestTryLockHardwareConcurrency) {
+  auto duration = std::chrono::seconds{FLAGS_stress_test_seconds};
+  auto threads = std::thread::hardware_concurrency();
+  simpleStressTestTryLock<PicoSpinLock<std::uint16_t>>(duration, threads);
 }

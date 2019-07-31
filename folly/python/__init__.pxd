@@ -14,7 +14,13 @@ cdef extern from "folly/Try.h" namespace "folly" nogil:
 cdef extern from "folly/futures/Future.h" namespace "folly" nogil:
     cdef cppclass cFollyFuture "folly::Future"[T]:
         T get()
+        cbool hasValue()
+        cbool isReady()
         #TODO add via and then
+
+    cdef cppclass cFollySemiFuture "folly::SemiFuture"[T]:
+        T get()
+        pass
 
 cdef extern from "folly/Unit.h" namespace "folly":
     struct cFollyUnit "folly::Unit":

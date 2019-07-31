@@ -24,6 +24,7 @@
 
 #include <folly/ConstexprMath.h>
 #include <folly/Optional.h>
+#include <folly/Traits.h>
 #include <folly/concurrency/CacheLocality.h>
 #include <folly/lang/Align.h>
 #include <folly/synchronization/Hazptr.h>
@@ -81,6 +82,7 @@ namespace folly {
 ///
 ///   Consumer operations:
 ///     void dequeue(T&);
+///     T dequeue();
 ///         Extracts an element from the front of the queue. Waits
 ///         until an element is available if needed.
 ///     bool try_dequeue(T&);
@@ -230,10 +232,15 @@ class UnboundedQueue {
   static_assert(LgSegmentSize < 32, "LgSegmentSize must be < 32");
   static_assert(LgAlign < 16, "LgAlign must be < 16");
 
+  using Sem = folly::SaturatingSemaphore<MayBlock, Atom>;
+
   struct Consumer {
     Atom<Segment*> head;
     Atom<Ticket> ticket;
-    explicit Consumer(Segment* s) : head(s), ticket(0) {}
+    hazptr_obj_batch<Atom> batch;
+    explicit Consumer(Segment* s) : head(s), ticket(0) {
+      s->set_batch_no_tag(&batch); // defined in hazptr_obj
+    }
   };
   struct Producer {
     Atom<Segment*> tail;
@@ -252,6 +259,7 @@ class UnboundedQueue {
   /** destructor */
   ~UnboundedQueue() {
     cleanUpRemainingItems();
+    c_.batch.shutdown_and_reclaim();
     reclaimRemainingSegments();
   }
 
@@ -266,7 +274,11 @@ class UnboundedQueue {
 
   /** dequeue */
   FOLLY_ALWAYS_INLINE void dequeue(T& item) noexcept {
-    dequeueImpl(item);
+    item = dequeueImpl();
+  }
+
+  FOLLY_ALWAYS_INLINE T dequeue() noexcept {
+    return dequeueImpl();
   }
 
   /** try_dequeue */
@@ -387,32 +399,33 @@ class UnboundedQueue {
   }
 
   /** dequeueImpl */
-  FOLLY_ALWAYS_INLINE void dequeueImpl(T& item) noexcept {
+  FOLLY_ALWAYS_INLINE T dequeueImpl() noexcept {
     if (SPSC) {
       Segment* s = head();
-      dequeueCommon(s, item);
+      return dequeueCommon(s);
     } else {
       // Using hazptr_holder instead of hazptr_local because it is
       // possible to call the T dtor and it may happen to use hazard
       // pointers.
       hazptr_holder<Atom> hptr;
       Segment* s = hptr.get_protected(c_.head);
-      dequeueCommon(s, item);
+      return dequeueCommon(s);
     }
   }
 
   /** dequeueCommon */
-  FOLLY_ALWAYS_INLINE void dequeueCommon(Segment* s, T& item) noexcept {
+  FOLLY_ALWAYS_INLINE T dequeueCommon(Segment* s) noexcept {
     Ticket t = fetchIncrementConsumerTicket();
     if (!SingleConsumer) {
       s = findSegment(s, t);
     }
     size_t idx = index(t);
     Entry& e = s->entry(idx);
-    e.takeItem(item);
+    auto res = e.takeItem();
     if (responsibleForAdvance(t)) {
       advanceHead(s);
     }
+    return res;
   }
 
   /** tryDequeueUntil */
@@ -445,7 +458,7 @@ class UnboundedQueue {
       return folly::Optional<T>();
     }
     setConsumerTicket(t + 1);
-    auto ret = e.takeItem();
+    folly::Optional<T> ret = e.takeItem();
     if (responsibleForAdvance(t)) {
       advanceHead(s);
     }
@@ -473,7 +486,7 @@ class UnboundedQueue {
               t, t + 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
         continue;
       }
-      auto ret = e.takeItem();
+      folly::Optional<T> ret = e.takeItem();
       if (responsibleForAdvance(t)) {
         advanceHead(s);
       }
@@ -547,6 +560,7 @@ class UnboundedQueue {
   Segment* allocNextSegment(Segment* s) {
     auto t = s->minTicket() + SegmentSize;
     Segment* next = new Segment(t);
+    next->set_batch_no_tag(&c_.batch); // defined in hazptr_obj
     next->acquire_ref_safe(); // defined in hazptr_obj_base_linked
     if (!s->casNextSegment(next)) {
       delete next;
@@ -742,8 +756,8 @@ class UnboundedQueue {
    *  Entry
    */
   class Entry {
-    folly::SaturatingSemaphore<MayBlock, Atom> flag_;
-    typename std::aligned_storage<sizeof(T), alignof(T)>::type item_;
+    Sem flag_;
+    aligned_storage_for_t<T> item_;
 
    public:
     template <typename Arg>
@@ -752,12 +766,7 @@ class UnboundedQueue {
       flag_.post();
     }
 
-    FOLLY_ALWAYS_INLINE void takeItem(T& item) noexcept {
-      flag_.wait();
-      getItem(item);
-    }
-
-    FOLLY_ALWAYS_INLINE folly::Optional<T> takeItem() noexcept {
+    FOLLY_ALWAYS_INLINE T takeItem() noexcept {
       flag_.wait();
       return getItem();
     }
@@ -768,11 +777,11 @@ class UnboundedQueue {
     }
 
     template <typename Clock, typename Duration>
-    FOLLY_ALWAYS_INLINE bool tryWaitUntil(
+    FOLLY_EXPORT FOLLY_ALWAYS_INLINE bool tryWaitUntil(
         const std::chrono::time_point<Clock, Duration>& deadline) noexcept {
       // wait-options from benchmarks on contended queues:
-      auto const opt =
-          flag_.wait_options().spin_max(std::chrono::microseconds(10));
+      static constexpr auto const opt =
+          Sem::wait_options().spin_max(std::chrono::microseconds(10));
       return flag_.try_wait_until(deadline, opt);
     }
 
@@ -781,13 +790,8 @@ class UnboundedQueue {
     }
 
    private:
-    FOLLY_ALWAYS_INLINE void getItem(T& item) noexcept {
-      item = std::move(*(itemPtr()));
-      destroyItem();
-    }
-
-    FOLLY_ALWAYS_INLINE folly::Optional<T> getItem() noexcept {
-      folly::Optional<T> ret = std::move(*(itemPtr()));
+    FOLLY_ALWAYS_INLINE T getItem() noexcept {
+      T ret = std::move(*(itemPtr()));
       destroyItem();
       return ret;
     }

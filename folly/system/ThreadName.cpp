@@ -91,7 +91,8 @@ Optional<std::string> getThreadName(std::thread::id id) {
 #if FOLLY_HAS_PTHREAD_SETNAME_NP_THREAD_NAME || \
     FOLLY_HAS_PTHREAD_SETNAME_NP_NAME
   std::array<char, kMaxThreadNameLength> buf;
-  if (pthread_getname_np(stdTidToPthreadId(id), buf.data(), buf.size()) != 0) {
+  if (id == std::thread::id() ||
+      pthread_getname_np(stdTidToPthreadId(id), buf.data(), buf.size()) != 0) {
     return Optional<std::string>();
   }
   return folly::make_optional(std::string(buf.data()));
@@ -169,7 +170,6 @@ bool setThreadName(std::thread::id tid, StringPiece name) {
 #endif
 }
 
-#if FOLLY_HAVE_PTHREAD
 bool setThreadName(pthread_t pid, StringPiece name) {
 #if _WIN32
   static_assert(
@@ -199,7 +199,6 @@ bool setThreadName(pthread_t pid, StringPiece name) {
   return setThreadName(id, name);
 #endif
 }
-#endif
 
 bool setThreadName(StringPiece name) {
   return setThreadName(std::this_thread::get_id(), name);

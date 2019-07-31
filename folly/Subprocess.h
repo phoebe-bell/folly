@@ -94,12 +94,7 @@
 
 #include <signal.h>
 #include <sys/types.h>
-
-#if __APPLE__
 #include <sys/wait.h>
-#else
-#include <wait.h>
-#endif
 
 #include <exception>
 #include <string>
@@ -388,7 +383,13 @@ class Subprocess {
 
 #if __linux__
     /**
-     * Child will receive a signal when the parent exits.
+     * Child will receive a signal when the parent *thread* exits.
+     *
+     * This is especially important when this option is used but the calling
+     * thread does not block for the duration of the subprocess. If the original
+     * thread that created the subprocess ends then the subprocess will
+     * terminate. For example, thread pool executors which can reap unused
+     * threads may trigger this behavior.
      */
     Options& parentDeathSignal(int sig) {
       parentDeathSignal_ = sig;
@@ -403,6 +404,23 @@ class Subprocess {
      */
     Options& processGroupLeader() {
       processGroupLeader_ = true;
+      return *this;
+    }
+
+    /**
+     * Detach the spawned process, to allow destroying the Subprocess object
+     * without waiting for the child process to finish.
+     *
+     * This causes the code to fork twice before executing the command.
+     * The intermediate child process will exit immediately, causing the process
+     * running the executable to be reparented to init (pid 1).
+     *
+     * Subprocess objects created with detach() enabled will already be in an
+     * "EXITED" state when the constructor returns.  The caller should not call
+     * wait() or poll() on the Subprocess, and pid() will return -1.
+     */
+    Options& detach() {
+      detach_ = true;
       return *this;
     }
 
@@ -471,11 +489,12 @@ class Subprocess {
     FdMap fdActions_;
     bool closeOtherFds_{false};
     bool usePath_{false};
+    bool processGroupLeader_{false};
+    bool detach_{false};
     std::string childDir_; // "" keeps the parent's working directory
 #if __linux__
     int parentDeathSignal_{0};
 #endif
-    bool processGroupLeader_{false};
     DangerousPostForkPreExecCallback* dangerousPostForkPreExecCallback_{
         nullptr};
 #if __linux__
@@ -887,12 +906,12 @@ class Subprocess {
   // spawnInternal() returns it reads the error pipe to see if the child
   // encountered any errors.
   void spawn(
-      std::unique_ptr<const char* []> argv,
+      std::unique_ptr<const char*[]> argv,
       const char* executable,
       const Options& options,
       const std::vector<std::string>* env);
   void spawnInternal(
-      std::unique_ptr<const char* []> argv,
+      std::unique_ptr<const char*[]> argv,
       const char* executable,
       Options& options,
       const std::vector<std::string>* env,

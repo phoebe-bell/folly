@@ -16,6 +16,8 @@
 
 #include <folly/dynamic.h>
 
+#include <glog/logging.h>
+
 #include <folly/Range.h>
 #include <folly/json.h>
 #include <folly/portability/GTest.h>
@@ -175,6 +177,27 @@ TEST(Dynamic, ObjectBasics) {
   EXPECT_EQ(mergeObj1, combinedPreferObj1);
 }
 
+TEST(Dynamic, ArrayInsertErase) {
+  auto arr = dynamic::array(1, 2, 3, 4, 5, 6);
+
+  arr.erase(arr.begin() + 3);
+  EXPECT_EQ(5, arr[3].asInt());
+
+  arr.insert(arr.begin() + 3, 4);
+  EXPECT_EQ(4, arr[3].asInt());
+  EXPECT_EQ(5, arr[4].asInt());
+
+  auto x = dynamic::array(55, 66);
+  arr.insert(arr.begin() + 4, std::move(x));
+  EXPECT_EQ(55, arr[4][0].asInt());
+  EXPECT_EQ(66, arr[4][1].asInt());
+  EXPECT_EQ(5, arr[5].asInt());
+
+  dynamic obj = dynamic::object;
+  obj.insert(3, 4);
+  EXPECT_EQ(4, obj[3].asInt());
+}
+
 namespace {
 
 struct StaticStrings {
@@ -218,6 +241,37 @@ TEST(Dynamic, ObjectHeterogeneousAccess) {
   EXPECT_THROW(obj.at(b), std::out_of_range);
   EXPECT_THROW(obj.at(StringPiece{b}), std::out_of_range);
   EXPECT_THROW(obj.at(StaticStrings::kBar), std::out_of_range);
+
+  // get_ptr()
+  EXPECT_NE(obj.get_ptr(empty), nullptr);
+  EXPECT_EQ(*obj.get_ptr(empty), 456);
+  EXPECT_NE(obj.get_ptr(nullptr), nullptr);
+  EXPECT_EQ(*obj.get_ptr(nullptr), 456);
+  EXPECT_NE(obj.get_ptr(foo), nullptr);
+  EXPECT_EQ(*obj.get_ptr(foo), 789);
+
+  EXPECT_NE(obj.get_ptr(a), nullptr);
+  EXPECT_EQ(*obj.get_ptr(a), 123);
+  EXPECT_NE(obj.get_ptr(StaticStrings::kA), nullptr);
+  EXPECT_EQ(*obj.get_ptr(StaticStrings::kA), 123);
+  EXPECT_NE(obj.get_ptr("a"), nullptr);
+  EXPECT_EQ(*obj.get_ptr("a"), 123);
+
+  EXPECT_NE(obj.get_ptr(sp), nullptr);
+  EXPECT_EQ(*obj.get_ptr(sp), 123);
+  EXPECT_NE(obj.get_ptr(StringPiece{"a"}), nullptr);
+  EXPECT_EQ(*obj.get_ptr(StringPiece{"a"}), 123);
+  EXPECT_NE(obj.get_ptr(StaticStrings::kFoo), nullptr);
+  EXPECT_EQ(*obj.get_ptr(StaticStrings::kFoo), 789);
+
+  EXPECT_NE(obj.get_ptr(std::string{"a"}), nullptr);
+  EXPECT_EQ(*obj.get_ptr(std::string{"a"}), 123);
+  EXPECT_NE(obj.get_ptr(str), nullptr);
+  EXPECT_EQ(*obj.get_ptr(str), 123);
+
+  EXPECT_EQ(obj.get_ptr(b), nullptr);
+  EXPECT_EQ(obj.get_ptr(StringPiece{b}), nullptr);
+  EXPECT_EQ(obj.get_ptr(StaticStrings::kBar), nullptr);
 
   // find()
   EXPECT_EQ(obj.find(empty)->second, 456);
@@ -473,6 +527,17 @@ TEST(Dynamic, GetSetDefaultTest) {
   dynamic d4 = dynamic::array;
   EXPECT_ANY_THROW(d4.getDefault("foo", "bar"));
   EXPECT_ANY_THROW(d4.setDefault("foo", "bar"));
+
+  // Using dynamic keys
+  dynamic k10{10}, k20{20}, kTrue{true};
+  dynamic d5 = dynamic::object(k10, "foo");
+  EXPECT_EQ(d5.setDefault(k10, "bar"), "foo");
+  EXPECT_EQ(d5.setDefault(k20, "bar"), "bar");
+  EXPECT_EQ(d5.setDefault(kTrue, "baz"), "baz");
+  EXPECT_EQ(d5.setDefault(StaticStrings::kA, "foo"), "foo");
+  EXPECT_EQ(d5.setDefault(StaticStrings::kB, "foo"), "foo");
+  EXPECT_EQ(d5.setDefault(StaticStrings::kFoo, "bar"), "bar");
+  EXPECT_EQ(d5.setDefault(StaticStrings::kBar, "foo"), "foo");
 }
 
 TEST(Dynamic, ObjectForwarding) {
@@ -537,6 +602,7 @@ std::string make_long_string() {
 
 TEST(Dynamic, GetDefault) {
   const auto s = make_long_string();
+  dynamic kDynamicKey{10};
   dynamic ds(s);
   dynamic tmp(s);
   dynamic d1 = dynamic::object("key1", s);
@@ -548,11 +614,31 @@ TEST(Dynamic, GetDefault) {
   EXPECT_EQ(ds, d1.getDefault("key1", ayy));
   EXPECT_EQ(ds, d1.getDefault("key1", ayy));
   EXPECT_EQ(ds, d1.getDefault("not-a-key", tmp));
+  EXPECT_EQ(ds, d1.getDefault(StaticStrings::kA, tmp));
+  EXPECT_EQ(ds, d1.getDefault(StaticStrings::kB, tmp));
+  EXPECT_EQ(ds, d1.getDefault(StaticStrings::kFoo, tmp));
+  EXPECT_EQ(ds, d1.getDefault(StaticStrings::kBar, tmp));
+  EXPECT_EQ(ds, d1.getDefault(kDynamicKey, tmp));
   EXPECT_EQ(ds, tmp);
   // lvalue - rvalue
   EXPECT_EQ(ds, d1.getDefault("key1", "ayy"));
   EXPECT_EQ(ds, d1.getDefault("key1", "ayy"));
   EXPECT_EQ(ds, d1.getDefault("not-a-key", std::move(tmp)));
+  EXPECT_NE(ds, tmp);
+  tmp = s;
+  EXPECT_EQ(ds, d1.getDefault(StaticStrings::kA, std::move(tmp)));
+  EXPECT_NE(ds, tmp);
+  tmp = s;
+  EXPECT_EQ(ds, d1.getDefault(StaticStrings::kB, std::move(tmp)));
+  EXPECT_NE(ds, tmp);
+  tmp = s;
+  EXPECT_EQ(ds, d1.getDefault(StaticStrings::kFoo, std::move(tmp)));
+  EXPECT_NE(ds, tmp);
+  tmp = s;
+  EXPECT_EQ(ds, d1.getDefault(StaticStrings::kBar, std::move(tmp)));
+  EXPECT_NE(ds, tmp);
+  tmp = s;
+  EXPECT_EQ(ds, d1.getDefault(kDynamicKey, std::move(tmp)));
   EXPECT_NE(ds, tmp);
   // rvalue - lvalue
   tmp = s;
@@ -561,11 +647,46 @@ TEST(Dynamic, GetDefault) {
   EXPECT_EQ(ds, std::move(d2).getDefault("not-a-key", tmp));
   EXPECT_EQ(dynamic(dynamic::object("key2", s)), d2);
   EXPECT_EQ(ds, tmp);
+  EXPECT_EQ(ds, std::move(d2).getDefault(StaticStrings::kA, tmp));
+  EXPECT_EQ(dynamic(dynamic::object("key2", s)), d2);
+  EXPECT_EQ(ds, tmp);
+  EXPECT_EQ(ds, std::move(d2).getDefault(StaticStrings::kB, tmp));
+  EXPECT_EQ(dynamic(dynamic::object("key2", s)), d2);
+  EXPECT_EQ(ds, tmp);
+  EXPECT_EQ(ds, std::move(d2).getDefault(StaticStrings::kFoo, tmp));
+  EXPECT_EQ(dynamic(dynamic::object("key2", s)), d2);
+  EXPECT_EQ(ds, tmp);
+  EXPECT_EQ(ds, std::move(d2).getDefault(StaticStrings::kBar, tmp));
+  EXPECT_EQ(dynamic(dynamic::object("key2", s)), d2);
+  EXPECT_EQ(ds, tmp);
+  EXPECT_EQ(ds, std::move(d2).getDefault(kDynamicKey, tmp));
+  EXPECT_EQ(dynamic(dynamic::object("key2", s)), d2);
+  EXPECT_EQ(ds, tmp);
   // rvalue - rvalue
   EXPECT_EQ(ds, std::move(d3).getDefault("key3", std::move(tmp)));
   EXPECT_NE(ds, d3["key3"]);
   EXPECT_EQ(ds, tmp);
   EXPECT_EQ(ds, std::move(d4).getDefault("not-a-key", std::move(tmp)));
+  EXPECT_EQ(dynamic(dynamic::object("key4", s)), d4);
+  EXPECT_NE(ds, tmp);
+  tmp = s;
+  EXPECT_EQ(ds, std::move(d4).getDefault(StaticStrings::kA, std::move(tmp)));
+  EXPECT_EQ(dynamic(dynamic::object("key4", s)), d4);
+  EXPECT_NE(ds, tmp);
+  tmp = s;
+  EXPECT_EQ(ds, std::move(d4).getDefault(StaticStrings::kB, std::move(tmp)));
+  EXPECT_EQ(dynamic(dynamic::object("key4", s)), d4);
+  EXPECT_NE(ds, tmp);
+  tmp = s;
+  EXPECT_EQ(ds, std::move(d4).getDefault(StaticStrings::kFoo, std::move(tmp)));
+  EXPECT_EQ(dynamic(dynamic::object("key4", s)), d4);
+  EXPECT_NE(ds, tmp);
+  tmp = s;
+  EXPECT_EQ(ds, std::move(d4).getDefault(StaticStrings::kBar, std::move(tmp)));
+  EXPECT_EQ(dynamic(dynamic::object("key4", s)), d4);
+  EXPECT_NE(ds, tmp);
+  tmp = s;
+  EXPECT_EQ(ds, std::move(d4).getDefault(kDynamicKey, std::move(tmp)));
   EXPECT_EQ(dynamic(dynamic::object("key4", s)), d4);
   EXPECT_NE(ds, tmp);
 }
@@ -932,6 +1053,8 @@ TEST(Dynamic, MergeDiffNestedObjects) {
 using folly::json_pointer;
 
 TEST(Dynamic, JSONPointer) {
+  using err_code = folly::dynamic::json_pointer_resolution_error_code;
+
   dynamic target = dynamic::object;
   dynamic ary = dynamic::array("bar", "baz", dynamic::array("bletch", "xyzzy"));
   target["foo"] = ary;
@@ -974,22 +1097,191 @@ TEST(Dynamic, JSONPointer) {
   // allow '-' to index in objects
   EXPECT_EQ("y", target.get_ptr(json_pointer::parse("/-/x"))->getString());
 
-  // invalid JSON pointers formatting when accessing array
-  EXPECT_THROW(
-      target.get_ptr(json_pointer::parse("/foo/01")), std::invalid_argument);
+  // validate parent pointer functionality
+
+  {
+    auto const resolved_value =
+        target.try_get_ptr(json_pointer::parse("")).value();
+    EXPECT_EQ(nullptr, resolved_value.parent);
+  }
+
+  {
+    auto parent_json_ptr = json_pointer::parse("/xyz");
+    auto json_ptr = json_pointer::parse("/xyz/def");
+
+    auto const parent = target.get_ptr(parent_json_ptr);
+    auto const resolved_value = target.try_get_ptr(json_ptr);
+
+    EXPECT_EQ(parent, resolved_value.value().parent);
+    EXPECT_TRUE(parent->isObject());
+    EXPECT_EQ("def", resolved_value.value().parent_key);
+  }
+
+  {
+    auto parent_json_ptr = json_pointer::parse("/foo");
+    auto json_ptr = json_pointer::parse("/foo/1");
+
+    auto const parent = target.get_ptr(parent_json_ptr);
+    auto const resolved_value = target.try_get_ptr(json_ptr);
+
+    EXPECT_EQ(parent, resolved_value.value().parent);
+    EXPECT_TRUE(parent->isArray());
+    EXPECT_EQ(1, resolved_value.value().parent_index);
+  }
+
+  //
+  // invalid pointer resolution cases
+  //
+
+  // invalid index formatting when accessing array
+  {
+    auto err = target.try_get_ptr(json_pointer::parse("/foo/01")).error();
+    EXPECT_EQ(err_code::index_has_leading_zero, err.error_code);
+    EXPECT_EQ(1, err.index);
+    EXPECT_EQ(target.get_ptr(json_pointer::parse("/foo")), err.context);
+    EXPECT_THROW(
+        target.get_ptr(json_pointer::parse("/foo/01")), std::invalid_argument);
+  }
 
   // non-existent keys/indexes
-  EXPECT_EQ(nullptr, ary.get_ptr(json_pointer::parse("/3")));
-  EXPECT_EQ(nullptr, target.get_ptr(json_pointer::parse("/unknown_key")));
-  // intermediate key not found
-  EXPECT_EQ(nullptr, target.get_ptr(json_pointer::parse("/foox/test")));
-  // Intermediate key is '-'
-  EXPECT_EQ(nullptr, target.get_ptr(json_pointer::parse("/foo/-/key")));
+  {
+    auto err = ary.try_get_ptr(json_pointer::parse("/3")).error();
+    EXPECT_EQ(err_code::index_out_of_bounds, err.error_code);
+    EXPECT_EQ(0, err.index);
+    EXPECT_EQ(ary.get_ptr(json_pointer::parse("")), err.context);
+    EXPECT_EQ(nullptr, ary.get_ptr(json_pointer::parse("/3")));
+  }
 
-  // invalid path in object (key in array)
-  EXPECT_THROW(
-      target.get_ptr(json_pointer::parse("/foo/1/bar")), folly::TypeError);
+  {
+    auto err = target.try_get_ptr(json_pointer::parse("/unknown_key")).error();
+    EXPECT_EQ(err_code::key_not_found, err.error_code);
+    EXPECT_EQ(0, err.index);
+    EXPECT_EQ(target.get_ptr(json_pointer::parse("")), err.context);
+    EXPECT_EQ(nullptr, target.get_ptr(json_pointer::parse("/unknown_key")));
+  }
+
+  // fail to resolve index inside string
+  {
+    auto err = target.try_get_ptr(json_pointer::parse("/foo/0/0")).error();
+    EXPECT_EQ(err_code::element_not_object_or_array, err.error_code);
+    EXPECT_EQ(2, err.index);
+    EXPECT_EQ(target.get_ptr(json_pointer::parse("/foo/0")), err.context);
+    EXPECT_THROW(
+        target.get_ptr(json_pointer::parse("/foo/0/0")), folly::TypeError);
+  }
+
+  // intermediate key not found
+  {
+    auto err = target.try_get_ptr(json_pointer::parse("/foox/test")).error();
+    EXPECT_EQ(err_code::key_not_found, err.error_code);
+    EXPECT_EQ(0, err.index);
+    EXPECT_EQ(target.get_ptr(json_pointer::parse("")), err.context);
+    EXPECT_EQ(nullptr, target.get_ptr(json_pointer::parse("/foox/test")));
+  }
+
+  // Intermediate key is '-' in _array_
+  {
+    auto err = target.try_get_ptr(json_pointer::parse("/foo/-/key")).error();
+    EXPECT_EQ(err_code::json_pointer_out_of_bounds, err.error_code);
+    EXPECT_EQ(2, err.index);
+    EXPECT_EQ(target.get_ptr(json_pointer::parse("/foo")), err.context);
+    EXPECT_EQ(nullptr, target.get_ptr(json_pointer::parse("/foo/-/key")));
+  }
+
+  // invalid path in object (non-numeric index in array)
+  {
+    auto err = target.try_get_ptr(json_pointer::parse("/foo/2/bar")).error();
+    EXPECT_EQ(err_code::index_not_numeric, err.error_code);
+    EXPECT_EQ(2, err.index);
+    EXPECT_EQ(target.get_ptr(json_pointer::parse("/foo/2")), err.context);
+    EXPECT_THROW(
+        target.get_ptr(json_pointer::parse("/foo/2/bar")),
+        std::invalid_argument);
+  }
 
   // Allow "-" index in the array
-  EXPECT_EQ(nullptr, target.get_ptr(json_pointer::parse("/foo/-")));
+  {
+    auto err = target.try_get_ptr(json_pointer::parse("/foo/-")).error();
+    EXPECT_EQ(err_code::append_requested, err.error_code);
+    EXPECT_EQ(1, err.index);
+    EXPECT_EQ(target.get_ptr(json_pointer::parse("/foo")), err.context);
+    EXPECT_EQ(nullptr, target.get_ptr(json_pointer::parse("/foo/-")));
+  }
+}
+
+TEST(Dynamic, Math) {
+  // tests int-int, int-double, double-int, and double-double math operations
+  std::vector<dynamic> values = {2, 5.0};
+
+  // addition
+  for (auto value1 : values) {
+    for (auto value2 : values) {
+      auto testValue = value1;
+      testValue += value2;
+      EXPECT_NEAR(
+          value1.asDouble() + value2.asDouble(), testValue.asDouble(), 0.0001);
+    }
+  }
+
+  // subtraction
+  for (auto value1 : values) {
+    for (auto value2 : values) {
+      auto testValue = value1;
+      testValue -= value2;
+      EXPECT_NEAR(
+          value1.asDouble() - value2.asDouble(), testValue.asDouble(), 0.0001);
+    }
+  }
+
+  // multiplication
+  for (auto value1 : values) {
+    for (auto value2 : values) {
+      auto testValue = value1;
+      testValue *= value2;
+      EXPECT_NEAR(
+          value1.asDouble() * value2.asDouble(), testValue.asDouble(), 0.0001);
+    }
+  }
+
+  // division
+  for (auto value1 : values) {
+    for (auto value2 : values) {
+      auto testValue = value1;
+      testValue /= value2;
+      EXPECT_NEAR(
+          value1.asDouble() / value2.asDouble(), testValue.asDouble(), 0.0001);
+    }
+  }
+}
+
+dynamic buildNestedKeys(size_t depth) {
+  if (depth == 0) {
+    return dynamic(0);
+  }
+  return dynamic::object(buildNestedKeys(depth - 1), 0);
+}
+
+dynamic buildNestedValues(size_t depth) {
+  if (depth == 0) {
+    return dynamic(0);
+  }
+  return dynamic::object(0, buildNestedValues(depth - 1));
+}
+
+TEST(Dynamic, EqualNestedKeys) {
+  // This tests for exponential behavior in the depth of the keys.
+  // If it is exponential this test won't finish.
+  size_t const kDepth = 100;
+  dynamic obj1 = buildNestedKeys(kDepth);
+  dynamic obj2 = obj1;
+  EXPECT_EQ(obj1, obj2);
+}
+
+TEST(Dynamic, EqualNestedValues) {
+  // This tests for exponential behavior in the depth of the values.
+  // If it is exponential this test won't finish.
+  size_t const kDepth = 100;
+  dynamic obj1 = buildNestedValues(kDepth);
+  dynamic obj2 = obj1;
+  EXPECT_EQ(obj1, obj2);
 }

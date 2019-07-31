@@ -47,8 +47,8 @@ class MockAsyncSocket : public AsyncSocket {
   }
 
   MOCK_CONST_METHOD1(getPeerAddress, void(folly::SocketAddress*));
-  MOCK_METHOD0(detachFd, int());
-  MOCK_CONST_METHOD0(getFd, int());
+  MOCK_METHOD0(detachNetworkSocket, NetworkSocket());
+  MOCK_CONST_METHOD0(getNetworkSocket, NetworkSocket());
   MOCK_METHOD0(closeNow, void());
   MOCK_CONST_METHOD0(good, bool());
   MOCK_CONST_METHOD0(readable, bool());
@@ -60,6 +60,7 @@ class MockAsyncSocket : public AsyncSocket {
   MOCK_METHOD4(setSockOptVirtual, int(int, int, void const*, socklen_t));
   MOCK_METHOD1(setErrMessageCB, void(AsyncSocket::ErrMessageCallback*));
   MOCK_METHOD1(setSendMsgParamCB, void(AsyncSocket::SendMsgParamsCallback*));
+  MOCK_CONST_METHOD0(getSecurityProtocol, std::string());
   void setPreReceivedData(std::unique_ptr<IOBuf> data) override {
     return _setPreReceivedData(data);
   }

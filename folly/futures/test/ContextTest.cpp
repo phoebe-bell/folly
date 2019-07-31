@@ -44,7 +44,7 @@ TEST(Context, basic) {
 
   // Start a future
   Promise<Unit> p;
-  auto future = p.getFuture().then([&] {
+  auto future = p.getFuture().thenValue([&](auto&&) {
     // Check that the context followed the future
     EXPECT_TRUE(RequestContext::get() != nullptr);
     auto a =
@@ -54,7 +54,7 @@ TEST(Context, basic) {
   });
 
   // Clear the context
-  RequestContext::setContext(nullptr);
+  folly::RequestContextScopeGuard rctx2;
 
   EXPECT_EQ(nullptr, RequestContext::get()->getContextData("test"));
 

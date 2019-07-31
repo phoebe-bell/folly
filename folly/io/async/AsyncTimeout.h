@@ -20,7 +20,6 @@
 
 #include <folly/portability/Event.h>
 
-#include <boost/noncopyable.hpp>
 #include <memory>
 #include <utility>
 
@@ -28,12 +27,11 @@ namespace folly {
 
 class EventBase;
 class RequestContext;
-class TimeoutManager;
 
 /**
  * AsyncTimeout is used to asynchronously wait for a timeout to occur.
  */
-class AsyncTimeout : private boost::noncopyable {
+class AsyncTimeout {
  public:
   typedef TimeoutManager::InternalEnum InternalEnum;
 
@@ -67,6 +65,9 @@ class AsyncTimeout : private boost::noncopyable {
    */
   AsyncTimeout();
 
+  AsyncTimeout(const AsyncTimeout&) = delete;
+  AsyncTimeout& operator=(const AsyncTimeout&) = delete;
+
   /**
    * AsyncTimeout destructor.
    *
@@ -97,6 +98,7 @@ class AsyncTimeout : private boost::noncopyable {
    */
   bool scheduleTimeout(uint32_t milliseconds);
   bool scheduleTimeout(TimeoutManager::timeout_type timeout);
+  bool scheduleTimeoutHighRes(TimeoutManager::timeout_type_high_res timeout);
 
   /**
    * Cancel the timeout, if it is running.

@@ -21,23 +21,12 @@
 #include <string>
 
 #include <folly/Portability.h>
+#include <folly/lang/Pretty.h>
 #include <folly/portability/GTest.h>
 
 template <typename Ex>
-static std::string type_pretty_name() {
-  auto const name = __PRETTY_FUNCTION__;
-  auto const size = std::strlen(name);
-  auto const eq = std::find(name, name + size, '=');
-  auto const sc = std::find(name, name + size, ';');
-  auto const br = std::find(name, name + size, ']');
-  auto const bpos = name + size - eq >= 2 ? eq + 2 : name + size;
-  auto const epos = std::min(sc, br);
-  return epos < bpos ? "" : std::string(bpos, epos - bpos);
-}
-
-template <typename Ex>
 static std::string message_for_terminate_with(std::string const& what) {
-  auto const name = type_pretty_name<Ex>();
+  auto const name = folly::pretty_name<Ex>();
   auto const prefix =
       std::string("terminate called after throwing an instance of ");
   // clang-format off
@@ -103,9 +92,26 @@ TEST_F(ExceptionTest, terminate_with_variadic) {
       message_for_terminate_with<MyException>("world"));
 }
 
+TEST_F(ExceptionTest, invoke_cold) {
+  EXPECT_THROW(
+      folly::invoke_cold([] { throw std::runtime_error("bad"); }),
+      std::runtime_error);
+  EXPECT_EQ(7, folly::invoke_cold([] { return 7; }));
+}
+
 TEST_F(ExceptionTest, invoke_noreturn_cold) {
   EXPECT_THROW(
       folly::invoke_noreturn_cold([] { throw std::runtime_error("bad"); }),
       std::runtime_error);
   EXPECT_DEATH(folly::invoke_noreturn_cold([] {}), message_for_terminate());
+}
+
+TEST_F(ExceptionTest, catch_exception) {
+  auto identity = [](int i) { return i; };
+  auto returner = [](int i) { return [=] { return i; }; };
+  auto thrower = [](int i) { return [=]() -> int { throw i; }; };
+  EXPECT_EQ(3, folly::catch_exception(returner(3), returner(4)));
+  EXPECT_EQ(3, folly::catch_exception<int>(returner(3), identity));
+  EXPECT_EQ(4, folly::catch_exception(thrower(3), returner(4)));
+  EXPECT_EQ(3, folly::catch_exception<int>(thrower(3), identity));
 }

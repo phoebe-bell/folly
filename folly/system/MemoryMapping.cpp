@@ -20,12 +20,14 @@
 #include <functional>
 #include <utility>
 
+#include <glog/logging.h>
+
 #include <folly/Format.h>
 #include <folly/portability/GFlags.h>
 #include <folly/portability/SysMman.h>
 
 #ifdef __linux__
-#include <folly/experimental/io/HugePages.h>
+#include <folly/experimental/io/HugePages.h> // @manual
 #endif
 
 #include <fcntl.h>
@@ -368,7 +370,7 @@ void MemoryMapping::advise(int advice, size_t offset, size_t length) const {
   PLOG_IF(WARNING, ::madvise(mapStart, length, advice)) << "madvise";
 }
 
-MemoryMapping& MemoryMapping::operator=(MemoryMapping other) {
+MemoryMapping& MemoryMapping::operator=(MemoryMapping&& other) {
   swap(other);
   return *this;
 }

@@ -48,46 +48,39 @@ bool SerialExecutor::keepAliveAcquire() {
 }
 
 void SerialExecutor::keepAliveRelease() {
-  auto keepAliveCounter = --keepAliveCounter_;
-  DCHECK(keepAliveCounter >= 0);
-  if (!keepAliveCounter) {
+  auto keepAliveCounter =
+      keepAliveCounter_.fetch_sub(1, std::memory_order_acq_rel);
+  DCHECK(keepAliveCounter > 0);
+  if (keepAliveCounter == 1) {
     delete this;
   }
 }
 
 void SerialExecutor::add(Func func) {
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    queue_.push(std::move(func));
-  }
+  queue_.enqueue(Task{std::move(func), RequestContext::saveContext()});
   parent_->add([keepAlive = getKeepAliveToken(this)] { keepAlive->run(); });
 }
 
 void SerialExecutor::addWithPriority(Func func, int8_t priority) {
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    queue_.push(std::move(func));
-  }
+  queue_.enqueue(Task{std::move(func), RequestContext::saveContext()});
   parent_->addWithPriority(
       [keepAlive = getKeepAliveToken(this)] { keepAlive->run(); }, priority);
 }
 
 void SerialExecutor::run() {
-  std::unique_lock<std::mutex> lock(mutex_);
-
-  ++scheduled_;
-
-  if (scheduled_ > 1) {
+  // We want scheduled_ to guard side-effects of completed tasks, so we can't
+  // use std::memory_order_relaxed here.
+  if (scheduled_.fetch_add(1, std::memory_order_acquire) > 0) {
     return;
   }
 
   do {
-    DCHECK(!queue_.empty());
-    Func func = std::move(queue_.front());
-    queue_.pop();
-    lock.unlock();
+    Task task;
+    queue_.dequeue(task);
 
     try {
+      folly::RequestContextScopeGuard ctxGuard(std::move(task.ctx));
+      auto func = std::move(task.func);
       func();
     } catch (std::exception const& ex) {
       LOG(ERROR) << "SerialExecutor: func threw unhandled exception "
@@ -97,13 +90,9 @@ void SerialExecutor::run() {
                     "object";
     }
 
-    // Destroy the function (and the data it captures) before we acquire the
-    // lock again.
-    func = {};
-
-    lock.lock();
-    --scheduled_;
-  } while (scheduled_);
+    // We want scheduled_ to guard side-effects of completed tasks, so we can't
+    // use std::memory_order_relaxed here.
+  } while (scheduled_.fetch_sub(1, std::memory_order_release) > 1);
 }
 
 } // namespace folly

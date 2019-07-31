@@ -52,17 +52,6 @@
 
 #define FOLLY_REQUIRES(...) template <FOLLY_REQUIRES_IMPL(__VA_ARGS__)>
 
-/**
- * gcc-4.7 warns about use of uninitialized memory around the use of storage_
- * even though this is explicitly initialized at each point.
- */
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wuninitialized"
-#pragma GCC diagnostic ignored "-Wpragmas"
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-#endif // __GNUC__
-
 namespace folly {
 
 /**
@@ -101,15 +90,8 @@ namespace expected_detail {
 template <typename Value, typename Error>
 struct PromiseReturn;
 
-#ifdef _MSC_VER
-// MSVC 2015 can't handle the StrictConjunction, so we have
-// to use std::conjunction instead.
-template <template <class...> class Trait, class... Ts>
-using StrictAllOf = std::conjunction<Trait<Ts>...>;
-#else
 template <template <class...> class Trait, class... Ts>
 using StrictAllOf = StrictConjunction<Trait<Ts>...>;
-#endif
 
 template <class T>
 using IsCopyable = StrictConjunction<
@@ -244,11 +226,6 @@ struct ExpectedStorage {
   Value&& value() && {
     return std::move(value_);
   }
-  // TODO (t17322426): remove when VS2015 support is deprecated
-  // VS2015 static analyzer incorrectly flags these as unreachable in certain
-  // circumstances. VS2017 does not have this problem on the same code.
-  FOLLY_PUSH_WARNING
-  FOLLY_MSVC_DISABLE_WARNING(4702) // unreachable code
   Error& error() & {
     return error_;
   }
@@ -258,7 +235,6 @@ struct ExpectedStorage {
   Error&& error() && {
     return std::move(error_);
   }
-  FOLLY_POP_WARNING
 };
 
 template <class Value, class Error>
@@ -545,11 +521,6 @@ struct ExpectedStorage<Value, Error, StorageType::ePODStruct> {
   Value&& value() && {
     return std::move(value_);
   }
-  // TODO (t17322426): remove when VS2015 support is deprecated
-  // VS2015 static analyzer incorrectly flags these as unreachable in certain
-  // circumstances. VS2017 does not have this problem on the same code.
-  FOLLY_PUSH_WARNING
-  FOLLY_MSVC_DISABLE_WARNING(4702) // unreachable code
   Error& error() & {
     return error_;
   }
@@ -559,7 +530,6 @@ struct ExpectedStorage<Value, Error, StorageType::ePODStruct> {
   Error&& error() && {
     return std::move(error_);
   }
-  FOLLY_POP_WARNING
 };
 
 namespace expected_detail_ExpectedHelper {
@@ -931,7 +901,7 @@ class Expected final : expected_detail::ExpectedStorage<Value, Error> {
           std::is_constructible<Value, V&&>::value &&
           std::is_constructible<Error, E&&>::value)>
   Expected(Expected<V, E> that) : Base{expected_detail::EmptyTag{}} {
-    *this = std::move(that);
+    this->assign(std::move(that));
   }
 
   FOLLY_REQUIRES(std::is_copy_constructible<Value>::value)
@@ -1424,10 +1394,6 @@ template <class Value, class Error>
 bool operator>(const Value& other, const Expected<Value, Error>&) = delete;
 
 } // namespace folly
-
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic pop
-#endif
 
 #undef FOLLY_REQUIRES
 #undef FOLLY_REQUIRES_TRAILING

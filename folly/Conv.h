@@ -24,6 +24,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cassert>
 #include <cctype>
 #include <climits>
 #include <cstddef>
@@ -32,7 +33,6 @@
 #include <string>
 #include <tuple>
 #include <type_traits>
-#include <typeinfo>
 #include <utility>
 
 #include <double-conversion/double-conversion.h> // V8 JavaScript implementation
@@ -44,7 +44,9 @@
 #include <folly/Range.h>
 #include <folly/Traits.h>
 #include <folly/Unit.h>
+#include <folly/Utility.h>
 #include <folly/lang/Exception.h>
+#include <folly/lang/Pretty.h>
 #include <folly/portability/Math.h>
 
 namespace folly {
@@ -648,15 +650,13 @@ template <class Tgt, class Src>
 typename std::enable_if<
     std::is_enum<Src>::value && IsSomeString<Tgt>::value>::type
 toAppend(Src value, Tgt* result) {
-  toAppend(
-      static_cast<typename std::underlying_type<Src>::type>(value), result);
+  toAppend(to_underlying(value), result);
 }
 
 template <class Src>
 typename std::enable_if<std::is_enum<Src>::value, size_t>::type
 estimateSpaceNeeded(Src value) {
-  return estimateSpaceNeeded(
-      static_cast<typename std::underlying_type<Src>::type>(value));
+  return estimateSpaceNeeded(to_underlying(value));
 }
 
 /*******************************************************************************
@@ -694,13 +694,13 @@ toAppend(
       conv.ToShortest(value, &builder);
       break;
     case DoubleToStringConverter::SHORTEST_SINGLE:
-      conv.ToShortestSingle(value, &builder);
+      conv.ToShortestSingle(static_cast<float>(value), &builder);
       break;
     case DoubleToStringConverter::FIXED:
       conv.ToFixed(value, int(numDigits), &builder);
       break;
     default:
-      CHECK(mode == DoubleToStringConverter::PRECISION);
+      assert(mode == DoubleToStringConverter::PRECISION);
       conv.ToPrecision(value, int(numDigits), &builder);
       break;
   }
@@ -844,7 +844,7 @@ toAppendDelimStrImpl(const Delimiter& delim, const T& v, const Ts&... vs) {
 
 /**
  * Variadic conversion to string. Appends each element in turn.
- * If we have two or more things to append, we it will not reserve
+ * If we have two or more things to append, we will not reserve
  * the space for them and will depend on strings exponential growth.
  * If you just append once consider using toAppendFit which reserves
  * the space needed (but does not have exponential as a result).
@@ -1216,8 +1216,8 @@ typename std::enable_if<
     Expected<Tgt, ConversionCode>>::type
 convertTo(const Src& value) noexcept {
   if /* constexpr */ (
-      folly::_t<std::make_unsigned<Tgt>>(std::numeric_limits<Tgt>::max()) <
-      folly::_t<std::make_unsigned<Src>>(std::numeric_limits<Src>::max())) {
+      std::make_unsigned_t<Tgt>(std::numeric_limits<Tgt>::max()) <
+      std::make_unsigned_t<Src>(std::numeric_limits<Src>::max())) {
     if (greater_than<Tgt, std::numeric_limits<Tgt>::max()>(value)) {
       return makeUnexpected(ConversionCode::ARITH_POSITIVE_OVERFLOW);
     }
@@ -1335,11 +1335,7 @@ convertTo(const Src& value) noexcept {
 
 template <typename Tgt, typename Src>
 inline std::string errorValue(const Src& value) {
-#ifdef FOLLY_HAS_RTTI
-  return to<std::string>("(", demangle(typeid(Tgt)), ") ", value);
-#else
-  return to<std::string>(value);
-#endif
+  return to<std::string>("(", pretty_name<Tgt>(), ") ", value);
 }
 
 template <typename Tgt, typename Src>
@@ -1551,8 +1547,7 @@ typename std::enable_if<
         !std::is_convertible<Tgt, StringPiece>::value,
     Expected<Tgt, ConversionCode>>::type
 tryTo(const Src& value) {
-  using I = typename std::underlying_type<Src>::type;
-  return tryTo<Tgt>(static_cast<I>(value));
+  return tryTo<Tgt>(to_underlying(value));
 }
 
 template <class Tgt, class Src>
@@ -1571,7 +1566,7 @@ typename std::enable_if<
         !std::is_convertible<Tgt, StringPiece>::value,
     Tgt>::type
 to(const Src& value) {
-  return to<Tgt>(static_cast<typename std::underlying_type<Src>::type>(value));
+  return to<Tgt>(to_underlying(value));
 }
 
 template <class Tgt, class Src>

@@ -57,6 +57,16 @@ SSLContext::SSLContext(SSLVersion version) {
       // do nothing
       break;
   }
+
+    // Disable TLS 1.3 by default, for now, if this version of OpenSSL
+    // supports it. There are some semantic differences (e.g. assumptions
+    // on getSession() returning a resumable session, SSL_CTX_set_ciphersuites,
+    // etc.)
+    //
+#if FOLLY_OPENSSL_HAS_TLS13
+  opt |= SSL_OP_NO_TLSv1_3;
+#endif
+
   int newOpt = SSL_CTX_set_options(ctx_, opt);
   DCHECK((newOpt & opt) == opt);
 
@@ -65,6 +75,8 @@ SSLContext::SSLContext(SSLVersion version) {
   checkPeerName_ = false;
 
   SSL_CTX_set_options(ctx_, SSL_OP_NO_COMPRESSION);
+
+  sslAcceptRunner_ = std::make_unique<SSLAcceptRunner>();
 
 #if FOLLY_OPENSSL_HAS_SNI
   SSL_CTX_set_tlsext_servername_callback(ctx_, baseServerNameOpenSSLCallback);
@@ -78,7 +90,7 @@ SSLContext::~SSLContext() {
     ctx_ = nullptr;
   }
 
-#ifdef OPENSSL_NPN_NEGOTIATED
+#if FOLLY_OPENSSL_HAS_ALPN
   deleteNextProtocolsStrings();
 #endif
 }
@@ -246,6 +258,25 @@ void SSLContext::loadCertificateFromBufferPEM(folly::StringPiece cert) {
   if (SSL_CTX_use_certificate(ctx_, x509.get()) == 0) {
     throw std::runtime_error("SSL_CTX_use_certificate: " + getErrors());
   }
+
+  // Any further X509 PEM blocks are treated as additional certificates in
+  // the certificate chain.
+  constexpr size_t kMaxCertChain = 64;
+
+  for (size_t i = 0; i < kMaxCertChain; i++) {
+    x509.reset(PEM_read_bio_X509(bio.get(), nullptr, nullptr, nullptr));
+    if (x509 == nullptr) {
+      ERR_clear_error();
+      return;
+    }
+
+    if (SSL_CTX_add1_chain_cert(ctx_, x509.get()) == 0) {
+      throw std::runtime_error("SSL_CTX_add0_chain_cert: " + getErrors());
+    }
+  }
+
+  throw std::runtime_error(
+      "loadCertificateFromBufferPEM(): Too many certificates in chain");
 }
 
 void SSLContext::loadPrivateKey(const char* path, const char* format) {
@@ -425,19 +456,14 @@ int SSLContext::alpnSelectCallback(
   }
   return SSL_TLSEXT_ERR_OK;
 }
-#endif // FOLLY_OPENSSL_HAS_ALPN
-
-#ifdef OPENSSL_NPN_NEGOTIATED
 
 bool SSLContext::setAdvertisedNextProtocols(
-    const std::list<std::string>& protocols,
-    NextProtocolType protocolType) {
-  return setRandomizedAdvertisedNextProtocols({{1, protocols}}, protocolType);
+    const std::list<std::string>& protocols) {
+  return setRandomizedAdvertisedNextProtocols({{1, protocols}});
 }
 
 bool SSLContext::setRandomizedAdvertisedNextProtocols(
-    const std::list<NextProtocolsItem>& items,
-    NextProtocolType protocolType) {
+    const std::list<NextProtocolsItem>& items) {
   unsetNextProtocols();
   if (items.size() == 0) {
     return false;
@@ -480,21 +506,16 @@ bool SSLContext::setRandomizedAdvertisedNextProtocols(
   nextProtocolDistribution_ = std::discrete_distribution<>(
       advertisedNextProtocolWeights_.begin(),
       advertisedNextProtocolWeights_.end());
-  if ((uint8_t)protocolType & (uint8_t)NextProtocolType::NPN) {
-    SSL_CTX_set_next_protos_advertised_cb(
-        ctx_, advertisedNextProtocolCallback, this);
-    SSL_CTX_set_next_proto_select_cb(ctx_, selectNextProtocolCallback, this);
+  SSL_CTX_set_alpn_select_cb(ctx_, alpnSelectCallback, this);
+  // Client cannot really use randomized alpn
+  // Note that this function reverses the typical return value convention
+  // of openssl and returns 0 on success.
+  if (SSL_CTX_set_alpn_protos(
+          ctx_,
+          advertisedNextProtocols_[0].protocols,
+          advertisedNextProtocols_[0].length) != 0) {
+    return false;
   }
-#if FOLLY_OPENSSL_HAS_ALPN
-  if ((uint8_t)protocolType & (uint8_t)NextProtocolType::ALPN) {
-    SSL_CTX_set_alpn_select_cb(ctx_, alpnSelectCallback, this);
-    // Client cannot really use randomized alpn
-    SSL_CTX_set_alpn_protos(
-        ctx_,
-        advertisedNextProtocols_[0].protocols,
-        advertisedNextProtocols_[0].length);
-  }
-#endif
   return true;
 }
 
@@ -508,12 +529,11 @@ void SSLContext::deleteNextProtocolsStrings() {
 
 void SSLContext::unsetNextProtocols() {
   deleteNextProtocolsStrings();
-  SSL_CTX_set_next_protos_advertised_cb(ctx_, nullptr, nullptr);
-  SSL_CTX_set_next_proto_select_cb(ctx_, nullptr, nullptr);
-#if FOLLY_OPENSSL_HAS_ALPN
   SSL_CTX_set_alpn_select_cb(ctx_, nullptr, nullptr);
   SSL_CTX_set_alpn_protos(ctx_, nullptr, 0);
-#endif
+  // clear the error stack here since openssl internals sometimes add a
+  // malloc failure when doing a memdup of NULL, 0..
+  ERR_clear_error();
 }
 
 size_t SSLContext::pickNextProtocols() {
@@ -522,80 +542,7 @@ size_t SSLContext::pickNextProtocols() {
   return size_t(nextProtocolDistribution_(rng));
 }
 
-int SSLContext::advertisedNextProtocolCallback(
-    SSL* ssl,
-    const unsigned char** out,
-    unsigned int* outlen,
-    void* data) {
-  static int nextProtocolsExDataIndex = SSL_get_ex_new_index(
-      0, (void*)"Advertised next protocol index", nullptr, nullptr, nullptr);
-
-  SSLContext* context = (SSLContext*)data;
-  if (context == nullptr || context->advertisedNextProtocols_.empty()) {
-    *out = nullptr;
-    *outlen = 0;
-  } else if (context->advertisedNextProtocols_.size() == 1) {
-    *out = context->advertisedNextProtocols_[0].protocols;
-    *outlen = context->advertisedNextProtocols_[0].length;
-  } else {
-    uintptr_t selected_index = reinterpret_cast<uintptr_t>(
-        SSL_get_ex_data(ssl, nextProtocolsExDataIndex));
-    if (selected_index) {
-      --selected_index;
-      *out = context->advertisedNextProtocols_[selected_index].protocols;
-      *outlen = context->advertisedNextProtocols_[selected_index].length;
-    } else {
-      auto i = context->pickNextProtocols();
-      uintptr_t selected = i + 1;
-      SSL_set_ex_data(ssl, nextProtocolsExDataIndex, (void*)selected);
-      *out = context->advertisedNextProtocols_[i].protocols;
-      *outlen = context->advertisedNextProtocols_[i].length;
-    }
-  }
-  return SSL_TLSEXT_ERR_OK;
-}
-
-int SSLContext::selectNextProtocolCallback(
-    SSL* ssl,
-    unsigned char** out,
-    unsigned char* outlen,
-    const unsigned char* server,
-    unsigned int server_len,
-    void* data) {
-  (void)ssl; // Make -Wunused-parameters happy
-  SSLContext* ctx = (SSLContext*)data;
-  if (ctx->advertisedNextProtocols_.size() > 1) {
-    VLOG(3) << "SSLContext::selectNextProcolCallback() "
-            << "client should be deterministic in selecting protocols.";
-  }
-
-  unsigned char* client = nullptr;
-  unsigned int client_len = 0;
-  bool filtered = false;
-  auto cpf = ctx->getClientProtocolFilterCallback();
-  if (cpf) {
-    filtered = (*cpf)(&client, &client_len, server, server_len);
-  }
-
-  if (!filtered) {
-    if (ctx->advertisedNextProtocols_.empty()) {
-      client = (unsigned char*)"";
-      client_len = 0;
-    } else {
-      client = ctx->advertisedNextProtocols_[0].protocols;
-      client_len = ctx->advertisedNextProtocols_[0].length;
-    }
-  }
-
-  int retval = SSL_select_next_proto(
-      out, outlen, server, server_len, client, client_len);
-  if (retval != OPENSSL_NPN_NEGOTIATED) {
-    VLOG(3) << "SSLContext::selectNextProcolCallback() "
-            << "unable to pick a next protocol.";
-  }
-  return SSL_TLSEXT_ERR_OK;
-}
-#endif // OPENSSL_NPN_NEGOTIATED
+#endif // FOLLY_OPENSSL_HAS_ALPN
 
 SSL* SSLContext::createSSL() const {
   SSL* ssl = SSL_new(ctx_);

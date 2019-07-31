@@ -132,7 +132,7 @@ TEST(Then, tryConstValue) {
 }
 
 TEST(Then, constRValueReference) {
-  auto future = makeFuture<Widget>(23).then([](const Widget&& w) {
+  auto future = makeFuture<Widget>(23).thenValue([](const Widget&& w) {
     EXPECT_EQ(w.copied_, 0);
     EXPECT_EQ(w.moved_, 2);
     return w.v_;
@@ -141,7 +141,7 @@ TEST(Then, constRValueReference) {
 }
 
 TEST(Then, rValueReference) {
-  auto future = makeFuture<Widget>(23).then([](Widget&& w) {
+  auto future = makeFuture<Widget>(23).thenValue([](Widget&& w) {
     EXPECT_EQ(w.copied_, 0);
     EXPECT_EQ(w.moved_, 2);
     return w.v_;
@@ -150,7 +150,7 @@ TEST(Then, rValueReference) {
 }
 
 TEST(Then, constLValueReference) {
-  auto future = makeFuture<Widget>(23).then([](const Widget& w) {
+  auto future = makeFuture<Widget>(23).thenValue([](const Widget& w) {
     EXPECT_EQ(w.copied_, 0);
     EXPECT_EQ(w.moved_, 2);
     return w.v_;
@@ -159,7 +159,7 @@ TEST(Then, constLValueReference) {
 }
 
 TEST(Then, value) {
-  auto future = makeFuture<Widget>(23).then([](Widget w) {
+  auto future = makeFuture<Widget>(23).thenValue([](Widget w) {
     EXPECT_EQ(w.copied_, 0);
     EXPECT_EQ(w.moved_, 3);
     return w.v_;
@@ -168,7 +168,7 @@ TEST(Then, value) {
 }
 
 TEST(Then, constValue) {
-  auto future = makeFuture<Widget>(23).then([](const Widget w) {
+  auto future = makeFuture<Widget>(23).thenValue([](const Widget w) {
     EXPECT_EQ(w.copied_, 0);
     EXPECT_EQ(w.moved_, 3);
     return w.v_;
@@ -179,7 +179,7 @@ TEST(Then, constValue) {
 TEST(Then, objectAliveDuringImmediateNoParamContinuation) {
   auto f = makeFuture<CountedWidget>(23);
   auto called = false;
-  std::move(f).then([&] {
+  std::move(f).thenValue([&](auto&&) {
     EXPECT_EQ(CountedWidget::instances_.size(), 1u);
     EXPECT_EQ(CountedWidget::instances_[0]->v_, 23);
     called = true;
@@ -190,7 +190,7 @@ TEST(Then, objectAliveDuringImmediateNoParamContinuation) {
 TEST(Then, objectAliveDuringDeferredNoParamContinuation) {
   auto p = Promise<CountedWidget>{};
   bool called = false;
-  p.getFuture().then([&] {
+  p.getFuture().thenValue([&](auto&&) {
     EXPECT_EQ(CountedWidget::instances_.size(), 1u);
     EXPECT_EQ(CountedWidget::instances_[0]->v_, 23);
     called = true;

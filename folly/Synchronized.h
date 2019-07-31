@@ -83,15 +83,25 @@ class SynchronizedBase;
 template <class Subclass>
 class SynchronizedBase<Subclass, detail::MutexLevel::SHARED> {
  public:
-  using LockedPtr = ::folly::LockedPtr<Subclass, LockPolicyExclusive>;
+  using WLockedPtr = ::folly::LockedPtr<Subclass, LockPolicyExclusive>;
   using ConstWLockedPtr =
       ::folly::LockedPtr<const Subclass, LockPolicyExclusive>;
-  using ConstLockedPtr = ::folly::LockedPtr<const Subclass, LockPolicyShared>;
+
+  using RLockedPtr = ::folly::LockedPtr<const Subclass, LockPolicyShared>;
+  using ConstRLockedPtr = ::folly::LockedPtr<const Subclass, LockPolicyShared>;
 
   using TryWLockedPtr = ::folly::LockedPtr<Subclass, LockPolicyTryExclusive>;
   using ConstTryWLockedPtr =
       ::folly::LockedPtr<const Subclass, LockPolicyTryExclusive>;
-  using TryRLockedPtr = ::folly::LockedPtr<const Subclass, LockPolicyTryShared>;
+
+  using TryRLockedPtr = ::folly::LockedPtr<Subclass, LockPolicyTryShared>;
+  using ConstTryRLockedPtr =
+      ::folly::LockedPtr<const Subclass, LockPolicyTryShared>;
+
+  // These aliases are deprecated.
+  // TODO: Codemod them away.
+  using LockedPtr = WLockedPtr;
+  using ConstLockedPtr = ConstRLockedPtr;
 
   /**
    * Acquire an exclusive lock, and return a LockedPtr that can be used to
@@ -102,6 +112,9 @@ class SynchronizedBase<Subclass, detail::MutexLevel::SHARED> {
    */
   LockedPtr wlock() {
     return LockedPtr(static_cast<Subclass*>(this));
+  }
+  ConstWLockedPtr wlock() const {
+    return ConstWLockedPtr(static_cast<const Subclass*>(this));
   }
 
   /**
@@ -114,11 +127,18 @@ class SynchronizedBase<Subclass, detail::MutexLevel::SHARED> {
   TryWLockedPtr tryWLock() {
     return TryWLockedPtr{static_cast<Subclass*>(this)};
   }
+  ConstTryWLockedPtr tryWLock() const {
+    return ConstTryWLockedPtr{static_cast<const Subclass*>(this)};
+  }
 
   /**
-   * Acquire a read lock, and return a ConstLockedPtr that can be used to
-   * safely access the datum.
+   * Acquire a read lock. The returned LockedPtr will have force const
+   * access to the data unless the lock is acquired in non-const
+   * context and asNonConstUnsafe() is used.
    */
+  RLockedPtr rlock() {
+    return RLockedPtr(static_cast<Subclass*>(this));
+  }
   ConstLockedPtr rlock() const {
     return ConstLockedPtr(static_cast<const Subclass*>(this));
   }
@@ -130,8 +150,11 @@ class SynchronizedBase<Subclass, detail::MutexLevel::SHARED> {
    * (Use LockedPtr::operator bool() or LockedPtr::isNull() to check for
    * validity.)
    */
-  TryRLockedPtr tryRLock() const {
-    return TryRLockedPtr{static_cast<const Subclass*>(this)};
+  TryRLockedPtr tryRLock() {
+    return TryRLockedPtr{static_cast<Subclass*>(this)};
+  }
+  ConstTryRLockedPtr tryRLock() const {
+    return ConstTryRLockedPtr{static_cast<const Subclass*>(this)};
   }
 
   /**
@@ -144,6 +167,10 @@ class SynchronizedBase<Subclass, detail::MutexLevel::SHARED> {
   template <class Rep, class Period>
   LockedPtr wlock(const std::chrono::duration<Rep, Period>& timeout) {
     return LockedPtr(static_cast<Subclass*>(this), timeout);
+  }
+  template <class Rep, class Period>
+  LockedPtr wlock(const std::chrono::duration<Rep, Period>& timeout) const {
+    return LockedPtr(static_cast<const Subclass*>(this), timeout);
   }
 
   /**
@@ -177,6 +204,10 @@ class SynchronizedBase<Subclass, detail::MutexLevel::SHARED> {
   auto withWLock(Function&& function) {
     return function(*wlock());
   }
+  template <class Function>
+  auto withWLock(Function&& function) const {
+    return function(*wlock());
+  }
 
   /**
    * Invoke a function while holding the lock exclusively.
@@ -189,6 +220,10 @@ class SynchronizedBase<Subclass, detail::MutexLevel::SHARED> {
    */
   template <class Function>
   auto withWLockPtr(Function&& function) {
+    return function(wlock());
+  }
+  template <class Function>
+  auto withWLockPtr(Function&& function) const {
     return function(wlock());
   }
 
@@ -204,6 +239,11 @@ class SynchronizedBase<Subclass, detail::MutexLevel::SHARED> {
   }
 
   template <class Function>
+  auto withRLockPtr(Function&& function) {
+    return function(rlock());
+  }
+
+  template <class Function>
   auto withRLockPtr(Function&& function) const {
     return function(rlock());
   }
@@ -214,7 +254,7 @@ class SynchronizedBase<Subclass, detail::MutexLevel::SHARED> {
  *
  * This class provides all the functionality provided by the SynchronizedBase
  * specialization for shared mutexes and a ulock() method that returns an
- * upgradable lock RAII proxy
+ * upgrade lock RAII proxy
  */
 template <class Subclass>
 class SynchronizedBase<Subclass, detail::MutexLevel::UPGRADE>
@@ -230,13 +270,15 @@ class SynchronizedBase<Subclass, detail::MutexLevel::UPGRADE>
       ::folly::LockedPtr<const Subclass, LockPolicyTryUpgrade>;
 
   /**
-   * Acquire an upgrade lock and return a LockedPtr that can be used to safely
-   * access the datum
-   *
-   * And the const version
+   * Acquire an upgrade lock. The returned LockedPtr will have force
+   * const access to the data unless the lock is acquired in non-const
+   * context and asNonConstUnsafe() is used.
    */
   UpgradeLockedPtr ulock() {
     return UpgradeLockedPtr(static_cast<Subclass*>(this));
+  }
+  ConstUpgradeLockedPtr ulock() const {
+    return ConstUpgradeLockedPtr(static_cast<const Subclass*>(this));
   }
 
   /**
@@ -285,6 +327,10 @@ class SynchronizedBase<Subclass, detail::MutexLevel::UPGRADE>
   auto withULock(Function&& function) {
     return function(*ulock());
   }
+  template <class Function>
+  auto withULock(Function&& function) const {
+    return function(*ulock());
+  }
 
   /**
    * Invoke a function while holding the lock exclusively.
@@ -300,6 +346,10 @@ class SynchronizedBase<Subclass, detail::MutexLevel::UPGRADE>
    */
   template <class Function>
   auto withULockPtr(Function&& function) {
+    return function(ulock());
+  }
+  template <class Function>
+  auto withULockPtr(Function&& function) const {
     return function(ulock());
   }
 };
@@ -429,10 +479,6 @@ class SynchronizedBase<Subclass, detail::MutexLevel::UNIQUE> {
  * Supported mutexes that work by default include std::mutex,
  * std::recursive_mutex, std::timed_mutex, std::recursive_timed_mutex,
  * folly::SharedMutex, folly::RWSpinLock, and folly::SpinLock.
- * Include LockTraitsBoost.h to get additional LockTraits specializations to
- * support the following boost mutex types: boost::mutex,
- * boost::recursive_mutex, boost::shared_mutex, boost::timed_mutex, and
- * boost::recursive_timed_mutex.
  */
 template <class T, class Mutex = SharedMutex>
 struct Synchronized : public SynchronizedBase<
@@ -525,8 +571,8 @@ struct Synchronized : public SynchronizedBase<
       : Synchronized{std::piecewise_construct,
                      std::move(datumArgs),
                      std::move(mutexArgs),
-                     make_index_sequence<sizeof...(DatumArgs)>{},
-                     make_index_sequence<sizeof...(MutexArgs)>{}} {}
+                     std::make_index_sequence<sizeof...(DatumArgs)>{},
+                     std::make_index_sequence<sizeof...(MutexArgs)>{}} {}
 
   /**
    * Copy assignment operator; deprecated
@@ -718,9 +764,9 @@ struct Synchronized : public SynchronizedBase<
   /**
    * Copies datum to a given target.
    */
-  void copy(T* target) const {
+  void copyInto(T& target) const {
     ConstLockedPtr guard(this);
-    *target = datum_;
+    target = datum_;
   }
 
   /**
@@ -761,8 +807,8 @@ struct Synchronized : public SynchronizedBase<
       std::piecewise_construct_t,
       std::tuple<DatumArgs...> datumArgs,
       std::tuple<MutexArgs...> mutexArgs,
-      index_sequence<IndicesOne...>,
-      index_sequence<IndicesTwo...>)
+      std::index_sequence<IndicesOne...>,
+      std::index_sequence<IndicesTwo...>)
       : datum_{std::get<IndicesOne>(std::move(datumArgs))...},
         mutex_{std::get<IndicesTwo>(std::move(mutexArgs))...} {}
 
@@ -779,9 +825,9 @@ namespace detail {
  * A helper alias that resolves to "const T" if the template parameter
  * is a const Synchronized<T>, or "T" if the parameter is not const.
  */
-template <class SynchronizedType>
+template <class SynchronizedType, bool AllowsConcurrentAccess>
 using SynchronizedDataType = typename std::conditional<
-    std::is_const<SynchronizedType>::value,
+    AllowsConcurrentAccess || std::is_const<SynchronizedType>::value,
     typename SynchronizedType::DataType const,
     typename SynchronizedType::DataType>::type;
 /*
@@ -1036,7 +1082,7 @@ class LockedPtrBase {
     }
   }
   LockedPtrBase(LockedPtrBase&& rhs) noexcept
-      : parent_{exchange(rhs.parent_, nullptr)} {}
+      : parent_{std::exchange(rhs.parent_, nullptr)} {}
   LockedPtrBase& operator=(LockedPtrBase&& rhs) noexcept {
     assignImpl(*this, rhs);
     return *this;
@@ -1057,7 +1103,7 @@ class LockedPtrBase {
   template <typename LockPolicyType>
   LockedPtrBase(
       LockedPtrBase<SynchronizedType, Mutex, LockPolicyType>&& rhs) noexcept
-      : parent_{exchange(rhs.parent_, nullptr)} {}
+      : parent_{std::exchange(rhs.parent_, nullptr)} {}
   template <typename LockPolicyType>
   LockedPtrBase& operator=(
       LockedPtrBase<SynchronizedType, Mutex, LockPolicyType>&& rhs) noexcept {
@@ -1076,7 +1122,7 @@ class LockedPtrBase {
       LockPolicy::unlock(lhs.parent_->mutex_);
     }
 
-    lhs.parent_ = exchange(rhs.parent_, nullptr);
+    lhs.parent_ = std::exchange(rhs.parent_, nullptr);
   }
 
   using UnlockerData = SynchronizedType*;
@@ -1138,7 +1184,8 @@ class LockedPtrBase<SynchronizedType, std::mutex, LockPolicy> {
   }
 
   LockedPtrBase(LockedPtrBase&& rhs) noexcept
-      : lock_{std::move(rhs.lock_)}, parent_{exchange(rhs.parent_, nullptr)} {}
+      : lock_{std::move(rhs.lock_)},
+        parent_{std::exchange(rhs.parent_, nullptr)} {}
   LockedPtrBase& operator=(LockedPtrBase&& rhs) noexcept {
     assignImpl(*this, rhs);
     return *this;
@@ -1154,7 +1201,7 @@ class LockedPtrBase<SynchronizedType, std::mutex, LockPolicy> {
   LockedPtrBase(LockedPtrBase<SynchronizedType, std::mutex, LockPolicyType>&&
                     other) noexcept
       : lock_{std::move(other.lock_)},
-        parent_{exchange(other.parent_, nullptr)} {}
+        parent_{std::exchange(other.parent_, nullptr)} {}
   template <typename LockPolicyType>
   LockedPtrBase& operator=(
       LockedPtrBase<SynchronizedType, std::mutex, LockPolicyType>&&
@@ -1172,7 +1219,7 @@ class LockedPtrBase<SynchronizedType, std::mutex, LockPolicy> {
       LockedPtrBase<SynchronizedType, std::mutex, LockPolicyRhs>&
           rhs) noexcept {
     lhs.lock_ = std::move(rhs.lock_);
-    lhs.parent_ = exchange(rhs.parent_, nullptr);
+    lhs.parent_ = std::exchange(rhs.parent_, nullptr);
   }
 
   /**
@@ -1251,7 +1298,8 @@ class ScopedUnlocker {
   ScopedUnlocker(const ScopedUnlocker&) = delete;
   ScopedUnlocker& operator=(const ScopedUnlocker&) = delete;
   ScopedUnlocker(ScopedUnlocker&& other) noexcept
-      : ptr_(exchange(other.ptr_, nullptr)), data_(std::move(other.data_)) {}
+      : ptr_(std::exchange(other.ptr_, nullptr)),
+        data_(std::move(other.data_)) {}
   ScopedUnlocker& operator=(ScopedUnlocker&& other) = delete;
 
   ~ScopedUnlocker() {
@@ -1293,9 +1341,12 @@ class LockedPtr : public LockedPtrBase<
       SynchronizedType,
       typename SynchronizedType::MutexType,
       LockPolicy>;
+  constexpr static bool AllowsConcurrentAccess =
+      LockPolicy::allows_concurrent_access;
   using UnlockerData = typename Base::UnlockerData;
   // CDataType is the DataType with the appropriate const-qualification
-  using CDataType = detail::SynchronizedDataType<SynchronizedType>;
+  using CDataType =
+      detail::SynchronizedDataType<SynchronizedType, AllowsConcurrentAccess>;
   // Enable only if the unlock policy of the other LockPolicy is the same as
   // ours
   template <typename LockPolicyOther>
@@ -1415,6 +1466,34 @@ class LockedPtr : public LockedPtrBase<
   }
 
   /**
+   * Locks that allow concurrent access (shared, upgrade) force const
+   * access with the standard accessors even if the Synchronized
+   * object is non-const.
+   *
+   * In some cases non-const access can be needed, for example:
+   *
+   *   - Under an upgrade lock, to get references that will be mutated
+   *     after upgrading to a write lock.
+   *
+   *   - Under an read lock, if some mutating operations on the data
+   *     are thread safe (e.g. mutating the value in an associative
+   *     container with reference stability).
+   *
+   * asNonConstUnsafe() returns a non-const reference to the data if
+   * the parent Synchronized object was non-const at the point of lock
+   * acquisition.
+   */
+  template <typename = void>
+  DataType& asNonConstUnsafe() const {
+    static_assert(
+        AllowsConcurrentAccess && !std::is_const<SynchronizedType>::value,
+        "asNonConstUnsafe() is only available on non-exclusive locks"
+        " acquired in a non-const context");
+
+    return this->parent_->datum_;
+  }
+
+  /**
    * Temporarily unlock the LockedPtr, and reset it to null.
    *
    * Returns an helper object that will re-lock and restore the LockedPtr when
@@ -1426,8 +1505,8 @@ class LockedPtr : public LockedPtrBase<
   }
 
   /***************************************************************************
-   * Upgradable lock methods.
-   * These are disabled via SFINAE when the mutex is not upgradable
+   * Upgrade lock methods.
+   * These are disabled via SFINAE when the mutex is not an upgrade mutex.
    **************************************************************************/
   /**
    * Move the locked ptr from an upgrade state to an exclusive state.  The
@@ -1440,7 +1519,7 @@ class LockedPtr : public LockedPtrBase<
   LockedPtr<SynchronizedType, LockPolicyFromUpgradeToExclusive>
   moveFromUpgradeToWrite() {
     return LockedPtr<SynchronizedType, LockPolicyFromUpgradeToExclusive>(
-        exchange(this->parent_, nullptr));
+        std::exchange(this->parent_, nullptr));
   }
 
   /**
@@ -1454,7 +1533,7 @@ class LockedPtr : public LockedPtrBase<
   LockedPtr<SynchronizedType, LockPolicyFromExclusiveToUpgrade>
   moveFromWriteToUpgrade() {
     return LockedPtr<SynchronizedType, LockPolicyFromExclusiveToUpgrade>(
-        exchange(this->parent_, nullptr));
+        std::exchange(this->parent_, nullptr));
   }
 
   /**
@@ -1468,7 +1547,7 @@ class LockedPtr : public LockedPtrBase<
   LockedPtr<SynchronizedType, LockPolicyFromUpgradeToShared>
   moveFromUpgradeToRead() {
     return LockedPtr<SynchronizedType, LockPolicyFromUpgradeToShared>(
-        exchange(this->parent_, nullptr));
+        std::exchange(this->parent_, nullptr));
   }
 
   /**
@@ -1482,7 +1561,7 @@ class LockedPtr : public LockedPtrBase<
   LockedPtr<SynchronizedType, LockPolicyFromExclusiveToShared>
   moveFromWriteToRead() {
     return LockedPtr<SynchronizedType, LockPolicyFromExclusiveToShared>(
-        exchange(this->parent_, nullptr));
+        std::exchange(this->parent_, nullptr));
   }
 };
 
@@ -1517,6 +1596,10 @@ class LockedPtr : public LockedPtrBase<
  */
 template <typename D, typename M, typename... Args>
 auto wlock(Synchronized<D, M>& synchronized, Args&&... args) {
+  return detail::wlock(synchronized, std::forward<Args>(args)...);
+}
+template <typename D, typename M, typename... Args>
+auto wlock(const Synchronized<D, M>& synchronized, Args&&... args) {
   return detail::wlock(synchronized, std::forward<Args>(args)...);
 }
 template <typename Data, typename Mutex, typename... Args>

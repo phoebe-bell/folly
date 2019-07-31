@@ -18,6 +18,8 @@
 
 #include <unordered_map>
 
+#include <glog/logging.h>
+
 #include <folly/Conv.h>
 #include <folly/FBString.h>
 #include <folly/container/test/F14TestUtil.h>
@@ -175,6 +177,101 @@ TEST(F14FastSet, visitContiguousRanges) {
   runVisitContiguousRangesTest<folly::F14FastSet<int>>();
 }
 
+#if FOLLY_HAS_MEMORY_RESOURCE
+TEST(F14Set, pmr_empty) {
+  folly::pmr::F14ValueSet<int> s1;
+  folly::pmr::F14NodeSet<int> s2;
+  folly::pmr::F14VectorSet<int> s3;
+  folly::pmr::F14FastSet<int> s4;
+  EXPECT_TRUE(s1.empty() && s2.empty() && s3.empty() && s4.empty());
+}
+#endif
+
+namespace {
+struct NestedHash {
+  template <typename N>
+  std::size_t operator()(N const& v) const;
+};
+
+template <template <class...> class TSet>
+struct Nested {
+  std::unique_ptr<TSet<Nested, NestedHash>> set_;
+
+  explicit Nested(int depth)
+      : set_(std::make_unique<TSet<Nested, NestedHash>>()) {
+    if (depth > 0) {
+      set_->emplace(depth - 1);
+    }
+  }
+};
+
+template <typename N>
+std::size_t NestedHash::operator()(N const& v) const {
+  std::size_t rv = 0;
+  for (auto& k : *v.set_) {
+    rv += operator()(k);
+  }
+  return folly::Hash{}(rv);
+}
+
+template <template <class...> class TSet>
+bool operator==(Nested<TSet> const& lhs, Nested<TSet> const& rhs) {
+  return *lhs.set_ == *rhs.set_;
+}
+
+template <template <class...> class TSet>
+bool operator!=(Nested<TSet> const& lhs, Nested<TSet> const& rhs) {
+  return !(lhs == rhs);
+}
+
+template <template <class...> class TSet>
+void testNestedSetEquality() {
+  auto n1 = Nested<TSet>(100);
+  auto n2 = Nested<TSet>(100);
+  auto n3 = Nested<TSet>(99);
+  EXPECT_TRUE(n1 == n1);
+  EXPECT_TRUE(n1 == n2);
+  EXPECT_FALSE(n1 == n3);
+  EXPECT_FALSE(n1 != n1);
+  EXPECT_FALSE(n1 != n2);
+  EXPECT_TRUE(n1 != n3);
+}
+
+template <template <class...> class TSet>
+void testEqualityRefinement() {
+  TSet<std::pair<int, int>, folly::f14::HashFirst, folly::f14::EqualFirst> s1;
+  TSet<std::pair<int, int>, folly::f14::HashFirst, folly::f14::EqualFirst> s2;
+  s1.insert(std::make_pair(0, 0));
+  s1.insert(std::make_pair(1, 1));
+  EXPECT_FALSE(s1.insert(std::make_pair(0, 2)).second);
+  EXPECT_EQ(s1.size(), 2);
+  EXPECT_EQ(s1.count(std::make_pair(0, 10)), 1);
+  for (auto& k : s1) {
+    s2.emplace(k.first, k.second + 1);
+  }
+  EXPECT_EQ(s1.size(), s2.size());
+  for (auto& k : s1) {
+    EXPECT_EQ(s2.count(k), 1);
+  }
+  EXPECT_FALSE(s1 == s2);
+  EXPECT_TRUE(s1 != s2);
+}
+} // namespace
+
+TEST(F14Set, nestedSetEquality) {
+  testNestedSetEquality<folly::F14ValueSet>();
+  testNestedSetEquality<folly::F14NodeSet>();
+  testNestedSetEquality<folly::F14VectorSet>();
+  testNestedSetEquality<folly::F14FastSet>();
+}
+
+TEST(F14Set, equalityRefinement) {
+  testEqualityRefinement<folly::F14ValueSet>();
+  testEqualityRefinement<folly::F14NodeSet>();
+  testEqualityRefinement<folly::F14VectorSet>();
+  testEqualityRefinement<folly::F14FastSet>();
+}
+
 ///////////////////////////////////
 #if FOLLY_F14_VECTOR_INTRINSICS_AVAILABLE
 ///////////////////////////////////
@@ -201,6 +298,15 @@ void runSimple() {
   T h;
 
   EXPECT_EQ(h.size(), 0);
+  h.reserve(0);
+  std::vector<std::string> v({"abc", "abc"});
+  h.insert(v.begin(), v.begin());
+  EXPECT_EQ(h.size(), 0);
+  EXPECT_EQ(h.bucket_count(), 0);
+  h.insert(v.begin(), v.end());
+  EXPECT_EQ(h.size(), 1);
+  h = T{};
+  EXPECT_EQ(h.bucket_count(), 0);
 
   h.insert(s("abc"));
   EXPECT_TRUE(h.find(s("def")) == h.end());
@@ -260,6 +366,8 @@ void runSimple() {
   EXPECT_EQ(h8.size(), 2);
   EXPECT_EQ(h8.count(s("abc")), 1);
   EXPECT_EQ(h8.count(s("xyz")), 0);
+  EXPECT_TRUE(h8.contains(s("abc")));
+  EXPECT_FALSE(h8.contains(s("xyz")));
 
   EXPECT_TRUE(h7 != h8);
   EXPECT_TRUE(h8 != h9);
@@ -277,6 +385,10 @@ void runSimple() {
     EXPECT_EQ(h5.count(k), 1);
     EXPECT_EQ(h6.count(k), 1);
     EXPECT_EQ(h8.count(k), 1);
+    EXPECT_TRUE(h4.contains(k));
+    EXPECT_TRUE(h5.contains(k));
+    EXPECT_TRUE(h6.contains(k));
+    EXPECT_TRUE(h8.contains(k));
   }
 
   h8.clear();
@@ -288,7 +400,7 @@ void runSimple() {
   EXPECT_TRUE(h8.empty());
   EXPECT_EQ(h9.size(), 2);
 
-  auto expectH8 = [&](T& ref) { EXPECT_EQ(&ref, &h8); };
+  auto expectH8 = [&h8](T& ref) { EXPECT_EQ(&ref, &h8); };
   expectH8((h8 = h2));
   expectH8((h8 = std::move(h2)));
   expectH8((h8 = {}));
@@ -301,6 +413,32 @@ void runSimple() {
   F14TableStats::compute(h6);
   F14TableStats::compute(h7);
   F14TableStats::compute(h8);
+}
+
+template <typename T>
+void runEraseWhileIterating() {
+  constexpr int kNumElements = 1000;
+
+  // mul and kNumElements should be relatively prime
+  for (int mul : {1, 3, 17, 137, kNumElements - 1}) {
+    for (int interval : {1, 3, 5, kNumElements / 2}) {
+      T h;
+      for (auto i = 0; i < kNumElements; ++i) {
+        EXPECT_TRUE(h.emplace((i * mul) % kNumElements).second);
+      }
+
+      int sum = 0;
+      for (auto it = h.begin(); it != h.end();) {
+        sum += *it;
+        if (*it % interval == 0) {
+          it = h.erase(it);
+        } else {
+          ++it;
+        }
+      }
+      EXPECT_EQ(kNumElements * (kNumElements - 1) / 2, sum);
+    }
+  }
 }
 
 template <typename T>
@@ -404,6 +542,8 @@ void runRandom() {
         EXPECT_EQ(*t, *r);
       }
       EXPECT_EQ(t0.count(k), r0.count(k));
+      // TODO: When std::unordered_set supports c++20:
+      // EXPECT_EQ(t0.contains(k), r0.contains(k));
     } else if (pct < 60) {
       // equal_range
       auto t = t0.equal_range(k);
@@ -516,10 +656,30 @@ TEST(F14VectorSet, simple) {
 }
 
 TEST(F14FastSet, simple) {
-  // F14FastSet inherits from a conditional typedef. Verify it compiles.
+  // F14FastSet internally uses a conditional typedef. Verify it compiles.
   runRandom<F14FastSet<uint64_t>>();
   runSimple<F14FastSet<std::string>>();
 }
+
+#if FOLLY_HAS_MEMORY_RESOURCE
+TEST(F14ValueSet, pmr_simple) {
+  runSimple<pmr::F14ValueSet<std::string>>();
+}
+
+TEST(F14NodeSet, pmr_simple) {
+  runSimple<pmr::F14NodeSet<std::string>>();
+}
+
+TEST(F14VectorSet, pmr_simple) {
+  runSimple<pmr::F14VectorSet<std::string>>();
+}
+
+TEST(F14FastSet, pmr_simple) {
+  // F14FastSet internally uses a conditional typedef. Verify it compiles.
+  runRandom<pmr::F14FastSet<uint64_t>>();
+  runSimple<pmr::F14FastSet<std::string>>();
+}
+#endif
 
 TEST(F14Set, ContainerSize) {
   {
@@ -591,6 +751,18 @@ TEST(F14VectorMap, reverse_iterator) {
     prevSize = newSize;
     newSize *= 10;
   }
+}
+
+TEST(F14ValueSet, eraseWhileIterating) {
+  runEraseWhileIterating<F14ValueSet<int>>();
+}
+
+TEST(F14NodeSet, eraseWhileIterating) {
+  runEraseWhileIterating<F14NodeSet<int>>();
+}
+
+TEST(F14VectorSet, eraseWhileIterating) {
+  runEraseWhileIterating<F14VectorSet<int>>();
 }
 
 TEST(F14ValueSet, rehash) {
@@ -728,7 +900,6 @@ void runInsertAndEmplace() {
     typename S::value_type k1{0};
     typename S::value_type k2{0};
     uint64_t k3 = 0;
-    uint64_t k4 = 10;
     S s;
     resetTracking();
     EXPECT_TRUE(s.emplace(k1).second);
@@ -745,8 +916,9 @@ void runInsertAndEmplace() {
     // copy convert expected for failing emplace with wrong type
     EXPECT_EQ(Tracked<0>::counts.dist(Counts{0, 0, 1, 0}), 0);
 
+    s.clear();
     resetTracking();
-    EXPECT_TRUE(s.emplace(k4).second);
+    EXPECT_TRUE(s.emplace(k3).second);
     // copy convert + move expected for successful emplace with wrong type
     EXPECT_EQ(Tracked<0>::counts.dist(Counts{0, 1, 1, 0}), 0);
   }
@@ -754,7 +926,6 @@ void runInsertAndEmplace() {
     typename S::value_type k1{0};
     typename S::value_type k2{0};
     uint64_t k3 = 0;
-    uint64_t k4 = 10;
     S s;
     resetTracking();
     EXPECT_TRUE(s.emplace(std::move(k1)).second);
@@ -771,8 +942,9 @@ void runInsertAndEmplace() {
     // move convert expected for failing emplace with wrong type
     EXPECT_EQ(Tracked<0>::counts.dist(Counts{0, 0, 0, 1}), 0);
 
+    s.clear();
     resetTracking();
-    EXPECT_TRUE(s.emplace(std::move(k4)).second);
+    EXPECT_TRUE(s.emplace(std::move(k3)).second);
     // move convert + move expected for successful emplace with wrong type
     EXPECT_EQ(Tracked<0>::counts.dist(Counts{0, 1, 0, 1}), 0);
   }
@@ -782,10 +954,13 @@ void runInsertAndEmplace() {
   S s;
   typename S::value_type k;
   EXPECT_EQ(s.count(k), 0);
+  EXPECT_FALSE(s.contains(k));
   s.emplace();
   EXPECT_EQ(s.count(k), 1);
+  EXPECT_TRUE(s.contains(k));
   s.emplace();
   EXPECT_EQ(s.count(k), 1);
+  EXPECT_TRUE(s.contains(k));
 }
 
 TEST(F14ValueSet, destructuring) {
@@ -931,9 +1106,20 @@ TEST(F14ValueSet, heterogeneous) {
     EXPECT_TRUE(ref.end() == ref.find(buddy));
     EXPECT_EQ(hello, *ref.find(hello));
 
+    const auto buddyHashToken = ref.prehash(buddy);
+    const auto helloHashToken = ref.prehash(hello);
+
     // prehash + find
-    EXPECT_TRUE(ref.end() == ref.find(ref.prehash(buddy), buddy));
-    EXPECT_EQ(hello, *ref.find(ref.prehash(hello), hello));
+    EXPECT_TRUE(ref.end() == ref.find(buddyHashToken, buddy));
+    EXPECT_EQ(hello, *ref.find(helloHashToken, hello));
+
+    // contains
+    EXPECT_FALSE(ref.contains(buddy));
+    EXPECT_TRUE(ref.contains(hello));
+
+    // contains with prehash
+    EXPECT_FALSE(ref.contains(buddyHashToken, buddy));
+    EXPECT_TRUE(ref.contains(helloHashToken, hello));
 
     // equal_range
     EXPECT_TRUE(std::make_pair(ref.end(), ref.end()) == ref.equal_range(buddy));
@@ -1026,6 +1212,7 @@ void runHeterogeneousInsertTest() {
 
   resetTracking();
   EXPECT_EQ(set.count(10), 0);
+  EXPECT_FALSE(set.contains(10));
   EXPECT_EQ(Tracked<1>::counts.dist(Counts{0, 0, 0, 0}), 0)
       << Tracked<1>::counts;
 
@@ -1099,6 +1286,7 @@ TEST(F14ValueSet, heterogeneousInsert) {
       std::string,
       transparent<hasher<StringPiece>>,
       transparent<DefaultKeyEqual<StringPiece>>>>();
+  runHeterogeneousInsertStringTest<F14ValueSet<std::string>>();
 }
 
 TEST(F14NodeSet, heterogeneousInsert) {
@@ -1110,6 +1298,7 @@ TEST(F14NodeSet, heterogeneousInsert) {
       std::string,
       transparent<hasher<StringPiece>>,
       transparent<DefaultKeyEqual<StringPiece>>>>();
+  runHeterogeneousInsertStringTest<F14NodeSet<std::string>>();
 }
 
 TEST(F14VectorSet, heterogeneousInsert) {
@@ -1121,6 +1310,7 @@ TEST(F14VectorSet, heterogeneousInsert) {
       std::string,
       transparent<hasher<StringPiece>>,
       transparent<DefaultKeyEqual<StringPiece>>>>();
+  runHeterogeneousInsertStringTest<F14VectorSet<std::string>>();
 }
 
 TEST(F14FastSet, heterogeneousInsert) {
@@ -1132,6 +1322,72 @@ TEST(F14FastSet, heterogeneousInsert) {
       std::string,
       transparent<hasher<StringPiece>>,
       transparent<DefaultKeyEqual<StringPiece>>>>();
+  runHeterogeneousInsertStringTest<F14FastSet<std::string>>();
+}
+
+namespace {
+
+// std::is_convertible is not transitive :( Problem scenario: B<T> is
+// implicitly convertible to A, so hasher that takes A can be used as a
+// transparent hasher for a map with key of type B<T>. C is implicitly
+// convertible to any B<T>, but we have to disable heterogeneous find
+// for C.  There is no way to infer the T of the intermediate type so C
+// can't be used to explicitly construct A.
+
+struct A {
+  int value;
+
+  bool operator==(A const& rhs) const {
+    return value == rhs.value;
+  }
+  bool operator!=(A const& rhs) const {
+    return !(*this == rhs);
+  }
+};
+
+struct AHasher {
+  std::size_t operator()(A const& v) const {
+    return v.value;
+  }
+};
+
+template <typename T>
+struct B {
+  int value;
+
+  explicit B(int v) : value(v) {}
+
+  /* implicit */ B(A const& v) : value(v.value) {}
+
+  /* implicit */ operator A() const {
+    return A{value};
+  }
+};
+
+struct C {
+  int value;
+
+  template <typename T>
+  /* implicit */ operator B<T>() const {
+    return B<T>{value};
+  }
+};
+} // namespace
+
+TEST(F14FastSet, disabledDoubleTransparent) {
+  static_assert(std::is_convertible<B<char>, A>::value, "");
+  static_assert(std::is_convertible<C, B<char>>::value, "");
+  static_assert(!std::is_convertible<C, A>::value, "");
+
+  F14FastSet<
+      B<char>,
+      folly::transparent<AHasher>,
+      folly::transparent<std::equal_to<A>>>
+      set;
+  set.emplace(A{10});
+
+  EXPECT_TRUE(set.find(C{10}) != set.end());
+  EXPECT_TRUE(set.find(C{20}) == set.end());
 }
 
 namespace {
@@ -1172,6 +1428,93 @@ struct RunAllValueSizeTests<S, 0> {
 
 TEST(F14ValueSet, valueSize) {
   RunAllValueSizeTests<F14ValueSet, 32>{}();
+}
+
+template <typename S, typename F>
+void runRandomInsertOrderTest(F&& func) {
+  if (FOLLY_F14_PERTURB_INSERTION_ORDER) {
+    std::string prev;
+    bool diffFound = false;
+    for (int tries = 0; tries < 100; ++tries) {
+      S set;
+      for (char x = '0'; x <= '9'; ++x) {
+        set.emplace(func(x));
+      }
+      std::string s;
+      for (auto&& e : set) {
+        s += e;
+      }
+      LOG(INFO) << s << "\n";
+      if (prev.empty()) {
+        prev = s;
+        continue;
+      }
+      if (prev != s) {
+        diffFound = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(diffFound) << "no randomness found in insert order";
+  }
+}
+
+TEST(F14Set, randomInsertOrder) {
+  runRandomInsertOrderTest<F14ValueSet<char>>([](char x) { return x; });
+  runRandomInsertOrderTest<F14FastSet<char>>([](char x) { return x; });
+  runRandomInsertOrderTest<F14FastSet<std::string>>([](char x) {
+    return std::string{std::size_t{1}, x};
+  });
+}
+
+template <template <class...> class TSet>
+void testContainsWithPrecomputedHash() {
+  TSet<int> m{};
+  const auto key{1};
+  m.insert(key);
+  const auto hashToken = m.prehash(key);
+  EXPECT_TRUE(m.contains(hashToken, key));
+  const auto otherKey{2};
+  const auto hashTokenNotFound = m.prehash(otherKey);
+  EXPECT_FALSE(m.contains(hashTokenNotFound, otherKey));
+}
+
+TEST(F14Set, containsWithPrecomputedHash) {
+  testContainsWithPrecomputedHash<F14ValueSet>();
+  testContainsWithPrecomputedHash<F14NodeSet>();
+  testContainsWithPrecomputedHash<F14VectorSet>();
+  testContainsWithPrecomputedHash<F14FastSet>();
+}
+
+template <template <class...> class TSet>
+void testEraseIf() {
+  TSet<int> s{1, 2, 3, 4};
+  const auto isEvenKey = [](const auto& key) { return key % 2 == 0; };
+  erase_if(s, isEvenKey);
+  ASSERT_EQ(2u, s.size());
+  EXPECT_TRUE(s.contains(1));
+  EXPECT_TRUE(s.contains(3));
+}
+
+TEST(F14Set, eraseIf) {
+  testEraseIf<F14ValueSet>();
+  testEraseIf<F14FastSet>();
+  testEraseIf<F14VectorSet>();
+  testEraseIf<F14NodeSet>();
+}
+
+template <template <class...> class TSet>
+void testExceptionOnInsert() {
+  TSet<ThrowOnCopyTestInt> m{};
+  ThrowOnCopyTestInt key;
+  EXPECT_THROW(m.insert(key), std::exception);
+  EXPECT_TRUE(m.empty());
+}
+
+TEST(F14Set, ExceptionOnInsert) {
+  testExceptionOnInsert<F14ValueSet>();
+  testExceptionOnInsert<F14NodeSet>();
+  testExceptionOnInsert<F14VectorSet>();
+  testExceptionOnInsert<F14FastSet>();
 }
 
 ///////////////////////////////////

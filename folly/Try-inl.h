@@ -21,6 +21,7 @@
 
 #include <stdexcept>
 #include <tuple>
+#include <utility>
 
 namespace folly {
 
@@ -174,7 +175,7 @@ void Try<T>::throwIfFailed() const {
 
 template <class T>
 void Try<T>::destroy() noexcept {
-  auto oldContains = folly::exchange(contains_, Contains::NOTHING);
+  auto oldContains = std::exchange(contains_, Contains::NOTHING);
   if (LIKELY(oldContains == Contains::VALUE)) {
     value_.~T();
   } else if (UNLIKELY(oldContains == Contains::EXCEPTION)) {
@@ -218,7 +219,8 @@ void Try<void>::throwIfFailed() const {
 
 template <typename F>
 typename std::enable_if<
-    !std::is_same<invoke_result_t<F>, void>::value,
+    !std::is_same<invoke_result_t<F>, void>::value &&
+        !isTry<invoke_result_t<F>>::value,
     Try<invoke_result_t<F>>>::type
 makeTryWith(F&& f) {
   using ResultType = invoke_result_t<F>;
@@ -242,6 +244,20 @@ typename std::
     return Try<void>(exception_wrapper(std::current_exception(), e));
   } catch (...) {
     return Try<void>(exception_wrapper(std::current_exception()));
+  }
+}
+
+template <typename F>
+typename std::enable_if<isTry<invoke_result_t<F>>::value, invoke_result_t<F>>::
+    type
+    makeTryWith(F&& f) {
+  using ResultType = invoke_result_t<F>;
+  try {
+    return f();
+  } catch (std::exception& e) {
+    return ResultType(exception_wrapper(std::current_exception(), e));
+  } catch (...) {
+    return ResultType(exception_wrapper(std::current_exception()));
   }
 }
 
@@ -309,7 +325,7 @@ struct RemoveTry<TupleType<folly::Try<Types>...>> {
 };
 
 template <std::size_t... Indices, typename Tuple>
-auto unwrapTryTupleImpl(folly::index_sequence<Indices...>, Tuple&& instance) {
+auto unwrapTryTupleImpl(std::index_sequence<Indices...>, Tuple&& instance) {
   using std::get;
   using ReturnType = typename RemoveTry<typename std::decay<Tuple>::type>::type;
   return ReturnType{(get<Indices>(std::forward<Tuple>(instance)).value())...};
@@ -319,7 +335,7 @@ auto unwrapTryTupleImpl(folly::index_sequence<Indices...>, Tuple&& instance) {
 template <typename Tuple>
 auto unwrapTryTuple(Tuple&& instance) {
   using TupleDecayed = typename std::decay<Tuple>::type;
-  using Seq = folly::make_index_sequence<std::tuple_size<TupleDecayed>::value>;
+  using Seq = std::make_index_sequence<std::tuple_size<TupleDecayed>::value>;
   return try_detail::unwrapTryTupleImpl(Seq{}, std::forward<Tuple>(instance));
 }
 

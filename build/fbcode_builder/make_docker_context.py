@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# Copyright (c) Facebook, Inc. and its affiliates.
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -44,6 +45,7 @@ def make_docker_context(
 
     valid_versions = (
         ('ubuntu:16.04', '5'),
+        ('ubuntu:18.04', '7'),
     )
 
     def add_args(parser):

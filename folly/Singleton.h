@@ -130,6 +130,7 @@
 #include <folly/experimental/ReadMostlySharedPtr.h>
 #include <folly/hash/Hash.h>
 #include <folly/lang/Exception.h>
+#include <folly/memory/SanitizeLeak.h>
 #include <folly/synchronization/Baton.h>
 #include <folly/synchronization/RWSpinLock.h>
 
@@ -279,7 +280,8 @@ struct SingletonVaultState {
 // SingletonHolders.
 class SingletonHolderBase {
  public:
-  explicit SingletonHolderBase(TypeDescriptor typeDesc) : type_(typeDesc) {}
+  explicit SingletonHolderBase(TypeDescriptor typeDesc) noexcept
+      : type_(typeDesc) {}
   virtual ~SingletonHolderBase() = default;
 
   TypeDescriptor type() const {
@@ -311,6 +313,8 @@ struct SingletonHolder : public SingletonHolderBase {
   inline std::weak_ptr<T> get_weak();
   inline std::shared_ptr<T> try_get();
   inline folly::ReadMostlySharedPtr<T> try_get_fast();
+  template <typename Func>
+  inline invoke_result_t<Func, T*> apply(Func f);
   inline void vivify();
 
   void registerSingleton(CreateFunc c, TeardownFunc t);
@@ -322,7 +326,10 @@ struct SingletonHolder : public SingletonHolderBase {
   void destroyInstance() override;
 
  private:
-  SingletonHolder(TypeDescriptor type, SingletonVault& vault);
+  template <typename Tag, typename VaultTag>
+  struct Impl;
+
+  SingletonHolder(TypeDescriptor type, SingletonVault& vault) noexcept;
 
   enum class SingletonHolderState {
     NotRegistered,
@@ -406,7 +413,8 @@ class SingletonVault {
 
   static Type defaultVaultType();
 
-  explicit SingletonVault(Type type = defaultVaultType()) : type_(type) {}
+  explicit SingletonVault(Type type = defaultVaultType()) noexcept
+      : type_(type) {}
 
   // Destructor is only called by unit tests to check destroyInstances.
   ~SingletonVault();
@@ -500,17 +508,7 @@ class SingletonVault {
   // tests only.
   template <typename VaultTag = detail::DefaultTag>
   static SingletonVault* singleton() {
-    /* library-local */ static auto vault =
-        detail::createGlobal<SingletonVault, VaultTag>();
-    return vault;
-  }
-
-  typedef std::string (*StackTraceGetterPtr)();
-
-  static std::atomic<StackTraceGetterPtr>& stackTraceGetter() {
-    /* library-local */ static auto stackTraceGetterPtr = detail::
-        createGlobal<std::atomic<StackTraceGetterPtr>, SingletonVault>();
-    return *stackTraceGetterPtr;
+    return &detail::createGlobal<SingletonVault, VaultTag>();
   }
 
   void setType(Type type) {
@@ -539,10 +537,17 @@ class SingletonVault {
       detail::SingletonHolderBase*,
       detail::TypeDescriptorHasher>
       SingletonMap;
-  Synchronized<SingletonMap> singletons_;
-  Synchronized<std::unordered_set<detail::SingletonHolderBase*>>
+
+  // Use SharedMutexSuppressTSAN to suppress noisy lock inversions when building
+  // with TSAN. If TSAN is not enabled, SharedMutexSuppressTSAN is equivalent
+  // to a normal SharedMutex.
+  Synchronized<SingletonMap, SharedMutexSuppressTSAN> singletons_;
+  Synchronized<
+      std::unordered_set<detail::SingletonHolderBase*>,
+      SharedMutexSuppressTSAN>
       eagerInitSingletons_;
-  Synchronized<std::vector<detail::TypeDescriptor>> creationOrder_;
+  Synchronized<std::vector<detail::TypeDescriptor>, SharedMutexSuppressTSAN>
+      creationOrder_;
 
   // Using SharedMutexReadPriority is important here, because we want to make
   // sure we don't block nested singleton creation happening concurrently with
@@ -594,6 +599,22 @@ class Singleton {
 
   static folly::ReadMostlySharedPtr<T> try_get_fast() {
     return getEntry().try_get_fast();
+  }
+
+  /**
+   * Applies a callback to the possibly-nullptr singleton instance, returning
+   * the callback's result. That is, the following two are functionally
+   * equivalent:
+   *    singleton.apply(std::ref(f));
+   *    f(singleton.try_get().get());
+   *
+   * For example, the following returns the singleton
+   * instance directly without any extra operations on the instance:
+   * auto ret = Singleton<T>::apply([](auto* v) { return v; });
+   */
+  template <typename Func>
+  static invoke_result_t<Func, T*> apply(Func f) {
+    return getEntry().apply(std::ref(f));
   }
 
   // Quickly ensure the instance exists.
@@ -715,8 +736,7 @@ class LeakySingleton {
 
     auto& entry = entryInstance();
     if (entry.ptr) {
-      // Make sure existing pointer doesn't get reported as a leak by LSAN.
-      entry.leakedPtrs.push_back(std::exchange(entry.ptr, nullptr));
+      annotate_object_leaked(std::exchange(entry.ptr, nullptr));
     }
     entry.createFunc = createFunc;
     entry.state = State::Dead;
@@ -726,7 +746,7 @@ class LeakySingleton {
   enum class State { NotRegistered, Dead, Living };
 
   struct Entry {
-    Entry() {}
+    Entry() noexcept {}
     Entry(const Entry&) = delete;
     Entry& operator=(const Entry&) = delete;
 
@@ -735,12 +755,10 @@ class LeakySingleton {
     CreateFunc createFunc;
     std::mutex mutex;
     detail::TypeDescriptor type_{typeid(T), typeid(Tag)};
-    std::list<T*> leakedPtrs;
   };
 
   static Entry& entryInstance() {
-    /* library-local */ static auto entry = detail::createGlobal<Entry, Tag>();
-    return *entry;
+    return detail::createGlobal<Entry, Tag>();
   }
 
   static T& instance() {

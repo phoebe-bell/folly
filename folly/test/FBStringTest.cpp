@@ -23,10 +23,11 @@
 #include <cstdlib>
 #include <iomanip>
 #include <list>
+#include <random>
 #include <sstream>
 
 #include <boost/algorithm/string.hpp>
-#include <boost/random.hpp>
+#include <glog/logging.h>
 
 #include <folly/Conv.h>
 #include <folly/Portability.h>
@@ -42,14 +43,14 @@ using namespace folly;
 namespace {
 
 static const int seed = folly::randomNumberSeed();
-typedef boost::mt19937 RandomT;
+using RandomT = std::mt19937;
 static RandomT rng(seed);
 static const size_t maxString = 100;
 static const bool avoidAliasing = true;
 
 template <class Integral1, class Integral2>
 Integral2 random(Integral1 low, Integral2 up) {
-  boost::uniform_int<> range(low, up);
+  std::uniform_int_distribution<> range(low, up);
   return range(rng);
 }
 
@@ -93,7 +94,7 @@ void clause11_21_4_2_b(String& test) {
 template <class String>
 void clause11_21_4_2_c(String& test) {
   // Test move constructor. There is a more specialized test, see
-  // TEST(FBString, testMoveCtor)
+  // testMoveCtor test
   String donor(test);
   String test2(std::move(donor));
   EXPECT_EQ(test2, test);
@@ -194,7 +195,7 @@ void clause11_21_4_2_k(String& test) {
   EXPECT_EQ(s.size(), size);
   FOR_EACH_RANGE (i, 0, s.size()) { s[i] = random('a', 'z'); }
   test = std::move(s);
-  if (typeid(String) == typeid(fbstring)) {
+  if (std::is_same<String, fbstring>::value) {
     EXPECT_LE(s.size(), 128);
   }
 }
@@ -381,7 +382,7 @@ void clause11_21_4_6_3_a(String& test) {
   EXPECT_EQ(test, s);
   // move assign
   test.assign(std::move(s));
-  if (typeid(String) == typeid(fbstring)) {
+  if (std::is_same<String, fbstring>::value) {
     EXPECT_LE(s.size(), 128);
   }
 }
@@ -1736,5 +1737,18 @@ TEST(WFBString, compareToStdWStringLong) {
   EXPECT_TRUE(fbB >= stdA);
   EXPECT_TRUE(stdB >= fbB);
   EXPECT_TRUE(fbB >= stdB);
+}
+#endif
+
+#if FOLLY_HAS_STRING_VIEW
+struct custom_traits : public std::char_traits<char> {};
+
+TEST(FBString, convertToStringView) {
+  folly::fbstring s("foo");
+  std::string_view sv = s;
+  EXPECT_EQ(sv, "foo");
+  folly::basic_fbstring<char, custom_traits> s2("bar");
+  std::basic_string_view<char, custom_traits> sv2 = s2;
+  EXPECT_EQ(sv2, "bar");
 }
 #endif

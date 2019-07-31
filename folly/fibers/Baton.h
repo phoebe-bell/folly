@@ -19,7 +19,7 @@
 
 #include <folly/Portability.h>
 #include <folly/detail/Futex.h>
-#include <folly/fibers/TimeoutController.h>
+#include <folly/io/async/HHWheelTimer.h>
 
 #if FOLLY_HAS_COROUTINES
 #include <experimental/coroutine>
@@ -48,9 +48,9 @@ class Baton {
     virtual ~Waiter() {}
   };
 
-  Baton();
+  Baton() noexcept;
 
-  ~Baton() {}
+  ~Baton() noexcept = default;
 
   bool ready() const {
     auto state = waiter_.load();
@@ -215,42 +215,26 @@ class Baton {
    * scheduleTimeout() may only be called once prior to the end of the
    * associated Baton's life.
    */
-  class TimeoutHandler {
+  class TimeoutHandler final : private HHWheelTimer::Callback {
    public:
-    void scheduleTimeout(TimeoutController::Duration timeoutMs);
+    void scheduleTimeout(std::chrono::milliseconds timeout);
 
    private:
     friend class Baton;
 
-    void cancelTimeout();
-
     std::function<void()> timeoutFunc_{nullptr};
     FiberManager* fiberManager_{nullptr};
 
-    intptr_t timeoutPtr_{0};
+    void timeoutExpired() noexcept override {
+      assert(timeoutFunc_ != nullptr);
+      timeoutFunc_();
+    }
+
+    void callbackCanceled() noexcept override {}
   };
 
  private:
   class FiberWaiter;
-
-  enum {
-    /**
-     * Must be positive.  If multiple threads are actively using a
-     * higher-level data structure that uses batons internally, it is
-     * likely that the post() and wait() calls happen almost at the same
-     * time.  In this state, we lose big 50% of the time if the wait goes
-     * to sleep immediately.  On circa-2013 devbox hardware it costs about
-     * 7 usec to FUTEX_WAIT and then be awoken (half the t/iter as the
-     * posix_sem_pingpong test in BatonTests).  We can improve our chances
-     * of early post by spinning for a bit, although we have to balance
-     * this against the loss if we end up sleeping any way.  Spins on this
-     * hw take about 7 nanos (all but 0.5 nanos is the pause instruction).
-     * We give ourself 300 spins, which is about 2 usec of waiting.  As a
-     * partial consolation, since we are using the pause instruction we
-     * are giving a speed boost to the colocated hyperthread.
-     */
-    PreBlockAttempts = 300,
-  };
 
   explicit Baton(intptr_t state) : waiter_(state) {}
 
@@ -260,15 +244,10 @@ class Baton {
 
   template <typename F>
   inline void waitFiber(FiberManager& fm, F&& mainContextFunc);
-  /**
-   * Spin for "some time" (see discussion on PreBlockAttempts) waiting
-   * for a post.
-   * @return true if we received a post the spin wait, false otherwise. If the
-   *         function returns true then Baton state is guaranteed to be POSTED
-   */
-  bool spinWaitForEarlyPost();
 
-  bool timedWaitThread(TimeoutController::Duration timeout);
+  template <typename Clock, typename Duration>
+  bool timedWaitThread(
+      const std::chrono::time_point<Clock, Duration>& deadline);
 
   static constexpr intptr_t NO_WAITER = 0;
   static constexpr intptr_t POSTED = -1;

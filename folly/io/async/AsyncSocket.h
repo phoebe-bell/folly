@@ -98,6 +98,15 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
      * @param ex        An exception describing the error that occurred.
      */
     virtual void connectErr(const AsyncSocketException& ex) noexcept = 0;
+
+    /**
+     * preConnect() will be invoked just before the actual connect happens,
+     *              default is no-ops.
+     *
+     * @param fd      An underneath created socket, use for connection.
+     *
+     */
+    virtual void preConnect(NetworkSocket /*fd*/) {}
   };
 
   class EvbChangeCallback {
@@ -146,10 +155,15 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
 
     /**
      * getFlags() will be invoked to retrieve the desired flags to be passed
-     * to ::sendmsg() system call. This method was intentionally declared
-     * non-virtual, so there is no way to override it. Instead feel free to
-     * override getFlagsImpl(flags, defaultFlags) method instead, and enjoy
-     * the convenience of defaultFlags passed there.
+     * to ::sendmsg() system call. It is responsible for converting flags set in
+     * the passed folly::WriteFlags enum into a integer flag bitmask that can be
+     * passed to ::sendmsg. Some flags in folly::WriteFlags do not correspond to
+     * flags that can be passed to ::sendmsg and may instead be handled via
+     * getAncillaryData.
+     *
+     * This method was intentionally declared non-virtual, so there is no way to
+     * override it. Instead feel free to override getFlagsImpl(...) instead, and
+     * enjoy the convenience of defaultFlags passed there.
      *
      * @param flags     Write flags requested for the given write operation
      */
@@ -160,7 +174,9 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
     /**
      * getAncillaryData() will be invoked to initialize ancillary data
      * buffer referred by "msg_control" field of msghdr structure passed to
-     * ::sendmsg() system call. The function assumes that the size of buffer
+     * ::sendmsg() system call based on the flags set in the passed
+     * folly::WriteFlags enum. Some flags in folly::WriteFlags are not relevant
+     * during this process. The function assumes that the size of buffer
      * is not smaller than the value returned by getAncillaryDataSize() method
      * for the same combination of flags.
      *
@@ -262,7 +278,7 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
    * @param fd  File descriptor to take over (should be a connected socket).
    * @param zeroCopyBufId Zerocopy buf id to start with.
    */
-  AsyncSocket(EventBase* evb, int fd, uint32_t zeroCopyBufId = 0);
+  AsyncSocket(EventBase* evb, NetworkSocket fd, uint32_t zeroCopyBufId = 0);
 
   /**
    * Create an AsyncSocket from a different, already connected AsyncSocket.
@@ -308,7 +324,9 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
   /**
    * Helper function to create a shared_ptr<AsyncSocket>.
    */
-  static std::shared_ptr<AsyncSocket> newSocket(EventBase* evb, int fd) {
+  static std::shared_ptr<AsyncSocket> newSocket(
+      EventBase* evb,
+      NetworkSocket fd) {
     return std::shared_ptr<AsyncSocket>(new AsyncSocket(evb, fd), Destructor());
   }
 
@@ -330,9 +348,9 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
   }
 
   /**
-   * Get the file descriptor used by the AsyncSocket.
+   * Get the network socket used by the AsyncSocket.
    */
-  virtual int getFd() const {
+  virtual NetworkSocket getNetworkSocket() const {
     return fd_;
   }
 
@@ -350,7 +368,7 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
    * Returns the file descriptor.  The caller assumes ownership of the
    * descriptor, and it will not be closed when the AsyncSocket is destroyed.
    */
-  virtual int detachFd();
+  virtual NetworkSocket detachNetworkSocket();
 
   /**
    * Uniquely identifies a handle to a socket option value. Each
@@ -365,8 +383,8 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
       }
       return level < other.level;
     }
-    int apply(int fd, int val) const {
-      return setsockopt(fd, level, optname, &val, sizeof(val));
+    int apply(NetworkSocket fd, int val) const {
+      return netops::setsockopt(fd, level, optname, &val, sizeof(val));
     }
     int level;
     int optname;
@@ -509,6 +527,12 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
     return zeroCopyBufId_;
   }
 
+  size_t getZeroCopyReenableThreshold() const {
+    return zeroCopyReenableThreshold_;
+  }
+
+  void setZeroCopyReenableThreshold(size_t threshold);
+
   void write(
       WriteCallback* callback,
       const void* buf,
@@ -588,6 +612,13 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
 
   size_t getRawBytesReceived() const override {
     return getAppBytesReceived();
+  }
+
+  size_t getAppBytesBuffered() const override {
+    return totalAppBytesScheduledForWrite_ - appBytesWritten_;
+  }
+  size_t getRawBytesBuffered() const override {
+    return getAppBytesBuffered();
   }
 
   std::chrono::nanoseconds getConnectTime() const {
@@ -685,6 +716,26 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
    */
   int setRecvBufSize(size_t bufsize);
 
+#if __linux__
+  /**
+   * @brief This method is used to get the number of bytes that are currently
+   *        stored in the TCP send/tx buffer
+   *
+   * @return the number of bytes in the send/tx buffer or folly::none if there
+   *         was a problem
+   */
+  size_t getSendBufInUse() const;
+
+  /**
+   * @brief This method is used to get the number of bytes that are currently
+   *        stored in the TCP receive/rx buffer
+   *
+   * @return the number of bytes in the receive/rx buffer or folly::none if
+   *         there was a problem
+   */
+  size_t getRecvBufInUse() const;
+#endif
+
 /**
  * Sets a specific tcp personality
  * Available only on kernels 3.2 and greater
@@ -706,7 +757,7 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
    */
   template <typename T>
   int getSockOpt(int level, int optname, T* optval, socklen_t* optlen) {
-    return getsockopt(fd_, level, optname, (void*)optval, optlen);
+    return netops::getsockopt(fd_, level, optname, (void*)optval, optlen);
   }
 
   /**
@@ -719,7 +770,7 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
    */
   template <typename T>
   int setSockOpt(int level, int optname, const T* optval) {
-    return setsockopt(fd_, level, optname, optval, sizeof(T));
+    return netops::setsockopt(fd_, level, optname, optval, sizeof(T));
   }
 
   /**
@@ -735,7 +786,7 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
    */
   virtual int
   getSockOptVirtual(int level, int optname, void* optval, socklen_t* optlen) {
-    return getsockopt(fd_, level, optname, optval, optlen);
+    return netops::getsockopt(fd_, level, optname, optval, optlen);
   }
 
   /**
@@ -754,7 +805,7 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
       int optname,
       void const* optval,
       socklen_t optlen) {
-    return setsockopt(fd_, level, optname, optval, optlen);
+    return netops::setsockopt(fd_, level, optname, optval, optlen);
   }
 
   /**
@@ -992,8 +1043,8 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
   class IoHandler : public EventHandler {
    public:
     IoHandler(AsyncSocket* socket, EventBase* eventBase)
-        : EventHandler(eventBase, -1), socket_(socket) {}
-    IoHandler(AsyncSocket* socket, EventBase* eventBase, int fd)
+        : EventHandler(eventBase, NetworkSocket()), socket_(socket) {}
+    IoHandler(AsyncSocket* socket, EventBase* eventBase, NetworkSocket fd)
         : EventHandler(eventBase, fd), socket_(socket) {}
 
     void handlerReady(uint16_t events) noexcept override {
@@ -1084,23 +1135,25 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
    * and queue up any leftover data to send when the socket can
    * handle writes again.
    *
-   * @param callback The callback to invoke when the write is completed.
-   * @param vec      Array of buffers to write; this method will make a
-   *                 copy of the vector (but not the buffers themselves)
-   *                 if the write has to be completed asynchronously.
-   * @param count    Number of elements in vec.
-   * @param buf      The IOBuf that manages the buffers referenced by
-   *                 vec, or a pointer to nullptr if the buffers are not
-   *                 associated with an IOBuf.  Note that ownership of
-   *                 the IOBuf is transferred here; upon completion of
-   *                 the write, the AsyncSocket deletes the IOBuf.
-   * @param flags    Set of write flags.
+   * @param callback    The callback to invoke when the write is completed.
+   * @param vec         Array of buffers to write; this method will make a
+   *                    copy of the vector (but not the buffers themselves)
+   *                    if the write has to be completed asynchronously.
+   * @param count       Number of elements in vec.
+   * @param buf         The IOBuf that manages the buffers referenced by
+   *                    vec, or a pointer to nullptr if the buffers are not
+   *                    associated with an IOBuf.  Note that ownership of
+   *                    the IOBuf is transferred here; upon completion of
+   *                    the write, the AsyncSocket deletes the IOBuf.
+   * @param totalBytes  The total number of bytes to be written.
+   * @param flags       Set of write flags.
    */
   void writeImpl(
       WriteCallback* callback,
       const iovec* vec,
       size_t count,
       std::unique_ptr<folly::IOBuf>&& buf,
+      size_t totalBytes,
       WriteFlags flags = WriteFlags::NONE);
 
   /**
@@ -1132,9 +1185,10 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
    * @param msg_flags Flags to pass to sendmsg
    */
   AsyncSocket::WriteResult
-  sendSocketMessage(int fd, struct msghdr* msg, int msg_flags);
+  sendSocketMessage(NetworkSocket fd, struct msghdr* msg, int msg_flags);
 
-  virtual ssize_t tfoSendMsg(int fd, struct msghdr* msg, int msg_flags);
+  virtual ssize_t
+  tfoSendMsg(NetworkSocket fd, struct msghdr* msg, int msg_flags);
 
   int socketConnect(const struct sockaddr* addr, socklen_t len);
 
@@ -1220,7 +1274,7 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
   StateEnum state_; ///< StateEnum describing current state
   uint8_t shutdownFlags_; ///< Shutdown state (ShutdownFlags)
   uint16_t eventFlags_; ///< EventBase::HandlerFlags settings
-  int fd_; ///< The socket file descriptor
+  NetworkSocket fd_; ///< The socket file descriptor
   mutable folly::SocketAddress addr_; ///< The address we tried to connect to
   mutable folly::SocketAddress localAddr_;
   ///< The address we are connecting from
@@ -1246,6 +1300,9 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
   std::weak_ptr<ShutdownSocketSet> wShutdownSocketSet_;
   size_t appBytesReceived_; ///< Num of bytes received from socket
   size_t appBytesWritten_; ///< Num of bytes written to socket
+  // The total num of bytes passed to AsyncSocket's write functions. It doesn't
+  // include failed writes, but it does include buffered writes.
+  size_t totalAppBytesScheduledForWrite_;
 
   // Pre-received data, to be returned to read callback before any data from the
   // socket.
@@ -1268,6 +1325,9 @@ class AsyncSocket : virtual public AsyncTransportWrapper {
   bool trackEor_{false};
   bool zeroCopyEnabled_{false};
   bool zeroCopyVal_{false};
+  // zerocopy reenable logic
+  size_t zeroCopyReenableThreshold_{0};
+  size_t zeroCopyReenableCounter_{0};
 
   // subclasses may cache these on first call to get
   mutable std::unique_ptr<const AsyncTransportCertificate> peerCertData_{

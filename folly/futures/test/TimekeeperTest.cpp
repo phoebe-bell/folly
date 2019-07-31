@@ -79,6 +79,15 @@ TEST(Timekeeper, futureSleep) {
   EXPECT_GE(now() - t1, one_ms);
 }
 
+FOLLY_PUSH_WARNING
+FOLLY_GNU_DISABLE_WARNING("-Wdeprecated-declarations")
+TEST(Timekeeper, futureSleepUnsafe) {
+  auto t1 = now();
+  futures::sleepUnsafe(one_ms).get();
+  EXPECT_GE(now() - t1, one_ms);
+}
+FOLLY_POP_WARNING
+
 TEST(Timekeeper, futureSleepHandlesNullTimekeeperSingleton) {
   Singleton<ThreadWheelTimekeeper>::make_mock([] { return nullptr; });
   SCOPE_EXIT {
@@ -109,8 +118,10 @@ TEST(Timekeeper, semiFutureWithinHandlesNullTimekeeperSingleton) {
 
 TEST(Timekeeper, futureDelayed) {
   auto t1 = now();
-  auto dur =
-      makeFuture().delayed(one_ms).then([=] { return now() - t1; }).get();
+  auto dur = makeFuture()
+                 .delayed(one_ms)
+                 .thenValue([=](auto&&) { return now() - t1; })
+                 .get();
 
   EXPECT_GE(dur, one_ms);
 }
@@ -120,16 +131,8 @@ TEST(Timekeeper, semiFutureDelayed) {
   auto dur = makeSemiFuture()
                  .delayed(one_ms)
                  .toUnsafeFuture()
-                 .then([=] { return now() - t1; })
+                 .thenValue([=](auto&&) { return now() - t1; })
                  .get();
-
-  EXPECT_GE(dur, one_ms);
-}
-
-TEST(Timekeeper, futureDelayedUnsafe) {
-  auto t1 = now();
-  auto dur =
-      makeFuture().delayedUnsafe(one_ms).then([=] { return now() - t1; }).get();
 
   EXPECT_GE(dur, one_ms);
 }
@@ -149,7 +152,7 @@ TEST(Timekeeper, futureDelayedStickyExecutor) {
     std::thread::id task_thread_id{};
     auto dur = makeFuture()
                    .delayed(one_ms, &tk)
-                   .then([=, &task_thread_id] {
+                   .thenValue([=, &task_thread_id](auto&&) {
                      task_thread_id = std::this_thread::get_id();
                      return now() - t1;
                    })
@@ -176,11 +179,11 @@ TEST(Timekeeper, futureDelayedStickyExecutor) {
     }};
     auto dur = makeSemiFuture()
                    .via(&me)
-                   .then([&first_task_thread_id] {
+                   .thenValue([&first_task_thread_id](auto&&) {
                      first_task_thread_id = std::this_thread::get_id();
                    })
                    .delayed(one_ms)
-                   .then([=, &second_task_thread_id] {
+                   .thenValue([=, &second_task_thread_id](auto&&) {
                      second_task_thread_id = std::this_thread::get_id();
                      return now() - t1;
                    })
@@ -195,30 +198,30 @@ TEST(Timekeeper, futureDelayedStickyExecutor) {
 
 TEST(Timekeeper, futureWithinThrows) {
   Promise<int> p;
-  auto f =
-      p.getFuture().within(one_ms).onError([](FutureTimeout&) { return -1; });
+  auto f = p.getFuture().within(one_ms).thenError(
+      tag_t<FutureTimeout>{}, [](auto&&) { return -1; });
 
   EXPECT_EQ(-1, std::move(f).get());
 }
 
 TEST(Timekeeper, semiFutureWithinThrows) {
   Promise<int> p;
-  auto f = p.getSemiFuture().within(one_ms).toUnsafeFuture().onError(
-      [](FutureTimeout&) { return -1; });
+  auto f = p.getSemiFuture().within(one_ms).toUnsafeFuture().thenError(
+      tag_t<FutureTimeout>{}, [](auto&&) { return -1; });
 
   EXPECT_EQ(-1, std::move(f).get());
 }
 
 TEST(Timekeeper, futureWithinAlreadyComplete) {
-  auto f =
-      makeFuture(42).within(one_ms).onError([&](FutureTimeout&) { return -1; });
+  auto f = makeFuture(42).within(one_ms).thenError(
+      tag_t<FutureTimeout>{}, [&](auto&&) { return -1; });
 
   EXPECT_EQ(42, std::move(f).get());
 }
 
 TEST(Timekeeper, semiFutureWithinAlreadyComplete) {
-  auto f = makeSemiFuture(42).within(one_ms).toUnsafeFuture().onError(
-      [&](FutureTimeout&) { return -1; });
+  auto f = makeSemiFuture(42).within(one_ms).toUnsafeFuture().thenError(
+      tag_t<FutureTimeout>{}, [&](auto&&) { return -1; });
 
   EXPECT_EQ(42, std::move(f).get());
 }
@@ -227,7 +230,7 @@ TEST(Timekeeper, futureWithinFinishesInTime) {
   Promise<int> p;
   auto f = p.getFuture()
                .within(std::chrono::minutes(1))
-               .onError([&](FutureTimeout&) { return -1; });
+               .thenError(tag_t<FutureTimeout>{}, [&](auto&&) { return -1; });
   p.setValue(42);
 
   EXPECT_EQ(42, std::move(f).get());
@@ -238,7 +241,7 @@ TEST(Timekeeper, semiFutureWithinFinishesInTime) {
   auto f = p.getSemiFuture()
                .within(std::chrono::minutes(1))
                .toUnsafeFuture()
-               .onError([&](FutureTimeout&) { return -1; });
+               .thenError(tag_t<FutureTimeout>{}, [&](auto&&) { return -1; });
   p.setValue(42);
 
   EXPECT_EQ(42, std::move(f).get());
@@ -320,7 +323,9 @@ TEST(Timekeeper, interruptDoesntCrash) {
 
 TEST(Timekeeper, chainedInterruptTest) {
   bool test = false;
-  auto f = futures::sleep(milliseconds(100)).then([&]() { test = true; });
+  auto f = futures::sleep(milliseconds(100)).deferValue([&](auto&&) {
+    test = true;
+  });
   f.cancel();
   f.wait();
   EXPECT_FALSE(test);
@@ -368,7 +373,7 @@ TEST(Timekeeper, executor) {
 
   Promise<Unit> p;
   ExecutorTester tester;
-  auto f = p.getFuture().via(&tester).within(one_ms).then([&]() {});
+  auto f = p.getFuture().via(&tester).within(one_ms).thenValue([&](auto&&) {});
   p.setValue();
   f.wait();
   EXPECT_EQ(2, tester.count);

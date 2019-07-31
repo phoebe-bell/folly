@@ -18,6 +18,7 @@
 
 #include <folly/executors/InlineExecutor.h>
 #include <folly/futures/Future.h>
+#include <folly/futures/test/TestExecutor.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GTest.h>
 #include <folly/synchronization/Baton.h>
@@ -251,7 +252,7 @@ TEST(Wait, waitWithDuration) {
   }
 
   {
-    // `SemiFuture::wait(Duration) &` when promise is fulfilled during the wait
+    // `SemiFuture::get(Duration) &&` when promise is fulfilled during the get
     Promise<int> p;
 
     auto f = p.getSemiFuture();
@@ -265,46 +266,15 @@ TEST(Wait, waitWithDuration) {
     });
     b.wait();
 
-    f.wait(std::chrono::seconds(10));
-    EXPECT_TRUE(f.valid());
-    EXPECT_TRUE(f.isReady());
-    EXPECT_EQ(f.value(), 42);
+    EXPECT_EQ(std::move(f).get(std::chrono::seconds(10)), 42);
 
     t.join();
-    EXPECT_TRUE(f.isReady());
-    EXPECT_EQ(f.value(), 42);
-  }
-
-  {
-    // `SemiFuture::wait(Duration) &&` when promise is fulfilled during the wait
-    Promise<int> p;
-
-    auto f1 = p.getSemiFuture();
-    EXPECT_FALSE(f1.isReady());
-
-    folly::Baton<> b;
-    auto t = std::thread([&] {
-      b.post();
-      /* sleep override */ std::this_thread::sleep_for(milliseconds(100));
-      p.setValue(42);
-    });
-    b.wait();
-
-    auto f2 = std::move(f1).wait(std::chrono::seconds(10));
-    EXPECT_FALSE(f1.valid());
-    EXPECT_TRUE(f2.valid());
-    EXPECT_TRUE(f2.isReady());
-    EXPECT_EQ(f2.value(), 42);
-
-    t.join();
-    EXPECT_TRUE(f2.valid());
-    EXPECT_TRUE(f2.isReady());
-    EXPECT_EQ(f2.value(), 42);
   }
 }
 
 TEST(Wait, multipleWait) {
-  auto f = futures::sleep(milliseconds(100));
+  folly::TestExecutor executor(1);
+  auto f = futures::sleep(milliseconds(100)).via(&executor);
   for (size_t i = 0; i < 5; ++i) {
     EXPECT_FALSE(f.isReady());
     f.wait(milliseconds(3));
@@ -454,64 +424,5 @@ TEST(Wait, WaitPlusThen) {
         std::move(f2).thenValue([&](auto&& v) { continuation = v; }));
     EXPECT_EQ(continuation, 42);
     t.join();
-  }
-
-  {
-    // Sub-case: SemiFuture fulfilled before `wait(dur)` is called.
-    // Expect call to `.then()` to succeed & continuation to run immediately.
-    Promise<int> p;
-    auto f = p.getSemiFuture();
-    p.setValue(42);
-    EXPECT_TRUE(f.isReady());
-    EXPECT_EQ(f.value(), 42);
-    f.wait(std::chrono::seconds(10));
-    auto continuation = 0;
-    InlineExecutor e;
-    auto f2 = std::move(f).via(&e);
-    EXPECT_NO_THROW(
-        std::move(f2).thenValue([&](auto&& v) { continuation = v; }));
-    EXPECT_EQ(continuation, 42);
-  }
-
-  {
-    // Sub-case: SemiFuture fulfilled after `wait(dur)` actually starts waiting.
-    // Expect call to `.then()` to succeed & continuation to when result ready.
-    Promise<int> p;
-    auto f = p.getSemiFuture();
-
-    folly::Baton<> b;
-    auto t = std::thread([&] {
-      b.post();
-      /* sleep override */ std::this_thread::sleep_for(milliseconds(100));
-      p.setValue(42);
-    });
-    b.wait();
-
-    EXPECT_FALSE(f.isReady()); // deterministically passes in practice
-    f.wait(std::chrono::seconds(10));
-    EXPECT_TRUE(f.isReady()); // deterministically passes in practice
-    auto continuation = 0;
-    InlineExecutor e;
-    auto f2 = std::move(f).via(&e);
-    EXPECT_NO_THROW(
-        std::move(f2).thenValue([&](auto&& v) { continuation = v; }));
-    EXPECT_EQ(continuation, 42);
-    t.join();
-  }
-
-  {
-    // Sub-case: SemiFuture fulfilled after `wait(dur)` times out.
-    // Expect call to `.then()` to succeed; continuation runs when fulfilled.
-    Promise<int> p;
-    auto f = p.getSemiFuture();
-    f.wait(milliseconds(1));
-    auto continuation = 0;
-    InlineExecutor e;
-    auto f2 = std::move(f).via(&e);
-    EXPECT_NO_THROW(
-        std::move(f2).thenValue([&](auto&& v) { continuation = v; }));
-    EXPECT_EQ(continuation, 0);
-    p.setValue(42);
-    EXPECT_EQ(continuation, 42);
   }
 }

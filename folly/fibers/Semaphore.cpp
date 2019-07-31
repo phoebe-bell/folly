@@ -19,35 +19,42 @@ namespace folly {
 namespace fibers {
 
 bool Semaphore::signalSlow() {
-  // If we signalled a release, notify the waitlist
-  auto waitListLock = waitList_.wlock();
-  auto& waitList = *waitListLock;
+  Baton* waiter = nullptr;
+  {
+    // If we signalled a release, notify the waitlist
+    auto waitListLock = waitList_.wlock();
+    auto& waitList = *waitListLock;
 
-  auto testVal = tokens_.load(std::memory_order_acquire);
-  if (testVal != 0) {
-    return false;
-  }
+    auto testVal = tokens_.load(std::memory_order_acquire);
+    if (testVal != 0) {
+      return false;
+    }
 
-  if (waitList.empty()) {
-    // If the waitlist is now empty, ensure the token count increments
-    // No need for CAS here as we will always be under the mutex
-    CHECK(tokens_.compare_exchange_strong(
-        testVal, testVal + 1, std::memory_order_relaxed));
-  } else {
-    // trigger waiter if there is one
-    waitList.front()->post();
+    if (waitList.empty()) {
+      // If the waitlist is now empty, ensure the token count increments
+      // No need for CAS here as we will always be under the mutex
+      CHECK(tokens_.compare_exchange_strong(
+          testVal, testVal + 1, std::memory_order_relaxed));
+      return true;
+    }
+    waiter = waitList.front();
     waitList.pop();
   }
+  // Trigger waiter if there is one
+  // Do it after releasing the waitList mutex, in case the waiter
+  // eagerly calls signal
+  waiter->post();
   return true;
 }
 
 void Semaphore::signal() {
   auto oldVal = tokens_.load(std::memory_order_acquire);
   do {
-    if (oldVal == 0) {
+    while (oldVal == 0) {
       if (signalSlow()) {
-        break;
+        return;
       }
+      oldVal = tokens_.load(std::memory_order_acquire);
     }
   } while (!tokens_.compare_exchange_weak(
       oldVal,
@@ -56,10 +63,8 @@ void Semaphore::signal() {
       std::memory_order_acquire));
 }
 
-bool Semaphore::waitSlow() {
+bool Semaphore::waitSlow(folly::fibers::Baton& waitBaton) {
   // Slow path, create a baton and acquire a mutex to update the wait list
-  folly::fibers::Baton waitBaton;
-
   {
     auto waitListLock = waitList_.wlock();
     auto& waitList = *waitListLock;
@@ -71,21 +76,22 @@ bool Semaphore::waitSlow() {
     // prepare baton and add to queue
     waitList.push(&waitBaton);
   }
-  // If we managed to create a baton, wait on it
-  // This has to be done here so the mutex has been released
-  waitBaton.wait();
+  // Signal to caller that we managed to push a baton
   return true;
 }
 
 void Semaphore::wait() {
   auto oldVal = tokens_.load(std::memory_order_acquire);
   do {
-    if (oldVal == 0) {
+    while (oldVal == 0) {
+      folly::fibers::Baton waitBaton;
       // If waitSlow fails it is because the token is non-zero by the time
       // the lock is taken, so we can just continue round the loop
-      if (waitSlow()) {
-        break;
+      if (waitSlow(waitBaton)) {
+        waitBaton.wait();
+        return;
       }
+      oldVal = tokens_.load(std::memory_order_acquire);
     }
   } while (!tokens_.compare_exchange_weak(
       oldVal,
@@ -93,6 +99,71 @@ void Semaphore::wait() {
       std::memory_order_release,
       std::memory_order_acquire));
 }
+
+bool Semaphore::try_wait(Baton& waitBaton) {
+  auto oldVal = tokens_.load(std::memory_order_acquire);
+  do {
+    while (oldVal == 0) {
+      if (waitSlow(waitBaton)) {
+        return false;
+      }
+      oldVal = tokens_.load(std::memory_order_acquire);
+    }
+  } while (!tokens_.compare_exchange_weak(
+      oldVal,
+      oldVal - 1,
+      std::memory_order_release,
+      std::memory_order_acquire));
+  return true;
+}
+
+#if FOLLY_HAS_COROUTINES
+
+coro::Task<void> Semaphore::co_wait() {
+  auto oldVal = tokens_.load(std::memory_order_acquire);
+  do {
+    while (oldVal == 0) {
+      folly::fibers::Baton waitBaton;
+      // If waitSlow fails it is because the token is non-zero by the time
+      // the lock is taken, so we can just continue round the loop
+      if (waitSlow(waitBaton)) {
+        co_await waitBaton;
+        co_return;
+      }
+      oldVal = tokens_.load(std::memory_order_acquire);
+    }
+  } while (!tokens_.compare_exchange_weak(
+      oldVal,
+      oldVal - 1,
+      std::memory_order_release,
+      std::memory_order_acquire));
+}
+
+#endif
+
+#if FOLLY_FUTURE_USING_FIBER
+
+SemiFuture<Unit> Semaphore::future_wait() {
+  auto oldVal = tokens_.load(std::memory_order_acquire);
+  do {
+    while (oldVal == 0) {
+      auto waitBaton = std::make_unique<fibers::Baton>();
+      // If waitSlow fails it is because the token is non-zero by the time
+      // the lock is taken, so we can just continue round the loop
+      if (waitSlow(*waitBaton)) {
+        return futures::wait(std::move(waitBaton));
+      }
+      oldVal = tokens_.load(std::memory_order_acquire);
+    }
+  } while (!tokens_.compare_exchange_weak(
+      oldVal,
+      oldVal - 1,
+      std::memory_order_release,
+      std::memory_order_acquire));
+  return makeSemiFuture();
+}
+
+#endif
 
 size_t Semaphore::getCapacity() const {
   return capacity_;

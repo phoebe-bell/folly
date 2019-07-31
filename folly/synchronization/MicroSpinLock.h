@@ -46,6 +46,7 @@
 
 #include <folly/Portability.h>
 #include <folly/lang/Align.h>
+#include <folly/synchronization/SanitizeThread.h>
 #include <folly/synchronization/detail/Sleeper.h>
 
 namespace folly {
@@ -69,35 +70,42 @@ struct MicroSpinLock {
 
   // Initialize this MSL.  It is unnecessary to call this if you
   // zero-initialize the MicroSpinLock.
-  void init() {
+  void init() noexcept {
     payload()->store(FREE);
   }
 
-  bool try_lock() {
-    return cas(FREE, LOCKED);
+  bool try_lock() noexcept {
+    bool ret = cas(FREE, LOCKED);
+    annotate_rwlock_try_acquired(
+        this, annotate_rwlock_level::wrlock, ret, __FILE__, __LINE__);
+    return ret;
   }
 
-  void lock() {
+  void lock() noexcept {
     detail::Sleeper sleeper;
-    while (!try_lock()) {
+    while (!cas(FREE, LOCKED)) {
       do {
         sleeper.wait();
       } while (payload()->load(std::memory_order_relaxed) == LOCKED);
     }
     assert(payload()->load() == LOCKED);
+    annotate_rwlock_acquired(
+        this, annotate_rwlock_level::wrlock, __FILE__, __LINE__);
   }
 
-  void unlock() {
+  void unlock() noexcept {
     assert(payload()->load() == LOCKED);
+    annotate_rwlock_released(
+        this, annotate_rwlock_level::wrlock, __FILE__, __LINE__);
     payload()->store(FREE, std::memory_order_release);
   }
 
  private:
-  std::atomic<uint8_t>* payload() {
+  std::atomic<uint8_t>* payload() noexcept {
     return reinterpret_cast<std::atomic<uint8_t>*>(&this->lock_);
   }
 
-  bool cas(uint8_t compare, uint8_t newVal) {
+  bool cas(uint8_t compare, uint8_t newVal) noexcept {
     return std::atomic_compare_exchange_strong_explicit(
         payload(),
         &compare,
@@ -118,20 +126,17 @@ static_assert(
  * contention is unlikely.
  */
 
-// TODO: generate it from configure (`getconf LEVEL1_DCACHE_LINESIZE`)
-#define FOLLY_CACHE_LINE_SIZE 64
-
 template <class T, size_t N>
 struct alignas(max_align_v) SpinLockArray {
-  T& operator[](size_t i) {
+  T& operator[](size_t i) noexcept {
     return data_[i].lock;
   }
 
-  const T& operator[](size_t i) const {
+  const T& operator[](size_t i) const noexcept {
     return data_[i].lock;
   }
 
-  constexpr size_t size() const {
+  constexpr size_t size() const noexcept {
     return N;
   }
 
@@ -139,19 +144,20 @@ struct alignas(max_align_v) SpinLockArray {
   struct PaddedSpinLock {
     PaddedSpinLock() : lock() {}
     T lock;
-    char padding[FOLLY_CACHE_LINE_SIZE - sizeof(T)];
+    char padding[hardware_destructive_interference_size - sizeof(T)];
   };
   static_assert(
-      sizeof(PaddedSpinLock) == FOLLY_CACHE_LINE_SIZE,
+      sizeof(PaddedSpinLock) == hardware_destructive_interference_size,
       "Invalid size of PaddedSpinLock");
 
   // Check if T can theoretically cross a cache line.
   static_assert(
-      max_align_v > 0 && FOLLY_CACHE_LINE_SIZE % max_align_v == 0 &&
+      max_align_v > 0 &&
+          hardware_destructive_interference_size % max_align_v == 0 &&
           sizeof(T) <= max_align_v,
       "T can cross cache line boundaries");
 
-  char padding_[FOLLY_CACHE_LINE_SIZE];
+  char padding_[hardware_destructive_interference_size];
   std::array<PaddedSpinLock, N> data_;
 };
 

@@ -19,10 +19,10 @@
 
 #include <folly/executors/InlineExecutor.h>
 #include <folly/experimental/coro/Baton.h>
-#include <folly/experimental/coro/Future.h>
-#include <folly/experimental/coro/Promise.h>
 #include <folly/experimental/coro/Task.h>
 #include <folly/portability/GTest.h>
+
+#include <stdio.h>
 
 using namespace folly;
 
@@ -58,8 +58,7 @@ TEST(Baton, AwaitBaton) {
   CHECK(!reachedBeforeAwait);
   CHECK(!reachedAfterAwait);
 
-  auto& executor = InlineExecutor::instance();
-  coro::Future<void> f = via(&executor, std::move(t));
+  auto f = std::move(t).scheduleOn(&InlineExecutor::instance()).start();
 
   CHECK(reachedBeforeAwait);
   CHECK(!reachedAfterAwait);
@@ -67,6 +66,46 @@ TEST(Baton, AwaitBaton) {
   baton.post();
 
   CHECK(reachedAfterAwait);
+}
+
+TEST(Baton, MultiAwaitBaton) {
+  coro::Baton baton;
+
+  bool reachedBeforeAwait1 = false;
+  bool reachedBeforeAwait2 = false;
+  bool reachedAfterAwait1 = false;
+  bool reachedAfterAwait2 = false;
+
+  auto makeTask1 = [&]() -> coro::Task<void> {
+    reachedBeforeAwait1 = true;
+    co_await baton;
+    reachedAfterAwait1 = true;
+  };
+
+  auto makeTask2 = [&]() -> coro::Task<void> {
+    reachedBeforeAwait2 = true;
+    co_await baton;
+    reachedAfterAwait2 = true;
+  };
+
+  coro::Task<void> t1 = makeTask1();
+  coro::Task<void> t2 = makeTask2();
+
+  auto f1 = std::move(t1).scheduleOn(&InlineExecutor::instance()).start();
+  auto f2 = std::move(t2).scheduleOn(&InlineExecutor::instance()).start();
+
+  CHECK(reachedBeforeAwait1);
+  CHECK(reachedBeforeAwait2);
+  CHECK(!reachedAfterAwait1);
+  CHECK(!reachedAfterAwait2);
+
+  baton.post();
+
+  CHECK(f1.isReady());
+  CHECK(f2.isReady());
+
+  CHECK(reachedAfterAwait1);
+  CHECK(reachedAfterAwait2);
 }
 
 #endif

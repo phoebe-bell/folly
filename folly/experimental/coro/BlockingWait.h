@@ -16,7 +16,12 @@
 #pragma once
 
 #include <folly/Try.h>
+#include <folly/executors/ManualExecutor.h>
+#include <folly/experimental/coro/Task.h>
 #include <folly/experimental/coro/Traits.h>
+#include <folly/experimental/coro/ViaIfAsync.h>
+#include <folly/experimental/coro/detail/Traits.h>
+#include <folly/fibers/Baton.h>
 #include <folly/synchronization/Baton.h>
 
 #include <cassert>
@@ -58,13 +63,16 @@ class BlockingWaitPromiseBase {
     return {};
   }
 
- protected:
+  bool done() const noexcept {
+    return baton_.ready();
+  }
+
   void wait() noexcept {
     baton_.wait();
   }
 
  private:
-  folly::Baton<> baton_;
+  folly::fibers::Baton baton_;
 };
 
 template <typename T>
@@ -89,18 +97,8 @@ class BlockingWaitPromise final : public BlockingWaitPromiseBase {
     result_->emplace(static_cast<U&&>(value));
   }
 
-  folly::Try<T> getAsTry() {
-    folly::Try<T> result;
+  void setTry(folly::Try<T>* result) noexcept {
     result_ = &result;
-    std::experimental::coroutine_handle<BlockingWaitPromise<T>>::from_promise(
-        *this)
-        .resume();
-    this->wait();
-    return result;
-  }
-
-  T get() {
-    return getAsTry().value();
   }
 
  private:
@@ -145,18 +143,8 @@ class BlockingWaitPromise<T&> final : public BlockingWaitPromiseBase {
     std::abort();
   }
 
-  folly::Try<std::reference_wrapper<T>> getAsTry() {
-    folly::Try<std::reference_wrapper<T>> result;
-    result_ = &result;
-    std::experimental::coroutine_handle<BlockingWaitPromise<T&>>::from_promise(
-        *this)
-        .resume();
-    this->wait();
-    return result;
-  }
-
-  T& get() {
-    return getAsTry().value();
+  void setTry(folly::Try<std::reference_wrapper<T>>* result) noexcept {
+    result_ = result;
   }
 
  private:
@@ -177,18 +165,8 @@ class BlockingWaitPromise<void> final : public BlockingWaitPromiseBase {
         exception_wrapper::from_exception_ptr(std::current_exception()));
   }
 
-  folly::Try<void> getAsTry() {
-    folly::Try<void> result;
-    result_ = &result;
-    std::experimental::coroutine_handle<
-        BlockingWaitPromise<void>>::from_promise(*this)
-        .resume();
-    this->wait();
-    return result;
-  }
-
-  void get() {
-    return getAsTry().value();
+  void setTry(folly::Try<void>* result) noexcept {
+    result_ = result;
   }
 
  private:
@@ -214,12 +192,34 @@ class BlockingWaitTask {
     }
   }
 
-  decltype(auto) getAsTry() && {
-    return coro_.promise().getAsTry();
+  folly::Try<detail::lift_lvalue_reference_t<T>> getAsTry() && {
+    folly::Try<detail::lift_lvalue_reference_t<T>> result;
+    auto& promise = coro_.promise();
+    promise.setTry(&result);
+    {
+      RequestContextScopeGuard guard{RequestContext::saveContext()};
+      coro_.resume();
+    }
+    promise.wait();
+    return result;
   }
 
-  decltype(auto) get() && {
-    return coro_.promise().get();
+  T get() && {
+    return std::move(*this).getAsTry().value();
+  }
+
+  T getVia(folly::DrivableExecutor* executor) && {
+    folly::Try<detail::lift_lvalue_reference_t<T>> result;
+    auto& promise = coro_.promise();
+    promise.setTry(&result);
+    {
+      RequestContextScopeGuard guard{RequestContext::saveContext()};
+      coro_.resume();
+    }
+    while (!promise.done()) {
+      executor->drive();
+    }
+    return std::move(result).value();
   }
 
  private:
@@ -247,23 +247,12 @@ BlockingWaitPromise<void>::get_return_object() noexcept {
       BlockingWaitPromise<void>>::from_promise(*this)};
 }
 
-template <typename T>
-struct decay_rvalue_reference {
-  using type = T;
-};
-
-template <typename T>
-struct decay_rvalue_reference<T&&> : std::decay<T> {};
-
-template <typename T>
-using decay_rvalue_reference_t = typename decay_rvalue_reference<T>::type;
-
 template <
     typename Awaitable,
     typename Result = await_result_t<Awaitable>,
     std::enable_if_t<!std::is_lvalue_reference<Result>::value, int> = 0>
 auto makeBlockingWaitTask(Awaitable&& awaitable)
-    -> BlockingWaitTask<decay_rvalue_reference_t<Result>> {
+    -> BlockingWaitTask<detail::decay_rvalue_reference_t<Result>> {
   co_return co_await static_cast<Awaitable&&>(awaitable);
 }
 
@@ -272,7 +261,7 @@ template <
     typename Result = await_result_t<Awaitable>,
     std::enable_if_t<std::is_lvalue_reference<Result>::value, int> = 0>
 auto makeBlockingWaitTask(Awaitable&& awaitable)
-    -> BlockingWaitTask<decay_rvalue_reference_t<Result>> {
+    -> BlockingWaitTask<detail::decay_rvalue_reference_t<Result>> {
   co_yield co_await static_cast<Awaitable&&>(awaitable);
 }
 
@@ -314,6 +303,21 @@ auto blockingWait(Awaitable&& awaitable)
   return static_cast<std::add_rvalue_reference_t<await_result_t<Awaitable>>>(
       detail::makeRefBlockingWaitTask(static_cast<Awaitable&&>(awaitable))
           .get());
+}
+
+template <
+    typename SemiAwaitable,
+    std::enable_if_t<!is_awaitable_v<SemiAwaitable>, int> = 0>
+auto blockingWait(SemiAwaitable&& awaitable)
+    -> detail::decay_rvalue_reference_t<semi_await_result_t<SemiAwaitable>> {
+  folly::ManualExecutor executor;
+  return static_cast<
+      std::add_rvalue_reference_t<semi_await_result_t<SemiAwaitable>>>(
+      detail::makeRefBlockingWaitTask(
+          folly::coro::co_viaIfAsync(
+              folly::getKeepAliveToken(executor),
+              static_cast<SemiAwaitable&&>(awaitable)))
+          .getVia(&executor));
 }
 
 } // namespace coro

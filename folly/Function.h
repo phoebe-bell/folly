@@ -273,13 +273,26 @@ using EnableIfNotFunction =
 
 struct CoerceTag {};
 
+template <typename, typename T>
+struct IsFunctionNullptrTestable : std::false_type {};
+
 template <typename T>
-bool isNullPtrFn(T* p) {
-  return p == nullptr;
+struct IsFunctionNullptrTestable<
+    void_t<decltype(
+        static_cast<bool>(static_cast<T const&>(T(nullptr)) == nullptr))>,
+    T> : std::true_type {};
+
+template <typename T>
+constexpr std::enable_if_t< //
+    !IsFunctionNullptrTestable<void, T>::value,
+    std::false_type>
+isEmptyFunction(T const&) {
+  return {};
 }
 template <typename T>
-std::false_type isNullPtrFn(T&&) {
-  return {};
+constexpr std::enable_if_t<IsFunctionNullptrTestable<void, T>::value, bool>
+isEmptyFunction(T const& t) {
+  return static_cast<bool>(t == nullptr);
 }
 
 template <typename F, typename... Args>
@@ -291,6 +304,41 @@ template <
     typename = typename std::enable_if<
         !std::is_reference<To>::value || std::is_reference<From>::value>::type>
 using SafeResultOf = decltype(static_cast<To>(std::declval<From>()));
+
+template <typename F, typename R, typename... A>
+class FunctionTraitsSharedProxy {
+  std::shared_ptr<Function<F>> sp_;
+
+ public:
+  explicit FunctionTraitsSharedProxy(std::nullptr_t) noexcept {}
+  explicit FunctionTraitsSharedProxy(Function<F>&& func)
+      : sp_(std::make_shared<Function<F>>(std::move(func))) {}
+  R operator()(A&&... args) const {
+    return (*sp_)(static_cast<A&&>(args)...);
+  }
+
+  friend bool operator==(
+      FunctionTraitsSharedProxy<F, R, A...> const& proxy,
+      std::nullptr_t) noexcept {
+    return proxy.sp_ == nullptr;
+  }
+  friend bool operator!=(
+      FunctionTraitsSharedProxy<F, R, A...> const& proxy,
+      std::nullptr_t) noexcept {
+    return proxy.sp_ != nullptr;
+  }
+
+  friend bool operator==(
+      std::nullptr_t,
+      FunctionTraitsSharedProxy<F, R, A...> const& proxy) noexcept {
+    return proxy.sp_ == nullptr;
+  }
+  friend bool operator!=(
+      std::nullptr_t,
+      FunctionTraitsSharedProxy<F, R, A...> const& proxy) noexcept {
+    return proxy.sp_ != nullptr;
+  }
+};
 
 template <typename FunctionType>
 struct FunctionTraits;
@@ -305,7 +353,7 @@ struct FunctionTraits<ReturnType(Args...)> {
 
   template <typename F>
   using ResultOf =
-      SafeResultOf<CallableResult<_t<std::decay<F>>&, Args...>, ReturnType>;
+      SafeResultOf<CallableResult<std::decay_t<F>&, Args...>, ReturnType>;
 
   template <typename Fun>
   static ReturnType callSmall(Data& p, Args&&... args) {
@@ -320,7 +368,7 @@ struct FunctionTraits<ReturnType(Args...)> {
   }
 
   static ReturnType uninitCall(Data&, Args&&...) {
-    throw std::bad_function_call();
+    throw_exception<std::bad_function_call>();
   }
 
   ReturnType operator()(Args... args) {
@@ -328,16 +376,8 @@ struct FunctionTraits<ReturnType(Args...)> {
     return fn.call_(fn.data_, static_cast<Args&&>(args)...);
   }
 
-  class SharedProxy {
-    std::shared_ptr<Function<NonConstSignature>> sp_;
-
-   public:
-    explicit SharedProxy(Function<NonConstSignature>&& func)
-        : sp_(std::make_shared<Function<NonConstSignature>>(std::move(func))) {}
-    ReturnType operator()(Args&&... args) const {
-      return (*sp_)(static_cast<Args&&>(args)...);
-    }
-  };
+  using SharedProxy =
+      FunctionTraitsSharedProxy<NonConstSignature, ReturnType, Args...>;
 };
 
 template <typename ReturnType, typename... Args>
@@ -349,9 +389,8 @@ struct FunctionTraits<ReturnType(Args...) const> {
   using OtherSignature = NonConstSignature;
 
   template <typename F>
-  using ResultOf = SafeResultOf<
-      CallableResult<const _t<std::decay<F>>&, Args...>,
-      ReturnType>;
+  using ResultOf =
+      SafeResultOf<CallableResult<const std::decay_t<F>&, Args...>, ReturnType>;
 
   template <typename Fun>
   static ReturnType callSmall(Data& p, Args&&... args) {
@@ -366,7 +405,7 @@ struct FunctionTraits<ReturnType(Args...) const> {
   }
 
   static ReturnType uninitCall(Data&, Args&&...) {
-    throw std::bad_function_call();
+    throw_exception<std::bad_function_call>();
   }
 
   ReturnType operator()(Args... args) const {
@@ -374,16 +413,8 @@ struct FunctionTraits<ReturnType(Args...) const> {
     return fn.call_(fn.data_, static_cast<Args&&>(args)...);
   }
 
-  class SharedProxy {
-    std::shared_ptr<Function<ConstSignature>> sp_;
-
-   public:
-    explicit SharedProxy(Function<ConstSignature>&& func)
-        : sp_(std::make_shared<Function<ConstSignature>>(std::move(func))) {}
-    ReturnType operator()(Args&&... args) const {
-      return (*sp_)(static_cast<Args&&>(args)...);
-    }
-  };
+  using SharedProxy =
+      FunctionTraitsSharedProxy<ConstSignature, ReturnType, Args...>;
 };
 
 #if FOLLY_HAVE_NOEXCEPT_FUNCTION_TYPE
@@ -397,7 +428,7 @@ struct FunctionTraits<ReturnType(Args...) noexcept> {
 
   template <typename F>
   using ResultOf =
-      SafeResultOf<CallableResult<_t<std::decay<F>>&, Args...>, ReturnType>;
+      SafeResultOf<CallableResult<std::decay_t<F>&, Args...>, ReturnType>;
 
   template <typename Fun>
   static ReturnType callSmall(Data& p, Args&&... args) noexcept {
@@ -420,16 +451,8 @@ struct FunctionTraits<ReturnType(Args...) noexcept> {
     return fn.call_(fn.data_, static_cast<Args&&>(args)...);
   }
 
-  class SharedProxy {
-    std::shared_ptr<Function<NonConstSignature>> sp_;
-
-   public:
-    explicit SharedProxy(Function<NonConstSignature>&& func)
-        : sp_(std::make_shared<Function<NonConstSignature>>(std::move(func))) {}
-    ReturnType operator()(Args&&... args) const {
-      return (*sp_)(static_cast<Args&&>(args)...);
-    }
-  };
+  using SharedProxy =
+      FunctionTraitsSharedProxy<NonConstSignature, ReturnType, Args...>;
 };
 
 template <typename ReturnType, typename... Args>
@@ -441,9 +464,8 @@ struct FunctionTraits<ReturnType(Args...) const noexcept> {
   using OtherSignature = NonConstSignature;
 
   template <typename F>
-  using ResultOf = SafeResultOf<
-      CallableResult<const _t<std::decay<F>>&, Args...>,
-      ReturnType>;
+  using ResultOf =
+      SafeResultOf<CallableResult<const std::decay_t<F>&, Args...>, ReturnType>;
 
   template <typename Fun>
   static ReturnType callSmall(Data& p, Args&&... args) noexcept {
@@ -458,7 +480,7 @@ struct FunctionTraits<ReturnType(Args...) const noexcept> {
   }
 
   static ReturnType uninitCall(Data&, Args&&...) noexcept {
-    throw std::bad_function_call();
+    throw_exception<std::bad_function_call>();
   }
 
   ReturnType operator()(Args... args) const noexcept {
@@ -466,21 +488,13 @@ struct FunctionTraits<ReturnType(Args...) const noexcept> {
     return fn.call_(fn.data_, static_cast<Args&&>(args)...);
   }
 
-  class SharedProxy {
-    std::shared_ptr<Function<ConstSignature>> sp_;
-
-   public:
-    explicit SharedProxy(Function<ConstSignature>&& func)
-        : sp_(std::make_shared<Function<ConstSignature>>(std::move(func))) {}
-    ReturnType operator()(Args&&... args) const {
-      return (*sp_)(static_cast<Args&&>(args)...);
-    }
-  };
+  using SharedProxy =
+      FunctionTraitsSharedProxy<ConstSignature, ReturnType, Args...>;
 };
 #endif
 
 template <typename Fun>
-bool execSmall(Op o, Data* src, Data* dst) {
+std::size_t execSmall(Op o, Data* src, Data* dst) {
   switch (o) {
     case Op::MOVE:
       ::new (static_cast<void*>(&dst->tiny))
@@ -492,11 +506,11 @@ bool execSmall(Op o, Data* src, Data* dst) {
     case Op::HEAP:
       break;
   }
-  return false;
+  return 0U;
 }
 
 template <typename Fun>
-bool execBig(Op o, Data* src, Data* dst) {
+std::size_t execBig(Op o, Data* src, Data* dst) {
   switch (o) {
     case Op::MOVE:
       dst->big = src->big;
@@ -508,7 +522,7 @@ bool execBig(Op o, Data* src, Data* dst) {
     case Op::HEAP:
       break;
   }
-  return true;
+  return sizeof(Fun);
 }
 
 } // namespace function
@@ -527,7 +541,7 @@ class Function final : private detail::function::FunctionTraits<FunctionType> {
 
   using Traits = detail::function::FunctionTraits<FunctionType>;
   using Call = typename Traits::Call;
-  using Exec = bool (*)(Op, Data*, Data*);
+  using Exec = std::size_t (*)(Op, Data*, Data*);
 
   template <typename Fun>
   using IsSmall = detail::function::IsSmall<Fun>;
@@ -540,8 +554,11 @@ class Function final : private detail::function::FunctionTraits<FunctionType> {
   Call call_{&Traits::uninitCall};
   Exec exec_{nullptr};
 
-  bool exec(Op o, Data* src, Data* dst) const {
-    return exec_ && exec_(o, src, dst);
+  std::size_t exec(Op o, Data* src, Data* dst) const {
+    if (!exec_) {
+      return 0U;
+    }
+    return exec_(o, src, dst);
   }
 
   friend Traits;
@@ -552,7 +569,7 @@ class Function final : private detail::function::FunctionTraits<FunctionType> {
   template <typename Fun>
   Function(Fun&& fun, SmallTag) noexcept {
     using FunT = typename std::decay<Fun>::type;
-    if (!detail::function::isNullPtrFn(fun)) {
+    if (!detail::function::isEmptyFunction(fun)) {
       ::new (static_cast<void*>(&data_.tiny)) FunT(static_cast<Fun&&>(fun));
       call_ = &Traits::template callSmall<FunT>;
       exec_ = &detail::function::execSmall<FunT>;
@@ -562,9 +579,11 @@ class Function final : private detail::function::FunctionTraits<FunctionType> {
   template <typename Fun>
   Function(Fun&& fun, HeapTag) {
     using FunT = typename std::decay<Fun>::type;
-    data_.big = new FunT(static_cast<Fun&&>(fun));
-    call_ = &Traits::template callBig<FunT>;
-    exec_ = &detail::function::execBig<FunT>;
+    if (!detail::function::isEmptyFunction(fun)) {
+      data_.big = new FunT(static_cast<Fun&&>(fun));
+      call_ = &Traits::template callBig<FunT>;
+      exec_ = &detail::function::execBig<FunT>;
+    }
   }
 
   template <typename Signature>
@@ -591,7 +610,7 @@ class Function final : private detail::function::FunctionTraits<FunctionType> {
   // Make sure Objective C blocks are copied
   template <class ReturnType, class... Args>
   /*implicit*/ Function(ReturnType (^objCBlock)(Args... args))
-      : Function([blockCopy = (ReturnType (^)(Args...))[objCBlock copy]](
+      : Function([blockCopy = (ReturnType(^)(Args...))[objCBlock copy]](
                      Args... args) { return blockCopy(args...); }){};
 #endif
 
@@ -680,7 +699,7 @@ class Function final : private detail::function::FunctionTraits<FunctionType> {
   // Make sure Objective C blocks are copied
   template <class ReturnType, class... Args>
   /* implicit */ Function& operator=(ReturnType (^objCBlock)(Args... args)) {
-    (*this) = [blockCopy = (ReturnType (^)(Args...))[objCBlock copy]](
+    (*this) = [blockCopy = (ReturnType(^)(Args...))[objCBlock copy]](
                   Args... args) { return blockCopy(args...); };
     return *this;
   }
@@ -783,12 +802,11 @@ class Function final : private detail::function::FunctionTraits<FunctionType> {
   }
 
   /**
-   * Returns `true` if this `Function` stores the callable on the
-   * heap. If `false` is returned, there has been no additional memory
-   * allocation and the callable is stored inside the `Function`
-   * object itself.
+   * Returns the size of the allocation made to store the callable on the
+   * heap. If `0` is returned, there has been no additional memory
+   * allocation because the callable is stored within the `Function` object.
    */
-  bool hasAllocatedMemory() const noexcept {
+  std::size_t heapAllocatedMemory() const noexcept {
     return exec(Op::HEAP, nullptr, nullptr);
   }
 
@@ -897,12 +915,12 @@ class FunctionRef<ReturnType(Args...)> final {
   using Call = ReturnType (*)(void*, Args&&...);
 
   static ReturnType uninitCall(void*, Args&&...) {
-    throw std::bad_function_call();
+    throw_exception<std::bad_function_call>();
   }
 
   template <typename Fun>
   static ReturnType call(void* object, Args&&... args) {
-    using Pointer = _t<std::add_pointer<Fun>>;
+    using Pointer = std::add_pointer_t<Fun>;
     return static_cast<ReturnType>(invoke(
         static_cast<Fun&&>(*static_cast<Pointer>(object)),
         static_cast<Args&&>(args)...));
@@ -917,7 +935,14 @@ class FunctionRef<ReturnType(Args...)> final {
    *
    * Invoking it will throw std::bad_function_call.
    */
-  FunctionRef() = default;
+  constexpr FunctionRef() = default;
+
+  /**
+   * Like default constructor. Constructs an empty FunctionRef.
+   *
+   * Invoking it will throw std::bad_function_call.
+   */
+  constexpr explicit FunctionRef(std::nullptr_t) noexcept {}
 
   /**
    * Construct a FunctionRef from a reference to a callable object.
@@ -926,7 +951,7 @@ class FunctionRef<ReturnType(Args...)> final {
       typename Fun,
       typename std::enable_if<
           Conjunction<
-              Negation<std::is_same<FunctionRef, _t<std::decay<Fun>>>>,
+              Negation<std::is_same<FunctionRef, std::decay_t<Fun>>>,
               is_invocable_r<ReturnType, Fun&&, Args&&...>>::value,
           int>::type = 0>
   constexpr /* implicit */ FunctionRef(Fun&& fun) noexcept
@@ -942,8 +967,30 @@ class FunctionRef<ReturnType(Args...)> final {
     return call_(object_, static_cast<Args&&>(args)...);
   }
 
-  constexpr explicit operator bool() const {
+  constexpr explicit operator bool() const noexcept {
     return object_;
+  }
+
+  constexpr friend bool operator==(
+      FunctionRef<ReturnType(Args...)> ref,
+      std::nullptr_t) noexcept {
+    return ref.object_ == nullptr;
+  }
+  constexpr friend bool operator!=(
+      FunctionRef<ReturnType(Args...)> ref,
+      std::nullptr_t) noexcept {
+    return ref.object_ != nullptr;
+  }
+
+  constexpr friend bool operator==(
+      std::nullptr_t,
+      FunctionRef<ReturnType(Args...)> ref) noexcept {
+    return ref.object_ == nullptr;
+  }
+  constexpr friend bool operator!=(
+      std::nullptr_t,
+      FunctionRef<ReturnType(Args...)> ref) noexcept {
+    return ref.object_ != nullptr;
   }
 };
 

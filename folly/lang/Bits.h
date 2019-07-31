@@ -26,6 +26,10 @@
  *    1-based.  0 = no bits are set (x == 0)
  *    for x != 0, findLastSet(x) == 1 + floor(log2(x))
  *
+ * extractFirstSet(x)  [constexpr]
+ *    extract first (least significant) bit set in a value of an integral
+ *    type, 0 = no bits are set (x == 0)
+ *
  * nextPowTwo(x)  [constexpr]
  *    Finds the next power of two >= x.
  *
@@ -46,13 +50,6 @@
 
 #pragma once
 
-// MSVC does not support intrinsics constexpr
-#if defined(_MSC_VER)
-#define FOLLY_INTRINSIC_CONSTEXPR const
-#else
-#define FOLLY_INTRINSIC_CONSTEXPR constexpr
-#endif
-
 #include <cassert>
 #include <cinttypes>
 #include <cstdint>
@@ -62,11 +59,34 @@
 
 #include <folly/ConstexprMath.h>
 #include <folly/Portability.h>
+#include <folly/Traits.h>
 #include <folly/Utility.h>
 #include <folly/lang/Assume.h>
 #include <folly/portability/Builtins.h>
 
 namespace folly {
+
+#if __cpp_lib_bit_cast
+
+using std::bit_cast;
+
+#else
+
+//  mimic: std::bit_cast, C++20
+template <
+    typename To,
+    typename From,
+    std::enable_if_t<
+        sizeof(From) == sizeof(To) && std::is_trivial<To>::value &&
+            is_trivially_copyable<From>::value,
+        int> = 0>
+To bit_cast(const From& src) noexcept {
+  To to;
+  std::memcpy(&to, &src, sizeof(From));
+  return to;
+}
+
+#endif
 
 namespace detail {
 template <typename Dst, typename Src>
@@ -86,7 +106,7 @@ constexpr std::make_unsigned_t<Dst> bits_to_unsigned(Src const s) {
 /// Return the 1-based index of the least significant bit which is set.
 /// For x > 0, the exponent in the largest power of two which does not divide x.
 template <typename T>
-inline FOLLY_INTRINSIC_CONSTEXPR unsigned int findFirstSet(T const v) {
+inline constexpr unsigned int findFirstSet(T const v) {
   using S0 = int;
   using S1 = long int;
   using S2 = long long int;
@@ -109,7 +129,7 @@ inline FOLLY_INTRINSIC_CONSTEXPR unsigned int findFirstSet(T const v) {
 /// Return the 1-based index of the most significant bit which is set.
 /// For x > 0, findLastSet(x) == 1 + floor(log2(x)).
 template <typename T>
-inline FOLLY_INTRINSIC_CONSTEXPR unsigned int findLastSet(T const v) {
+inline constexpr unsigned int findLastSet(T const v) {
   using U0 = unsigned int;
   using U1 = unsigned long int;
   using U2 = unsigned long long int;
@@ -130,11 +150,23 @@ inline FOLLY_INTRINSIC_CONSTEXPR unsigned int findLastSet(T const v) {
   // clang-format on
 }
 
+/// extractFirstSet
+///
+/// Return a value where all the bits but the least significant are cleared.
+template <typename T>
+inline constexpr T extractFirstSet(T const v) {
+  static_assert(std::is_integral<T>::value, "non-integral type");
+  static_assert(std::is_unsigned<T>::value, "signed type");
+  static_assert(!std::is_same<T, bool>::value, "bool type");
+
+  return v & -v;
+}
+
 /// popcount
 ///
 /// Returns the number of bits which are set.
 template <typename T>
-inline FOLLY_INTRINSIC_CONSTEXPR unsigned int popcount(T const v) {
+inline constexpr unsigned int popcount(T const v) {
   using U0 = unsigned int;
   using U1 = unsigned long int;
   using U2 = unsigned long long int;
@@ -153,13 +185,13 @@ inline FOLLY_INTRINSIC_CONSTEXPR unsigned int popcount(T const v) {
 }
 
 template <class T>
-inline FOLLY_INTRINSIC_CONSTEXPR T nextPowTwo(T const v) {
+inline constexpr T nextPowTwo(T const v) {
   static_assert(std::is_unsigned<T>::value, "signed type");
   return v ? (T(1) << findLastSet(v - 1)) : T(1);
 }
 
 template <class T>
-inline FOLLY_INTRINSIC_CONSTEXPR T prevPowTwo(T const v) {
+inline constexpr T prevPowTwo(T const v) {
   static_assert(std::is_unsigned<T>::value, "signed type");
   return v ? (T(1) << (findLastSet(v) - 1)) : T(0);
 }
@@ -209,15 +241,11 @@ struct EndianInt {
           std::is_floating_point<T>::value,
       "template type parameter must be non-bool integral or floating point");
   static T swap(T x) {
-    // we implement this with memcpy because that is defined behavior in C++
-    // we rely on compilers to optimize away the memcpy calls
+    // we implement this with bit_cast because that is defined behavior in C++
+    // we rely on compilers to optimize away the bit_cast calls
     constexpr auto s = sizeof(T);
     using B = typename uint_types_by_size<s>::type;
-    B b;
-    std::memcpy(&b, &x, s);
-    b = byteswap_gen(b);
-    std::memcpy(&x, &b, s);
-    return x;
+    return bit_cast<T>(byteswap_gen(bit_cast<B>(x)));
   }
   static T big(T x) {
     return kIsLittleEndian ? EndianInt::swap(x) : x;

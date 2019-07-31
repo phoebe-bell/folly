@@ -18,13 +18,15 @@
 
 #include <folly/Portability.h>
 
+#include <cstdint>
+
 #ifdef _MSC_VER
 #include <intrin.h>
 #endif
 
 namespace folly {
 inline void asm_volatile_memory() {
-#if defined(__clang__) || defined(__GNUC__)
+#if defined(__GNUC__)
   asm volatile("" : : : "memory");
 #elif defined(_MSC_VER)
   ::_ReadWriteBarrier();

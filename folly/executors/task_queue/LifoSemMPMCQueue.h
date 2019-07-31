@@ -31,7 +31,7 @@ class LifoSemMPMCQueue : public BlockingQueue<T> {
   BlockingQueueAddResult add(T item) override {
     switch (kBehavior) { // static
       case QueueBehaviorIfFull::THROW:
-        if (!queue_.write(std::move(item))) {
+        if (!queue_.writeIfNotFull(std::move(item))) {
           throw QueueFullException("LifoSemMPMCQueue full, can't add item");
         }
         break;
@@ -57,7 +57,7 @@ class LifoSemMPMCQueue : public BlockingQueue<T> {
         return folly::none;
       }
     }
-    return std::move(item);
+    return item;
   }
 
   size_t capacity() {

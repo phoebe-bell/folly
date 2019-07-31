@@ -57,10 +57,8 @@ std::string RequestToken::getDebugString() const {
   throw std::logic_error("Could not find debug string in RequestToken");
 }
 
-Synchronized<std::unordered_map<std::string, uint32_t>>&
-RequestToken::getCache() {
-  static Indestructible<Synchronized<std::unordered_map<std::string, uint32_t>>>
-      cache;
+Synchronized<F14FastMap<std::string, uint32_t>>& RequestToken::getCache() {
+  static Indestructible<Synchronized<F14FastMap<std::string, uint32_t>>> cache;
   return *cache;
 }
 
@@ -90,41 +88,40 @@ bool RequestContext::doSetContextData(
     const RequestToken& val,
     std::unique_ptr<RequestData>& data,
     DoSetBehaviour behaviour) {
-  auto ulock = state_.ulock();
+  auto wlock = state_.wlock();
+  auto& state = *wlock;
 
-  bool conflict = false;
-  auto it = ulock->requestData_.find(val);
-  if (it != ulock->requestData_.end()) {
+  auto it = state.requestData_.find(val);
+  if (it != state.requestData_.end()) {
     if (behaviour == DoSetBehaviour::SET_IF_ABSENT) {
       return false;
-    } else if (behaviour == DoSetBehaviour::SET) {
-      LOG_FIRST_N(WARNING, 1)
-          << "Calling RequestContext::setContextData for "
-          << val.getDebugString() << " but it is already set";
     }
-    conflict = true;
-  }
-
-  auto wlock = ulock.moveFromUpgradeToWrite();
-  if (conflict) {
     if (it->second) {
       if (it->second->hasCallback()) {
         it->second->onUnset();
-        wlock->callbackData_.erase(it->second.get());
+        state.callbackData_.erase(it->second.get());
       }
       it->second.reset(nullptr);
     }
     if (behaviour == DoSetBehaviour::SET) {
+      LOG_FIRST_N(WARNING, 1)
+          << "Calling RequestContext::setContextData for "
+          << val.getDebugString() << " but it is already set";
       return true;
     }
+    DCHECK(behaviour == DoSetBehaviour::OVERWRITE);
   }
 
   if (data && data->hasCallback()) {
-    wlock->callbackData_.insert(data.get());
+    state.callbackData_.insert(data.get());
     data->onSet();
   }
-  wlock->requestData_[val] = RequestData::constructPtr(data.release());
-
+  auto ptr = RequestData::constructPtr(data.release());
+  if (it != state.requestData_.end()) {
+    it->second = std::move(ptr);
+  } else {
+    state.requestData_.insert(std::make_pair(val, std::move(ptr)));
+  }
   return true;
 }
 
@@ -181,8 +178,10 @@ void RequestContext::clearContextData(const RequestToken& val) {
   // RequestData destructors will try to grab the lock again.
   {
     auto ulock = state_.ulock();
-    auto it = ulock->requestData_.find(val);
-    if (it == ulock->requestData_.end()) {
+    // Need non-const iterators to use under write lock.
+    auto& state = ulock.asNonConstUnsafe();
+    auto it = state.requestData_.find(val);
+    if (it == state.requestData_.end()) {
       return;
     }
 
@@ -227,7 +226,14 @@ void exec_set_difference(const TData& data, const TData& other, TExec&& exec) {
 } // namespace
 
 std::shared_ptr<RequestContext> RequestContext::setContext(
-    std::shared_ptr<RequestContext> newCtx) {
+    std::shared_ptr<RequestContext> const& newCtx) {
+  return setContext(copy(newCtx));
+}
+
+std::shared_ptr<RequestContext> RequestContext::setContext(
+    std::shared_ptr<RequestContext>&& newCtx_) {
+  auto newCtx = std::move(newCtx_); // enforce that it is really moved-from
+
   auto& staticCtx = getStaticContext();
   if (newCtx == staticCtx) {
     return newCtx;
@@ -239,8 +245,10 @@ std::shared_ptr<RequestContext> RequestContext::setContext(
   auto curCtx = staticCtx;
   if (newCtx && curCtx) {
     // Only call set/unset for all request data that differs
-    auto newLock = newCtx->state_.rlock();
-    auto curLock = curCtx->state_.rlock();
+    auto ret = folly::acquireLocked(
+        as_const(newCtx->state_), as_const(curCtx->state_));
+    auto& newLock = std::get<0>(ret);
+    auto& curLock = std::get<1>(ret);
     auto& newData = newLock->callbackData_;
     auto& curData = curLock->callbackData_;
     exec_set_difference(
@@ -268,19 +276,8 @@ std::shared_ptr<RequestContext>& RequestContext::getStaticContext() {
 /* static */ std::shared_ptr<RequestContext>
 RequestContext::setShallowCopyContext() {
   auto& parent = getStaticContext();
-  auto child = std::make_shared<RequestContext>();
-
-  if (parent) {
-    auto parentLock = parent->state_.rlock();
-    auto childLock = child->state_.wlock();
-    childLock->callbackData_ = parentLock->callbackData_;
-    childLock->requestData_.reserve(parentLock->requestData_.size());
-    for (const auto& entry : parentLock->requestData_) {
-      childLock->requestData_.insert(std::make_pair(
-          entry.first, RequestData::constructPtr(entry.second.get())));
-    }
-  }
-
+  auto child = parent ? std::make_shared<RequestContext>(*parent)
+                      : std::make_shared<RequestContext>();
   // Do not use setContext to avoid global set/unset
   std::swap(child, parent);
   return child;

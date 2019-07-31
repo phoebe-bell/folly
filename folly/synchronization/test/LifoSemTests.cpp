@@ -34,6 +34,13 @@ typedef DeterministicSchedule DSched;
 
 LIFOSEM_DECLARE_POOL(DeterministicAtomic, 100000)
 
+class LifoSemTest : public testing::Test {
+ private:
+  // pre-init the pool to avoid deadlock when using DeterministicAtomic
+  using Node = detail::LifoSemRawNode<DeterministicAtomic>;
+  Node::Pool& pool_{Node::pool()};
+};
+
 TEST(LifoSem, basic) {
   LifoSem sem;
   EXPECT_FALSE(sem.tryWait());
@@ -75,7 +82,7 @@ TEST(LifoSem, multi) {
             << " post/wait pairs, " << blocks << " blocked";
 }
 
-TEST(LifoSem, pingpong) {
+TEST_F(LifoSemTest, pingpong) {
   DSched sched(DSched::uniform(0));
 
   const int iters = 100;
@@ -104,7 +111,7 @@ TEST(LifoSem, pingpong) {
   }
 }
 
-TEST(LifoSem, mutex) {
+TEST_F(LifoSemTest, mutex) {
   DSched sched(DSched::uniform(0));
 
   const int iters = 100;
@@ -128,7 +135,7 @@ TEST(LifoSem, mutex) {
   }
 }
 
-TEST(LifoSem, no_blocking) {
+TEST_F(LifoSemTest, no_blocking) {
   long seed = folly::randomNumberSeed() % 10000;
   LOG(INFO) << "seed=" << seed;
   DSched sched(DSched::uniform(seed));
@@ -157,7 +164,7 @@ TEST(LifoSem, no_blocking) {
   }
 }
 
-TEST(LifoSem, one_way) {
+TEST_F(LifoSemTest, one_way) {
   long seed = folly::randomNumberSeed() % 10000;
   LOG(INFO) << "seed=" << seed;
   DSched sched(DSched::uniformSubset(seed, 1, 6));
@@ -179,45 +186,16 @@ TEST(LifoSem, one_way) {
   }
 }
 
-TEST(LifoSem, shutdown_race) {
-  long seed = folly::randomNumberSeed() % 10000;
-  LOG(INFO) << "seed=" << seed;
-
-  bool shutdownWon = false;
-  bool shutdownLost = false;
-  for (int pass = 0; pass < 1000; ++pass) {
-    DSched sched(DSched::uniformSubset(seed + pass, 1, 1 + (pass % 50)));
-
-    DLifoSem a;
-    int waitCount = 0;
-    auto thr = DSched::thread([&] {
-      try {
-        while (true) {
-          a.wait();
-          ++waitCount;
-        }
-      } catch (ShutdownSemError&) {
-        // expected
-        EXPECT_TRUE(a.isShutdown());
-      }
-    });
-    EXPECT_TRUE(!a.isShutdown());
-    a.shutdown();
-    EXPECT_TRUE(a.isShutdown());
-    a.post();
-    DSched::join(thr);
-    EXPECT_EQ(1, waitCount + a.valueGuess());
-    if (waitCount == 0) {
-      shutdownWon = true;
-    } else {
-      shutdownLost = true;
-    }
-  }
-  EXPECT_TRUE(shutdownWon);
-  EXPECT_TRUE(shutdownLost);
+TEST_F(LifoSemTest, shutdown_wait_order) {
+  DLifoSem a;
+  a.shutdown();
+  a.post();
+  a.wait();
+  EXPECT_THROW(a.wait(), ShutdownSemError);
+  EXPECT_TRUE(a.isShutdown());
 }
 
-TEST(LifoSem, shutdown_multi) {
+TEST_F(LifoSemTest, shutdown_multi) {
   DSched sched(DSched::uniform(0));
 
   for (int pass = 0; pass < 10; ++pass) {
@@ -248,7 +226,7 @@ TEST(LifoSem, multi_try_wait_simple) {
   ASSERT_EQ(5, n);
 }
 
-TEST(LifoSem, multi_try_wait) {
+TEST_F(LifoSemTest, multi_try_wait) {
   long seed = folly::randomNumberSeed() % 10000;
   LOG(INFO) << "seed=" << seed;
   DSched sched(DSched::uniform(seed));
@@ -286,7 +264,7 @@ TEST(LifoSem, multi_try_wait) {
   ASSERT_EQ(NPOSTS, consumed);
 }
 
-TEST(LifoSem, timeout) {
+TEST_F(LifoSemTest, timeout) {
   long seed = folly::randomNumberSeed() % 10000;
   LOG(INFO) << "seed=" << seed;
   DSched sched(DSched::uniform(seed));
@@ -330,6 +308,43 @@ TEST(LifoSem, timeout) {
     // At least one timeout must occur.
     EXPECT_GT(handoffs.load(), 0);
   }
+}
+
+TEST_F(LifoSemTest, shutdown_try_wait_for) {
+  long seed = folly::randomNumberSeed() % 1000000;
+  LOG(INFO) << "seed=" << seed;
+  DSched sched(DSched::uniform(seed));
+
+  DLifoSem stopped;
+  std::thread worker1 = DSched::thread([&stopped] {
+    while (!stopped.isShutdown()) {
+      // i.e. poll for messages with timeout
+      LOG(INFO) << "thread polled";
+    }
+  });
+  std::thread worker2 = DSched::thread([&stopped] {
+    while (!stopped.isShutdown()) {
+      // Do some work every 1 second
+
+      try {
+        // this is normally 1 second in prod use case.
+        stopped.try_wait_for(std::chrono::milliseconds(1));
+      } catch (folly::ShutdownSemError& e) {
+        LOG(INFO) << "try_wait_for shutdown";
+      }
+    }
+  });
+
+  std::thread shutdown = DSched::thread([&stopped] {
+    LOG(INFO) << "LifoSem shutdown";
+    stopped.shutdown();
+    LOG(INFO) << "LifoSem shutdown done";
+  });
+
+  DSched::join(shutdown);
+  DSched::join(worker1);
+  DSched::join(worker2);
+  LOG(INFO) << "Threads joined";
 }
 
 BENCHMARK(lifo_sem_pingpong, iters) {

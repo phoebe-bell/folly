@@ -23,6 +23,7 @@
 #include <folly/Exception.h>
 #include <folly/VirtualExecutor.h>
 #include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/executors/EDFThreadPoolExecutor.h>
 #include <folly/executors/FutureExecutor.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
 #include <folly/executors/ThreadPoolExecutor.h>
@@ -50,8 +51,12 @@ TEST(ThreadPoolExecutorTest, CPUBasic) {
   basic<CPUThreadPoolExecutor>();
 }
 
-TEST(IOThreadPoolExecutorTest, IOBasic) {
+TEST(ThreadPoolExecutorTest, IOBasic) {
   basic<IOThreadPoolExecutor>();
+}
+
+TEST(ThreadPoolExecutorTest, EDFBasic) {
+  basic<EDFThreadPoolExecutor>();
 }
 
 template <class TPE>
@@ -70,6 +75,10 @@ TEST(ThreadPoolExecutorTest, CPUResize) {
 
 TEST(ThreadPoolExecutorTest, IOResize) {
   resize<IOThreadPoolExecutor>();
+}
+
+TEST(ThreadPoolExecutorTest, EDFResize) {
+  resize<EDFThreadPoolExecutor>();
 }
 
 template <class TPE>
@@ -113,6 +122,10 @@ TEST(ThreadPoolExecutorTest, IOStop) {
   stop<IOThreadPoolExecutor>();
 }
 
+TEST(ThreadPoolExecutorTest, EDFStop) {
+  stop<EDFThreadPoolExecutor>();
+}
+
 template <class TPE>
 static void join() {
   TPE tpe(10);
@@ -134,6 +147,10 @@ TEST(ThreadPoolExecutorTest, CPUJoin) {
 
 TEST(ThreadPoolExecutorTest, IOJoin) {
   join<IOThreadPoolExecutor>();
+}
+
+TEST(ThreadPoolExecutorTest, EDFJoin) {
+  join<EDFThreadPoolExecutor>();
 }
 
 template <class TPE>
@@ -177,6 +194,10 @@ TEST(ThreadPoolExecutorTest, IODestroy) {
   destroy<IOThreadPoolExecutor>();
 }
 
+TEST(ThreadPoolExecutorTest, EDFDestroy) {
+  destroy<EDFThreadPoolExecutor>();
+}
+
 template <class TPE>
 static void resizeUnderLoad() {
   TPE tpe(10);
@@ -200,6 +221,10 @@ TEST(ThreadPoolExecutorTest, CPUResizeUnderLoad) {
 
 TEST(ThreadPoolExecutorTest, IOResizeUnderLoad) {
   resizeUnderLoad<IOThreadPoolExecutor>();
+}
+
+TEST(ThreadPoolExecutorTest, EDFResizeUnderLoad) {
+  resizeUnderLoad<EDFThreadPoolExecutor>();
 }
 
 template <class TPE>
@@ -260,6 +285,10 @@ TEST(ThreadPoolExecutorTest, CPUTaskStats) {
 
 TEST(ThreadPoolExecutorTest, IOTaskStats) {
   taskStats<IOThreadPoolExecutor>();
+}
+
+TEST(ThreadPoolExecutorTest, EDFTaskStats) {
+  taskStats<EDFThreadPoolExecutor>();
 }
 
 template <class TPE>
@@ -347,6 +376,10 @@ TEST(ThreadPoolExecutorTest, IOFuturePool) {
   futureExecutor<IOThreadPoolExecutor>();
 }
 
+TEST(ThreadPoolExecutorTest, EDFFuturePool) {
+  futureExecutor<EDFThreadPoolExecutor>();
+}
+
 TEST(ThreadPoolExecutorTest, PriorityPreemptionTest) {
   bool tookLopri = false;
   auto completed = 0;
@@ -394,11 +427,12 @@ class TestObserver : public ThreadPoolExecutor::Observer {
   std::atomic<int> threads_{0};
 };
 
-TEST(ThreadPoolExecutorTest, IOObserver) {
+template <typename TPE>
+static void testObserver() {
   auto observer = std::make_shared<TestObserver>();
 
   {
-    IOThreadPoolExecutor exe(10);
+    TPE exe(10);
     exe.addObserver(observer);
     exe.setNumThreads(3);
     exe.setNumThreads(0);
@@ -410,20 +444,16 @@ TEST(ThreadPoolExecutorTest, IOObserver) {
   observer->checkCalls();
 }
 
+TEST(ThreadPoolExecutorTest, IOObserver) {
+  testObserver<IOThreadPoolExecutor>();
+}
+
 TEST(ThreadPoolExecutorTest, CPUObserver) {
-  auto observer = std::make_shared<TestObserver>();
+  testObserver<CPUThreadPoolExecutor>();
+}
 
-  {
-    CPUThreadPoolExecutor exe(10);
-    exe.addObserver(observer);
-    exe.setNumThreads(3);
-    exe.setNumThreads(0);
-    exe.setNumThreads(7);
-    exe.removeObserver(observer);
-    exe.setNumThreads(10);
-  }
-
-  observer->checkCalls();
+TEST(ThreadPoolExecutorTest, EDFObserver) {
+  testObserver<EDFThreadPoolExecutor>();
 }
 
 TEST(ThreadPoolExecutorTest, AddWithPriority) {
@@ -433,6 +463,10 @@ TEST(ThreadPoolExecutorTest, AddWithPriority) {
   // IO exe doesn't support priorities
   IOThreadPoolExecutor ioExe(10);
   EXPECT_THROW(ioExe.addWithPriority(f, 0), std::runtime_error);
+
+  // EDF exe doesn't support priorities
+  EDFThreadPoolExecutor edfExe(10);
+  EXPECT_THROW(edfExe.addWithPriority(f, 0), std::runtime_error);
 
   CPUThreadPoolExecutor cpuExe(10, 3);
   cpuExe.addWithPriority(f, -1);
@@ -572,16 +606,20 @@ TEST(ThreadPoolExecutorTest, RequestContext) {
   });
 }
 
+std::atomic<int> g_sequence{};
+
 struct SlowMover {
   explicit SlowMover(bool slow_ = false) : slow(slow_) {}
   SlowMover(SlowMover&& other) noexcept {
     *this = std::move(other);
   }
   SlowMover& operator=(SlowMover&& other) noexcept {
+    ++g_sequence;
     slow = other.slow;
     if (slow) {
       /* sleep override */ std::this_thread::sleep_for(milliseconds(50));
     }
+    ++g_sequence;
     return *this;
   }
 
@@ -639,6 +677,44 @@ TEST(ThreadPoolExecutorTest, UnboundedBlockingQueueBugD3527722) {
   bugD3527722_test<UBQ<SlowMover>>();
 }
 
+template <typename Q>
+void nothrow_not_full_test() {
+  /* LifoSemMPMCQueue should not throw when not full when active
+     consumers are delayed. */
+  Q q(2);
+  g_sequence = 0;
+
+  std::thread consumer1([&] {
+    while (g_sequence < 4) {
+      ;
+    }
+    q.take(); // ++g_sequence to 5 then slow
+  });
+  std::thread consumer2([&] {
+    while (g_sequence < 5) {
+      ;
+    }
+    q.take(); // ++g_sequence to 6 and 7 - fast
+  });
+
+  std::thread producer([&] {
+    q.add(SlowMover(true)); // ++g_sequence to 1 and 2
+    q.add(SlowMover(false)); // ++g_sequence to 3 and 4
+    while (g_sequence < 7) { // g_sequence == 7 implies queue is not full
+      ;
+    }
+    EXPECT_NO_THROW(q.add(SlowMover(false)));
+  });
+
+  producer.join();
+  consumer1.join();
+  consumer2.join();
+}
+
+TEST(ThreadPoolExecutorTest, LifoSemMPMCQueueNoThrowNotFull) {
+  nothrow_not_full_test<LifoSemMPMCQueue<SlowMover>>();
+}
+
 template <typename TPE>
 static void removeThreadTest() {
   // test that adding a .then() after we have removed some threads
@@ -648,11 +724,11 @@ static void removeThreadTest() {
   TPE fe(2);
   f = folly::makeFuture()
           .via(&fe)
-          .then([&id1]() {
+          .thenValue([&id1](auto&&) {
             burnMs(100)();
             id1 = std::this_thread::get_id();
           })
-          .then([&id2]() {
+          .thenValue([&id2](auto&&) {
             return 77;
             id2 = std::this_thread::get_id();
           });
@@ -671,6 +747,10 @@ TEST(ThreadPoolExecutorTest, RemoveThreadTestIO) {
 
 TEST(ThreadPoolExecutorTest, RemoveThreadTestCPU) {
   removeThreadTest<CPUThreadPoolExecutor>();
+}
+
+TEST(ThreadPoolExecutorTest, RemoveThreadTestEDF) {
+  removeThreadTest<EDFThreadPoolExecutor>();
 }
 
 template <typename TPE>
@@ -704,15 +784,19 @@ TEST(ThreadPoolExecutorTest, resizeThreadWhileExecutingTestCPU) {
   resizeThreadWhileExecutingTest<CPUThreadPoolExecutor>();
 }
 
+TEST(ThreadPoolExecutorTest, resizeThreadWhileExecutingTestEDF) {
+  resizeThreadWhileExecutingTest<EDFThreadPoolExecutor>();
+}
+
 template <typename TPE>
 void keepAliveTest() {
   auto executor = std::make_unique<TPE>(4);
 
-  auto f =
-      futures::sleep(std::chrono::milliseconds{100})
-          .via(executor.get())
-          .then([keepAlive = getKeepAliveToken(executor.get())] { return 42; })
-          .semi();
+  auto f = futures::sleep(std::chrono::milliseconds{100})
+               .via(executor.get())
+               .thenValue([keepAlive = getKeepAliveToken(executor.get())](
+                              auto&&) { return 42; })
+               .semi();
 
   executor.reset();
 
@@ -726,6 +810,10 @@ TEST(ThreadPoolExecutorTest, KeepAliveTestIO) {
 
 TEST(ThreadPoolExecutorTest, KeepAliveTestCPU) {
   keepAliveTest<CPUThreadPoolExecutor>();
+}
+
+TEST(ThreadPoolExecutorTest, KeepAliveTestEDF) {
+  keepAliveTest<EDFThreadPoolExecutor>();
 }
 
 int getNumThreadPoolExecutors() {
@@ -757,6 +845,10 @@ TEST(ThreadPoolExecutorTest, registersToExecutorListTestCPU) {
   registersToExecutorListTest<CPUThreadPoolExecutor>();
 }
 
+TEST(ThreadPoolExecutorTest, registersToExecutorListTestEDF) {
+  registersToExecutorListTest<EDFThreadPoolExecutor>();
+}
+
 template <typename TPE>
 static void testUsesNameFromNamedThreadFactory() {
   auto ntf = std::make_shared<NamedThreadFactory>("my_executor");
@@ -770,6 +862,10 @@ TEST(ThreadPoolExecutorTest, testUsesNameFromNamedThreadFactoryIO) {
 
 TEST(ThreadPoolExecutorTest, testUsesNameFromNamedThreadFactoryCPU) {
   testUsesNameFromNamedThreadFactory<CPUThreadPoolExecutor>();
+}
+
+TEST(ThreadPoolExecutorTest, testUsesNameFromNamedThreadFactoryEDF) {
+  testUsesNameFromNamedThreadFactory<EDFThreadPoolExecutor>();
 }
 
 TEST(ThreadPoolExecutorTest, DynamicThreadsTest) {
@@ -831,11 +927,11 @@ static void WeakRefTest() {
     TPE fe(1);
     f = folly::makeFuture()
             .via(&fe)
-            .then([]() { burnMs(100)(); })
-            .then([&] { ++counter; })
+            .thenValue([](auto&&) { burnMs(100)(); })
+            .thenValue([&](auto&&) { ++counter; })
             .via(fe.weakRef())
-            .then([]() { burnMs(100)(); })
-            .then([&] { ++counter; });
+            .thenValue([](auto&&) { burnMs(100)(); })
+            .thenValue([&](auto&&) { ++counter; });
   }
   EXPECT_THROW(std::move(*f).get(), folly::BrokenPromise);
   EXPECT_EQ(1, counter);
@@ -853,12 +949,12 @@ static void virtualExecutorTest() {
       VirtualExecutor ve(fe);
       f = futures::sleep(100ms)
               .via(&ve)
-              .then([&] {
+              .thenValue([&](auto&&) {
                 ++counter;
                 return futures::sleep(100ms);
               })
               .via(&fe)
-              .then([&] { ++counter; })
+              .thenValue([&](auto&&) { ++counter; })
               .semi();
     }
     EXPECT_EQ(1, counter);
@@ -891,10 +987,18 @@ TEST(ThreadPoolExecutorTest, WeakRefTestCPU) {
   WeakRefTest<CPUThreadPoolExecutor>();
 }
 
+TEST(ThreadPoolExecutorTest, WeakRefTestEDF) {
+  WeakRefTest<EDFThreadPoolExecutor>();
+}
+
 TEST(ThreadPoolExecutorTest, VirtualExecutorTestIO) {
   virtualExecutorTest<IOThreadPoolExecutor>();
 }
 
 TEST(ThreadPoolExecutorTest, VirtualExecutorTestCPU) {
   virtualExecutorTest<CPUThreadPoolExecutor>();
+}
+
+TEST(ThreadPoolExecutorTest, VirtualExecutorTestEDF) {
+  virtualExecutorTest<EDFThreadPoolExecutor>();
 }

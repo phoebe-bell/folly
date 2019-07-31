@@ -17,12 +17,12 @@
 #pragma once
 
 #include <cstddef>
+#include <cstring>
 #include <limits>
 #include <memory>
 #include <ostream>
 #include <vector>
 
-#include <folly/Demangle.h>
 #include <folly/Function.h>
 #include <folly/container/detail/F14Policy.h>
 #include <folly/container/detail/F14Table.h>
@@ -115,6 +115,29 @@ struct MoveOnlyTestInt {
   }
   bool operator!=(MoveOnlyTestInt const& rhs) const {
     return !(*this == rhs);
+  }
+};
+
+struct ThrowOnCopyTestInt {
+  int x{0};
+
+  ThrowOnCopyTestInt() {}
+
+  [[noreturn]] ThrowOnCopyTestInt(const ThrowOnCopyTestInt& other)
+      : x(other.x) {
+    throw std::exception{};
+  }
+
+  ThrowOnCopyTestInt& operator=(const ThrowOnCopyTestInt&) {
+    throw std::exception{};
+  }
+
+  bool operator==(const ThrowOnCopyTestInt& other) const {
+    return x == other.x;
+  }
+
+  bool operator!=(const ThrowOnCopyTestInt& other) const {
+    return !(x == other.x);
   }
 };
 
@@ -279,7 +302,7 @@ struct Tracked {
 
 template <int Tag>
 struct TransparentTrackedHash {
-  using is_transparent = std::true_type;
+  using is_transparent = void;
 
   size_t operator()(Tracked<Tag> const& tracked) const {
     return tracked.val_ ^ Tag;
@@ -291,7 +314,7 @@ struct TransparentTrackedHash {
 
 template <int Tag>
 struct TransparentTrackedEqual {
-  using is_transparent = std::true_type;
+  using is_transparent = void;
 
   uint64_t unwrap(Tracked<Tag> const& v) const {
     return v.val_;
@@ -394,12 +417,23 @@ class SwapTrackingAlloc {
     ++testAllocationCount;
     testAllocatedMemorySize += n * sizeof(T);
     ++testAllocatedBlockCount;
-    return a_.allocate(n);
+    std::size_t extra =
+        std::max<std::size_t>(1, sizeof(std::size_t) / sizeof(T));
+    T* p = a_.allocate(extra + n);
+    void* raw = static_cast<void*>(p);
+    *static_cast<std::size_t*>(raw) = n;
+    return p + extra;
   }
   void deallocate(T* p, size_t n) {
     testAllocatedMemorySize -= n * sizeof(T);
     --testAllocatedBlockCount;
-    a_.deallocate(p, n);
+    std::size_t extra =
+        std::max<std::size_t>(1, sizeof(std::size_t) / sizeof(T));
+    std::size_t check;
+    void* raw = static_cast<void*>(p - extra);
+    check = *static_cast<std::size_t*>(raw);
+    FOLLY_SAFE_CHECK(check == n, "");
+    a_.deallocate(p - extra, n + extra);
   }
 
  private:
@@ -432,13 +466,7 @@ std::ostream& operator<<(std::ostream& xo, F14TableStats const& stats) {
   using f14::Histo;
 
   xo << "{ " << std::endl;
-  xo << "  policy: "
-#if FOLLY_HAS_RTTI
-     << folly::demangle(stats.policy)
-#else
-     << "unknown (RTTI not availabe)"
-#endif
-     << std::endl;
+  xo << "  policy: " << stats.policy << std::endl;
   xo << "  size: " << stats.size << std::endl;
   xo << "  valueSize: " << stats.valueSize << std::endl;
   xo << "  bucketCount: " << stats.bucketCount << std::endl;
@@ -577,6 +605,20 @@ class GenericHasher {
   std::shared_ptr<HasherFunc> hasher_;
 };
 
+struct HashFirst {
+  template <typename P>
+  std::size_t operator()(P const& p) const {
+    return folly::Hash{}(p.first);
+  }
+};
+
+struct EqualFirst {
+  template <typename P>
+  bool operator()(P const& lhs, P const& rhs) const {
+    return lhs.first == rhs.first;
+  }
+};
+
 } // namespace f14
 } // namespace folly
 
@@ -584,6 +626,13 @@ namespace std {
 template <>
 struct hash<folly::f14::MoveOnlyTestInt> {
   std::size_t operator()(folly::f14::MoveOnlyTestInt const& val) const {
+    return val.x;
+  }
+};
+
+template <>
+struct hash<folly::f14::ThrowOnCopyTestInt> {
+  std::size_t operator()(folly::f14::ThrowOnCopyTestInt const& val) const {
     return val.x;
   }
 };

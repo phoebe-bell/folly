@@ -25,7 +25,7 @@
 
 #include <folly/portability/GTest.h>
 
-using namespace folly;
+namespace folly {
 
 // Test constexpr-ness.
 #if !defined(__clang__) && !defined(_MSC_VER)
@@ -65,6 +65,17 @@ void testFLS() {
   }
 }
 
+template <class UINT>
+void testEFS() {
+  EXPECT_EQ(0, extractFirstSet(static_cast<UINT>(0)));
+  size_t bits = std::numeric_limits<UINT>::digits;
+  for (size_t i = 0; i < bits; i++) {
+    UINT lsb = static_cast<UINT>(1) << i;
+    UINT v = (static_cast<UINT>(1) << (bits - 1)) | lsb;
+    EXPECT_EQ(lsb, extractFirstSet(v));
+  }
+}
+
 } // namespace
 
 TEST(Bits, FindFirstSet) {
@@ -93,6 +104,14 @@ TEST(Bits, FindLastSet) {
   testFLS<unsigned long>();
   testFLS<long long>();
   testFLS<unsigned long long>();
+}
+
+TEST(Bits, ExtractFirstSet) {
+  testEFS<unsigned char>();
+  testEFS<unsigned short>();
+  testEFS<unsigned int>();
+  testEFS<unsigned long>();
+  testEFS<unsigned long long>();
 }
 
 TEST(Bits, nextPowTwoClz) {
@@ -230,4 +249,22 @@ TEST(Bits, PartialLoadUnaligned) {
       }
     }
   }
+}
+
+TEST(Bits, BitCastBasic) {
+  auto one = std::make_unique<int>();
+  auto two = folly::bit_cast<std::uintptr_t>(one.get());
+  EXPECT_EQ(folly::bit_cast<int*>(two), one.get());
+}
+
+} // namespace folly
+
+TEST(Bits, BitCastCompatibilityTest) {
+  using namespace folly;
+  using namespace std;
+
+  auto one = folly::Random::rand64();
+  auto pointer = bit_cast<std::uintptr_t>(one);
+  auto two = bit_cast<std::uint64_t>(pointer);
+  EXPECT_EQ(one, two);
 }

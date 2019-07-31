@@ -500,12 +500,6 @@ class NotificationQueue {
     return draining_;
   }
 
-#ifdef __ANDROID__
-  // TODO 10860938 Remove after figuring out crash
-  mutable std::atomic<int> eventBytes_{0};
-  mutable std::atomic<int> maxEventBytes_{0};
-#endif
-
   void ensureSignalLocked() const {
     // semantics: empty fd == empty queue <=> !signal_
     if (signal_) {
@@ -528,21 +522,9 @@ class NotificationQueue {
       }
     } while (bytes_written == -1 && errno == EINTR);
 
-#ifdef __ANDROID__
-    if (bytes_written > 0) {
-      eventBytes_ += bytes_written;
-      maxEventBytes_ = std::max((int)maxEventBytes_, (int)eventBytes_);
-    }
-#endif
-
     if (bytes_written == ssize_t(bytes_expected)) {
       signal_ = true;
     } else {
-#ifdef __ANDROID__
-      LOG(ERROR) << "NotificationQueue Write Error=" << errno
-                 << " bytesInPipe=" << eventBytes_
-                 << " maxInPipe=" << maxEventBytes_ << " queue=" << size();
-#endif
       folly::throwSystemError(
           "failed to signal NotificationQueue after "
           "write",
@@ -575,12 +557,6 @@ class NotificationQueue {
         << signal_ << " bytes_read=" << bytes_read;
 
     signal_ = false;
-
-#ifdef __ANDROID__
-    if (bytes_read > 0) {
-      eventBytes_ -= bytes_read;
-    }
-#endif
   }
 
   void ensureSignal() const {
@@ -819,9 +795,9 @@ void NotificationQueue<MessageT>::Consumer::init(
   queue_->ensureSignal();
 
   if (queue_->eventfd_ >= 0) {
-    initHandler(eventBase, queue_->eventfd_);
+    initHandler(eventBase, folly::NetworkSocket::fromFd(queue_->eventfd_));
   } else {
-    initHandler(eventBase, queue_->pipeFds_[0]);
+    initHandler(eventBase, folly::NetworkSocket::fromFd(queue_->pipeFds_[0]));
   }
 }
 

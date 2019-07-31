@@ -29,7 +29,7 @@ Expected<json_pointer, json_pointer::parse_error> json_pointer::try_parse(
   }
 
   if (str.at(0) != '/') {
-    return makeUnexpected(parse_error::INVALID_FIRST_CHARACTER);
+    return makeUnexpected(parse_error::invalid_first_character);
   }
 
   std::vector<std::string> tokens;
@@ -38,7 +38,7 @@ Expected<json_pointer, json_pointer::parse_error> json_pointer::try_parse(
 
   for (auto& token : tokens) {
     if (!unescape(token)) {
-      return makeUnexpected(parse_error::INVALID_ESCAPE_SEQUENCE);
+      return makeUnexpected(parse_error::invalid_escape_sequence);
     }
   }
 
@@ -52,15 +52,25 @@ json_pointer json_pointer::parse(StringPiece const str) {
     return std::move(res.value());
   }
   switch (res.error()) {
-    case parse_error::INVALID_FIRST_CHARACTER:
+    case parse_error::invalid_first_character:
       throw json_pointer::parse_exception(
           "non-empty JSON pointer string does not start with '/'");
-    case parse_error::INVALID_ESCAPE_SEQUENCE:
+    case parse_error::invalid_escape_sequence:
       throw json_pointer::parse_exception(
           "Invalid escape sequence in JSON pointer string");
     default:
       assume_unreachable();
   }
+}
+
+bool json_pointer::is_prefix_of(json_pointer const& other) const noexcept {
+  auto const& other_tokens = other.tokens();
+  if (tokens_.size() > other_tokens.size()) {
+    return false;
+  }
+  auto const other_begin = other_tokens.cbegin();
+  auto const other_end = other_tokens.cbegin() + tokens_.size();
+  return std::equal(tokens_.cbegin(), tokens_.cend(), other_begin, other_end);
 }
 
 std::vector<std::string> const& json_pointer::tokens() const {

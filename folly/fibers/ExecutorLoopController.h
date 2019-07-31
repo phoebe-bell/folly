@@ -33,6 +33,10 @@ class ExecutorLoopController : public fibers::LoopController {
   explicit ExecutorLoopController(folly::Executor* executor);
   ~ExecutorLoopController() override;
 
+  folly::Executor* executor() const {
+    return executor_;
+  }
+
  private:
   folly::Executor* executor_;
   Executor::KeepAlive<> executorKeepAlive_;
@@ -42,7 +46,7 @@ class ExecutorLoopController : public fibers::LoopController {
   void schedule() override;
   void runLoop() override;
   void scheduleThreadSafe() override;
-  void timedSchedule(std::function<void()> func, TimePoint time) override;
+  HHWheelTimer& timer() override;
 
   friend class fibers::FiberManager;
 };

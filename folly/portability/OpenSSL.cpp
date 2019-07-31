@@ -64,6 +64,13 @@ int X509_up_ref(X509* x) {
   return CRYPTO_add(&x->references, 1, CRYPTO_LOCK_X509);
 }
 
+void X509_STORE_CTX_set0_verified_chain(
+    X509_STORE_CTX* ctx,
+    STACK_OF(X509) * sk) {
+  sk_X509_pop_free(ctx->chain, X509_free);
+  ctx->chain = sk;
+}
+
 int X509_STORE_up_ref(X509_STORE* v) {
   return CRYPTO_add(&v->references, 1, CRYPTO_LOCK_X509_STORE);
 }
@@ -272,6 +279,19 @@ void DH_get0_key(
   }
 }
 
+long DH_get_length(const DH* dh) {
+  return dh->length;
+}
+
+int DH_set_length(DH* dh, long length) {
+  if (dh != nullptr) {
+    dh->length = length;
+    return 1;
+  } else {
+    return 0;
+  }
+}
+
 void DSA_get0_pqg(
     const DSA* dsa,
     const BIGNUM** p,
@@ -449,7 +469,7 @@ int OPENSSL_init_ssl(uint64_t, const OPENSSL_INIT_SETTINGS*) {
   // The caller should have used SSLContext::setLockTypes() prior to calling
   // this function.
   folly::ssl::detail::installThreadingLocks();
-  return 0;
+  return 1;
 }
 
 void OPENSSL_cleanup() {

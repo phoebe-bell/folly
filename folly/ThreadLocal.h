@@ -60,20 +60,13 @@ class ThreadLocal {
  public:
   constexpr ThreadLocal() : constructor_([]() { return new T(); }) {}
 
-  template <
-      typename F,
-      _t<std::enable_if<is_invocable_r<T*, F>::value, int>> = 0>
+  template <typename F, std::enable_if_t<is_invocable_r<T*, F>::value, int> = 0>
   explicit ThreadLocal(F&& constructor)
       : constructor_(std::forward<F>(constructor)) {}
 
-  T* get() const {
-    T* const ptr = tlp_.get();
-    if (LIKELY(ptr != nullptr)) {
-      return ptr;
-    }
-
-    // separated new item creation out to speed up the fast path.
-    return makeTlp();
+  FOLLY_ALWAYS_INLINE FOLLY_ATTR_VISIBILITY_HIDDEN T* get() const {
+    auto const ptr = tlp_.get();
+    return FOLLY_LIKELY(!!ptr) ? ptr : makeTlp();
   }
 
   T* operator->() const {
@@ -102,7 +95,7 @@ class ThreadLocal {
   ThreadLocal(const ThreadLocal&) = delete;
   ThreadLocal& operator=(const ThreadLocal&) = delete;
 
-  T* makeTlp() const {
+  FOLLY_NOINLINE T* makeTlp() const {
     auto const ptr = constructor_();
     tlp_.reset(ptr);
     return ptr;
@@ -143,6 +136,8 @@ class ThreadLocalPtr {
  private:
   typedef threadlocal_detail::StaticMeta<Tag, AccessMode> StaticMeta;
 
+  using AccessAllThreadsEnabled = Negation<std::is_same<Tag, void>>;
+
  public:
   constexpr ThreadLocalPtr() : id_() {}
 
@@ -173,12 +168,16 @@ class ThreadLocalPtr {
   }
 
   T* release() {
+    auto rlock = getAccessAllThreadsLockReadHolderIfEnabled();
+
     threadlocal_detail::ElementWrapper& w = StaticMeta::get(&id_);
 
     return static_cast<T*>(w.release());
   }
 
   void reset(T* newPtr = nullptr) {
+    auto rlock = getAccessAllThreadsLockReadHolderIfEnabled();
+
     auto guard = makeGuard([&] { delete newPtr; });
     threadlocal_detail::ElementWrapper* w = &StaticMeta::get(&id_);
 
@@ -231,6 +230,8 @@ class ThreadLocalPtr {
    */
   template <class Deleter>
   void reset(T* newPtr, const Deleter& deleter) {
+    auto rlock = getAccessAllThreadsLockReadHolderIfEnabled();
+
     auto guard = makeGuard([&] {
       if (newPtr) {
         deleter(newPtr, TLPDestructionMode::THIS_THREAD);
@@ -441,7 +442,7 @@ class ThreadLocalPtr {
   // elements of this ThreadLocal instance.  Holds a global lock for each <Tag>
   Accessor accessAllThreads() const {
     static_assert(
-        !std::is_same<Tag, void>::value,
+        AccessAllThreadsEnabled::value,
         "Must use a unique Tag to use the accessAllThreads feature");
     return Accessor(id_.getOrAllocate(StaticMeta::instance()));
   }
@@ -454,6 +455,13 @@ class ThreadLocalPtr {
   // non-copyable
   ThreadLocalPtr(const ThreadLocalPtr&) = delete;
   ThreadLocalPtr& operator=(const ThreadLocalPtr&) = delete;
+
+  static auto getAccessAllThreadsLockReadHolderIfEnabled() {
+    return SharedMutex::ReadHolder(
+        AccessAllThreadsEnabled::value
+            ? &StaticMeta::instance().accessAllThreadsLock_
+            : nullptr);
+  }
 
   mutable typename StaticMeta::EntryID id_;
 };

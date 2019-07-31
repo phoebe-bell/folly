@@ -23,7 +23,6 @@
 #include <unordered_map>
 #include <utility>
 
-#include <boost/noncopyable.hpp>
 #include <glog/logging.h>
 
 #include <folly/Random.h>
@@ -48,8 +47,10 @@ namespace folly {
 namespace io {
 namespace test {
 
-class DataHolder : private boost::noncopyable {
+class DataHolder {
  public:
+  DataHolder(const DataHolder&) = delete;
+  DataHolder& operator=(const DataHolder&) = delete;
   uint64_t hash(size_t size) const;
   ByteRange data(size_t size) const;
 
@@ -337,7 +338,7 @@ void CompressionVarintTest::runSimpleTest(const DataHolder& dh) {
       Random::rand64(
           std::max(uint64_t(9), oneBasedMsbPos(uncompressedLength_)) / 9UL);
   auto tinyBuf = IOBuf::copyBuffer(
-      compressed->data(), std::min(compressed->length(), breakPoint));
+      compressed->data(), std::min<size_t>(compressed->length(), breakPoint));
   compressed->trimStart(breakPoint);
   tinyBuf->prependChain(std::move(compressed));
   compressed = std::move(tinyBuf);
@@ -461,6 +462,35 @@ INSTANTIATE_TEST_CASE_P(
 
 static bool codecHasFlush(CodecType type) {
   return type != CodecType::BZIP2;
+}
+
+namespace {
+class NoCountersCodec : public Codec {
+ public:
+  NoCountersCodec()
+      : Codec(CodecType::NO_COMPRESSION, {}, {}, /* counters */ false) {}
+
+ private:
+  uint64_t doMaxCompressedLength(uint64_t uncompressedLength) const override {
+    return uncompressedLength;
+  }
+
+  std::unique_ptr<IOBuf> doCompress(const IOBuf* buf) override {
+    return buf->clone();
+  }
+
+  std::unique_ptr<IOBuf> doUncompress(const IOBuf* buf, Optional<uint64_t>)
+      override {
+    return buf->clone();
+  }
+};
+} // namespace
+
+TEST(CodecTest, NoCounters) {
+  NoCountersCodec codec;
+  for (size_t i = 0; i < 1000; ++i) {
+    EXPECT_EQ("hello", codec.uncompress(codec.compress("hello")));
+  }
 }
 
 class StreamingUnitTest : public testing::TestWithParam<CodecType> {
@@ -1386,6 +1416,12 @@ TEST(CheckCompatibleTest, ZlibIsPrefix) {
 
 #if FOLLY_HAVE_LIBZSTD
 
+#if ZSTD_VERSION_NUMBER < 10308
+#define ZSTD_c_contentSizeFlag ZSTD_p_contentSizeFlag
+#define ZSTD_c_checksumFlag ZSTD_p_checksumFlag
+#define ZSTD_c_windowLog ZSTD_p_windowLog
+#endif
+
 TEST(ZstdTest, BackwardCompatible) {
   auto codec = getCodec(CodecType::ZSTD);
   {
@@ -1411,9 +1447,9 @@ TEST(ZstdTest, CustomOptions) {
   auto test = [](const DataHolder& dh, unsigned contentSizeFlag) {
     unsigned const wlog = 23;
     zstd::Options options(1);
-    options.set(ZSTD_p_contentSizeFlag, contentSizeFlag);
-    options.set(ZSTD_p_checksumFlag, 1);
-    options.set(ZSTD_p_windowLog, wlog);
+    options.set(ZSTD_c_contentSizeFlag, contentSizeFlag);
+    options.set(ZSTD_c_checksumFlag, 1);
+    options.set(ZSTD_c_windowLog, wlog);
     auto codec = zstd::getCodec(std::move(options));
     size_t const uncompressedLength = (size_t)1 << 27;
     auto const original = std::string(

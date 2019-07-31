@@ -27,7 +27,6 @@
 #include <folly/Conv.h>
 #include <folly/ExceptionString.h>
 #include <folly/FBString.h>
-#include <folly/FBVector.h>
 #include <folly/Portability.h>
 #include <folly/Range.h>
 #include <folly/ScopeGuard.h>
@@ -261,7 +260,7 @@ OutputString hexlify(ByteRange input) {
   OutputString output;
   if (!hexlify(input, output)) {
     // hexlify() currently always returns true, so this can't really happen
-    throw std::runtime_error("hexlify failed");
+    throw_exception<std::runtime_error>("hexlify failed");
   }
   return output;
 }
@@ -284,7 +283,7 @@ OutputString unhexlify(StringPiece input) {
   if (!unhexlify(input, output)) {
     // unhexlify() fails if the input has non-hexidecimal characters,
     // or if it doesn't consist of a whole number of bytes
-    throw std::domain_error("unhexlify() called with non-hex input");
+    throw_exception<std::domain_error>("unhexlify() called with non-hex input");
   }
   return output;
 }
@@ -423,11 +422,14 @@ void split(
     std::vector<OutputType>& out,
     const bool ignoreEmpty = false);
 
+template <class T, class Allocator>
+class fbvector;
+
 template <class Delim, class String, class OutputType>
 void split(
     const Delim& delimiter,
     const String& input,
-    folly::fbvector<OutputType>& out,
+    folly::fbvector<OutputType, std::allocator<OutputType>>& out,
     const bool ignoreEmpty = false);
 
 template <
@@ -478,6 +480,9 @@ void splitTo(
 namespace detail {
 template <typename Void, typename OutputType>
 struct IsConvertible : std::false_type {};
+
+template <>
+struct IsConvertible<void, decltype(std::ignore)> : std::true_type {};
 
 template <typename OutputType>
 struct IsConvertible<

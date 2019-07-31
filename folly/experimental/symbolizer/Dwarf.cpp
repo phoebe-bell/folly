@@ -18,13 +18,7 @@
 
 #include <type_traits>
 
-// We can delete this #if check once we completely deprecate and remove
-// the autoconf build.
-#if __has_include(<libdwarf/dwarf.h>)
-#include <libdwarf/dwarf.h>
-#else
-#include <dwarf.h> // @manual
-#endif
+#include <dwarf.h>
 
 namespace folly {
 namespace symbolizer {
@@ -603,7 +597,7 @@ bool Dwarf::findAddress(
       // it only if such behavior is requested via LocationInfoMode.
       return false;
     } else {
-      DCHECK(mode == LocationInfoMode::FULL);
+      FOLLY_SAFE_DCHECK(mode == LocationInfoMode::FULL, "unexpected mode");
       // Fall back to the linear scan.
     }
   }

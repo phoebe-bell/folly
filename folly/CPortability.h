@@ -59,8 +59,18 @@
 #define FOLLY_HAS_FEATURE(...) 0
 #endif
 
-/* Define a convenience macro to test when address sanitizer is being used
- * across the different compilers (e.g. clang, gcc) */
+/* FOLLY_SANITIZE_ADDRESS is defined to 1 if the current compilation unit
+ * is being compiled with ASAN enabled.
+ *
+ * Beware when using this macro in a header file: this macro may change values
+ * across compilation units if some libraries are built with ASAN enabled
+ * and some built with ASAN disabled.  For instance, this may occur, if folly
+ * itself was compiled without ASAN but a downstream project that uses folly is
+ * compiling with ASAN enabled.
+ *
+ * Use FOLLY_LIBRARY_SANITIZE_ADDRESS (defined in folly-config.h) to check if
+ * folly itself was compiled with ASAN enabled.
+ */
 #if FOLLY_HAS_FEATURE(address_sanitizer) || __SANITIZE_ADDRESS__
 #define FOLLY_SANITIZE_ADDRESS 1
 #endif
@@ -95,6 +105,13 @@
 #define FOLLY_SANITIZE_THREAD 1
 #endif
 
+#if FOLLY_SANITIZE_THREAD
+#define FOLLY_DISABLE_THREAD_SANITIZER \
+  __attribute__((no_sanitize_thread, noinline))
+#else
+#define FOLLY_DISABLE_THREAD_SANITIZER
+#endif
+
 /**
  * Define a convenience macro to test when ASAN, UBSAN or TSAN sanitizer are
  * being used
@@ -110,15 +127,15 @@
 #define FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER(...)
 #endif // FOLLY_SANITIZE
 
+#define FOLLY_DISABLE_SANITIZERS                                 \
+  FOLLY_DISABLE_ADDRESS_SANITIZER FOLLY_DISABLE_THREAD_SANITIZER \
+      FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("undefined")
+
 /**
  * Macro for marking functions as having public visibility.
  */
 #if defined(__GNUC__)
-#if __GNUC_PREREQ(4, 9)
-#define FOLLY_EXPORT [[gnu::visibility("default")]]
-#else
 #define FOLLY_EXPORT __attribute__((__visibility__("default")))
-#endif
 #else
 #define FOLLY_EXPORT
 #endif
@@ -126,7 +143,7 @@
 // noinline
 #ifdef _MSC_VER
 #define FOLLY_NOINLINE __declspec(noinline)
-#elif defined(__clang__) || defined(__GNUC__)
+#elif defined(__GNUC__)
 #define FOLLY_NOINLINE __attribute__((__noinline__))
 #else
 #define FOLLY_NOINLINE
@@ -135,7 +152,7 @@
 // always inline
 #ifdef _MSC_VER
 #define FOLLY_ALWAYS_INLINE __forceinline
-#elif defined(__clang__) || defined(__GNUC__)
+#elif defined(__GNUC__)
 #define FOLLY_ALWAYS_INLINE inline __attribute__((__always_inline__))
 #else
 #define FOLLY_ALWAYS_INLINE inline
@@ -144,7 +161,7 @@
 // attribute hidden
 #if _MSC_VER
 #define FOLLY_ATTR_VISIBILITY_HIDDEN
-#elif defined(__clang__) || defined(__GNUC__)
+#elif defined(__GNUC__)
 #define FOLLY_ATTR_VISIBILITY_HIDDEN __attribute__((__visibility__("hidden")))
 #else
 #define FOLLY_ATTR_VISIBILITY_HIDDEN

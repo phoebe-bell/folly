@@ -42,41 +42,31 @@ using folly::Try;
 
 TEST(FiberManager, batonTimedWaitTimeout) {
   bool taskAdded = false;
-  size_t iterations = 0;
 
   FiberManager manager(std::make_unique<SimpleLoopController>());
   auto& loopController =
       dynamic_cast<SimpleLoopController&>(manager.loopController());
-
-  auto now = SimpleLoopController::Clock::now();
-  loopController.setTimeFunc([&] { return now; });
+  std::chrono::steady_clock::time_point start;
 
   auto loopFunc = [&]() {
     if (!taskAdded) {
       manager.addTask([&]() {
         Baton baton;
 
-        auto res = baton.try_wait_for(std::chrono::milliseconds(230));
+        start = std::chrono::steady_clock::now();
+        constexpr auto kTimeout = std::chrono::milliseconds(230);
+        auto res = baton.try_wait_for(kTimeout);
+        auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start);
 
         EXPECT_FALSE(res);
-        EXPECT_EQ(5, iterations);
-
-        loopController.stop();
-      });
-      manager.addTask([&]() {
-        Baton baton;
-
-        auto res = baton.try_wait_for(std::chrono::milliseconds(130));
-
-        EXPECT_FALSE(res);
-        EXPECT_EQ(3, iterations);
+        EXPECT_LE(kTimeout, elapsedMs);
 
         loopController.stop();
       });
       taskAdded = true;
     } else {
-      now += std::chrono::milliseconds(50);
-      iterations++;
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
   };
 
@@ -225,6 +215,35 @@ TEST(FiberManager, batonTryWait) {
   });
 
   manager.loopUntilNoReady();
+}
+
+TEST(FiberManager, batonTryWaitConsistent) {
+  folly::EventBase evb;
+  struct ExpectedException {};
+  auto& fm = getFiberManager(evb);
+
+  // Check if try_wait and post have a consistent behavior on a timed out
+  // baton
+  Baton b;
+
+  b.try_wait_for(std::chrono::milliseconds(1));
+  b.try_wait(); // returns false
+
+  b.post();
+  EXPECT_TRUE(b.try_wait());
+  b.reset();
+
+  fm.addTask([&]() {
+    b.try_wait_for(std::chrono::milliseconds(1));
+    b.try_wait(); // returns false
+
+    b.post();
+    EXPECT_TRUE(b.try_wait());
+  });
+
+  while (fm.hasTasks()) {
+    evb.loopOnce();
+  }
 }
 
 TEST(FiberManager, genericBatonFiberWait) {
@@ -1317,9 +1336,9 @@ TEST(FiberManager, RequestContext) {
         });
   }
   {
-    folly::RequestContext::setContext(nullptr);
+    folly::RequestContextScopeGuard rctx;
     fm.addTask([&]() {
-      folly::RequestContextScopeGuard rctx;
+      folly::RequestContextScopeGuard rctx2;
       auto rcontext4 = folly::RequestContext::get();
       baton4.wait();
       EXPECT_EQ(rcontext4, folly::RequestContext::get());
@@ -1551,64 +1570,131 @@ TEST(FiberManager, nestedFiberManagers) {
   outerEvb.loopForever();
 }
 
+TEST(FiberManager, nestedFiberManagersSameEvb) {
+  folly::EventBase evb;
+  auto& fm1 = getFiberManager(evb);
+  EXPECT_EQ(&fm1, &getFiberManager(evb));
+
+  // Always return the same fm by default
+  FiberManager::Options unused;
+  unused.stackSize = 1024;
+  EXPECT_EQ(&fm1, &getFiberManager(evb, unused));
+
+  // Use frozen options
+  FiberManager::Options used;
+  used.stackSize = 1024;
+  FiberManager::FrozenOptions options{used};
+  auto& fm2 = getFiberManager(evb, options);
+  EXPECT_NE(&fm1, &fm2);
+
+  // Same option
+  EXPECT_EQ(&fm2, &getFiberManager(evb, options));
+  EXPECT_EQ(&fm2, &getFiberManager(evb, FiberManager::FrozenOptions{used}));
+  FiberManager::Options same;
+  same.stackSize = 1024;
+  EXPECT_EQ(&fm2, &getFiberManager(evb, FiberManager::FrozenOptions{same}));
+
+  // Different option
+  FiberManager::Options differ;
+  differ.stackSize = 2048;
+  auto& fm3 = getFiberManager(evb, FiberManager::FrozenOptions{differ});
+  EXPECT_NE(&fm1, &fm3);
+  EXPECT_NE(&fm2, &fm3);
+
+  // Nested usage
+  getFiberManager(evb)
+      .addTaskFuture([&] {
+        EXPECT_EQ(&fm1, FiberManager::getFiberManagerUnsafe());
+
+        getFiberManager(evb, options)
+            .addTaskFuture(
+                [&] { EXPECT_EQ(&fm2, FiberManager::getFiberManagerUnsafe()); })
+            .wait();
+      })
+      .waitVia(&evb);
+}
+
 TEST(FiberManager, semaphore) {
   static constexpr size_t kTasks = 10;
   static constexpr size_t kIterations = 10000;
   static constexpr size_t kNumTokens = 10;
+  static constexpr size_t kNumThreads = 16;
 
   Semaphore sem(kNumTokens);
-  int counterA = 0;
-  int counterB = 0;
 
-  auto task = [&sem](int& counter, folly::fibers::Baton& baton) {
-    FiberManager manager(std::make_unique<EventBaseLoopController>());
-    folly::EventBase evb;
-    dynamic_cast<EventBaseLoopController&>(manager.loopController())
-        .attachEventBase(evb);
+  struct Worker {
+    explicit Worker(Semaphore& s) : sem(s), t([&] { run(); }) {}
 
-    {
-      std::shared_ptr<folly::EventBase> completionCounter(
-          &evb, [](folly::EventBase* evb_) { evb_->terminateLoopSoon(); });
+    void run() {
+      FiberManager manager(std::make_unique<EventBaseLoopController>());
+      folly::EventBase evb;
+      dynamic_cast<EventBaseLoopController&>(manager.loopController())
+          .attachEventBase(evb);
 
-      for (size_t i = 0; i < kTasks; ++i) {
-        manager.addTask([&, completionCounter]() {
-          for (size_t j = 0; j < kIterations; ++j) {
-            sem.wait();
-            ++counter;
-            sem.signal();
-            --counter;
+      {
+        std::shared_ptr<folly::EventBase> completionCounter(
+            &evb, [](folly::EventBase* evb_) { evb_->terminateLoopSoon(); });
 
-            EXPECT_LT(counter, kNumTokens);
-            EXPECT_GE(counter, 0);
-          }
-        });
+        for (size_t i = 0; i < kTasks; ++i) {
+          manager.addTask([&, completionCounter]() {
+            for (size_t j = 0; j < kIterations; ++j) {
+              switch (j % 3) {
+                case 0:
+                  sem.wait();
+                  break;
+                case 1:
+#if FOLLY_FUTURE_USING_FIBER
+                  sem.future_wait().get();
+#else
+                  sem.wait();
+#endif
+                  break;
+                case 2: {
+                  Baton baton;
+                  bool acquired = sem.try_wait(baton);
+                  if (!acquired) {
+                    baton.wait();
+                  }
+                  break;
+                }
+              }
+              ++counter;
+              sem.signal();
+              --counter;
+
+              EXPECT_LT(counter, kNumTokens);
+              EXPECT_GE(counter, 0);
+            }
+          });
+        }
       }
-
-      baton.wait();
+      evb.loopForever();
     }
-    evb.loopForever();
+
+    Semaphore& sem;
+    int counter{0};
+    std::thread t;
   };
 
-  folly::fibers::Baton batonA;
-  folly::fibers::Baton batonB;
-  std::thread threadA([&] { task(counterA, batonA); });
-  std::thread threadB([&] { task(counterB, batonB); });
+  std::vector<Worker> workers;
+  workers.reserve(kNumThreads);
+  for (size_t i = 0; i < kNumThreads; ++i) {
+    workers.emplace_back(sem);
+  }
 
-  batonA.post();
-  batonB.post();
-  threadA.join();
-  threadB.join();
+  for (auto& worker : workers) {
+    worker.t.join();
+  }
 
-  EXPECT_LT(counterA, kNumTokens);
-  EXPECT_LT(counterB, kNumTokens);
-  EXPECT_GE(counterA, 0);
-  EXPECT_GE(counterB, 0);
+  for (auto& worker : workers) {
+    EXPECT_EQ(0, worker.counter);
+  }
 }
 
 template <typename ExecutorT>
 void singleBatchDispatch(ExecutorT& executor, int batchSize, int index) {
   thread_local BatchDispatcher<int, std::string, ExecutorT> batchDispatcher(
-      executor, [=](std::vector<int>&& batch) {
+      executor, [batchSize](std::vector<int>&& batch) {
         EXPECT_EQ(batchSize, batch.size());
         std::vector<std::string> results;
         for (auto& it : batch) {
@@ -1656,20 +1742,22 @@ folly::Future<std::vector<std::string>> doubleBatchInnerDispatch(
       std::vector<int>,
       std::vector<std::string>,
       ExecutorT>
-      batchDispatcher(executor, [=](std::vector<std::vector<int>>&& batch) {
-        std::vector<std::vector<std::string>> results;
-        int numberOfElements = 0;
-        for (auto& unit : batch) {
-          numberOfElements += unit.size();
-          std::vector<std::string> result;
-          for (auto& element : unit) {
-            result.push_back(folly::to<std::string>(element));
-          }
-          results.push_back(std::move(result));
-        }
-        EXPECT_EQ(totalNumberOfElements, numberOfElements);
-        return results;
-      });
+      batchDispatcher(
+          executor,
+          [totalNumberOfElements](std::vector<std::vector<int>>&& batch) {
+            std::vector<std::vector<std::string>> results;
+            int numberOfElements = 0;
+            for (auto& unit : batch) {
+              numberOfElements += unit.size();
+              std::vector<std::string> result;
+              for (auto& element : unit) {
+                result.push_back(folly::to<std::string>(element));
+              }
+              results.push_back(std::move(result));
+            }
+            EXPECT_EQ(totalNumberOfElements, numberOfElements);
+            return results;
+          });
 
   return batchDispatcher.add(std::move(input));
 }
@@ -1705,8 +1793,8 @@ void doubleBatchOuterDispatch(
             innerDispatchResultFutures.begin(),
             innerDispatchResultFutures.end())
             .toUnsafeFuture()
-            .then([&](std::vector<Try<std::vector<std::string>>>
-                          innerDispatchResults) {
+            .thenValue([&](std::vector<Try<std::vector<std::string>>>
+                               innerDispatchResults) {
               for (auto& unit : innerDispatchResults) {
                 for (auto& element : unit.value()) {
                   results.push_back(element);
@@ -2134,7 +2222,7 @@ TEST(TimedMutex, ThreadFiberDeadlockOrder) {
   fm.addTask([&] { std::lock_guard<TimedMutex> lg(mutex); });
   fm.addTask([&] {
     runInMainContext([&] {
-      auto locked = mutex.timed_lock(std::chrono::seconds{1});
+      auto locked = mutex.try_lock_for(std::chrono::seconds{1});
       EXPECT_TRUE(locked);
       if (locked) {
         mutex.unlock();
@@ -2156,7 +2244,7 @@ TEST(TimedMutex, ThreadFiberDeadlockRace) {
   mutex.lock();
 
   fm.addTask([&] {
-    auto locked = mutex.timed_lock(std::chrono::seconds{1});
+    auto locked = mutex.try_lock_for(std::chrono::seconds{1});
     EXPECT_TRUE(locked);
     if (locked) {
       mutex.unlock();
@@ -2165,7 +2253,7 @@ TEST(TimedMutex, ThreadFiberDeadlockRace) {
   fm.addTask([&] {
     mutex.unlock();
     runInMainContext([&] {
-      auto locked = mutex.timed_lock(std::chrono::seconds{1});
+      auto locked = mutex.try_lock_for(std::chrono::seconds{1});
       EXPECT_TRUE(locked);
       if (locked) {
         mutex.unlock();
@@ -2258,4 +2346,171 @@ TEST(FiberManager, highWaterMarkViaRecordCurrentPosition) {
     expectStackHighWatermark(n * sizeof(int), fm.stackHighWatermark());
   };
   std::thread(f).join();
+}
+
+TEST(FiberManager, addTaskEager) {
+  folly::EventBase evb;
+  auto& fm = getFiberManager(evb);
+
+  bool eagerTaskStarted{false};
+  bool eagerTaskDone{false};
+  bool firstTaskDone{false};
+
+  fm.addTask([&] { firstTaskDone = true; });
+
+  fm.addTaskEager([&] {
+    EXPECT_FALSE(firstTaskDone);
+    eagerTaskStarted = true;
+    fm.yield();
+    EXPECT_TRUE(firstTaskDone);
+    eagerTaskDone = true;
+  });
+
+  EXPECT_TRUE(eagerTaskStarted);
+
+  evb.loop();
+
+  EXPECT_TRUE(eagerTaskDone);
+  EXPECT_TRUE(firstTaskDone);
+}
+
+TEST(FiberManager, addTaskEagerFuture) {
+  folly::EventBase evb;
+  auto& fm = getFiberManager(evb);
+
+  bool eagerTaskStarted{false};
+  bool eagerTaskDone{false};
+
+  EXPECT_TRUE(fm.addTaskEagerFuture([&] {}).isReady());
+
+  auto f = fm.addTaskEagerFuture([&] {
+    eagerTaskStarted = true;
+    fm.yield();
+    eagerTaskDone = true;
+  });
+
+  EXPECT_TRUE(eagerTaskStarted);
+
+  evb.loop();
+
+  EXPECT_TRUE(f.isReady());
+
+  EXPECT_TRUE(eagerTaskDone);
+}
+
+TEST(FiberManager, addTaskEagerNested) {
+  folly::EventBase evb;
+  auto& fm = getFiberManager(evb);
+
+  bool eagerTaskStarted{false};
+  bool eagerTaskDone{false};
+  bool firstTaskDone{false};
+  bool secondTaskDone{false};
+
+  fm.addTask([&] {
+    fm.addTaskEager([&] {
+      EXPECT_FALSE(firstTaskDone);
+      EXPECT_FALSE(secondTaskDone);
+      fm.runInMainContext([&] { eagerTaskStarted = true; });
+      fm.yield();
+      EXPECT_TRUE(firstTaskDone);
+      EXPECT_TRUE(secondTaskDone);
+      eagerTaskDone = true;
+    });
+    EXPECT_TRUE(eagerTaskStarted);
+    firstTaskDone = true;
+  });
+
+  fm.addTask([&] {
+    EXPECT_TRUE(firstTaskDone);
+    secondTaskDone = true;
+  });
+
+  evb.loop();
+
+  EXPECT_TRUE(eagerTaskDone);
+  EXPECT_TRUE(secondTaskDone);
+}
+
+TEST(FiberManager, swapWithException) {
+  folly::EventBase evb;
+  auto& fm = getFiberManager(evb);
+  bool done = false;
+
+  fm.addTask([&] {
+    try {
+      throw std::logic_error("test");
+    } catch (const std::exception& e) {
+      // Ok to call runInMainContext in exception unwinding
+      runInMainContext([&] { done = true; });
+    }
+  });
+
+  evb.loop();
+  EXPECT_TRUE(done);
+
+  fm.addTask([&] {
+    try {
+      throw std::logic_error("test");
+    } catch (const std::exception& e) {
+      Baton b;
+      // Can't block during exception unwinding
+      ASSERT_DEATH(b.try_wait_for(std::chrono::milliseconds(1)), "");
+    }
+  });
+  evb.loop();
+}
+
+TEST(FiberManager, loopInCatch) {
+  folly::EventBase evb;
+  auto& fm = getFiberManager(evb);
+  bool started = false;
+  folly::fibers::Baton baton;
+  bool done = false;
+
+  fm.addTask([&] {
+    started = true;
+    baton.wait();
+    done = true;
+  });
+
+  try {
+    throw std::logic_error("expected");
+  } catch (...) {
+    EXPECT_FALSE(started);
+    evb.drive();
+    EXPECT_TRUE(started);
+    EXPECT_FALSE(done);
+    baton.post();
+    evb.drive();
+    EXPECT_TRUE(done);
+  }
+}
+
+TEST(FiberManager, loopInUnwind) {
+  folly::EventBase evb;
+  auto& fm = getFiberManager(evb);
+  bool started = false;
+  folly::fibers::Baton baton;
+  bool done = false;
+
+  fm.addTask([&] {
+    started = true;
+    baton.wait();
+    done = true;
+  });
+
+  try {
+    SCOPE_EXIT {
+      EXPECT_FALSE(started);
+      evb.drive();
+      EXPECT_TRUE(started);
+      EXPECT_FALSE(done);
+      baton.post();
+      evb.drive();
+      EXPECT_TRUE(done);
+    };
+    throw std::logic_error("expected");
+  } catch (...) {
+  }
 }

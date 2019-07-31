@@ -18,6 +18,7 @@
 
 #include <folly/DynamicConverter.h>
 
+#include <folly/FBVector.h>
 #include <folly/portability/GTest.h>
 
 #include <algorithm>
@@ -384,6 +385,24 @@ TEST(DynamicConverter, construct) {
     vector<bool> vb{true, false};
     dynamic d = dynamic::array(true, false);
     EXPECT_EQ(d, toDynamic(vb));
+  }
+
+  {
+    enum enum1 { foo = 1, bar = 2 };
+
+    dynamic d1 = 1;
+    EXPECT_EQ(d1, toDynamic(enum1::foo));
+
+    dynamic d2 = 2;
+    EXPECT_EQ(d2, toDynamic(enum1::bar));
+
+    enum class enum2 : char { FOO = 'a', BAR = 'b' };
+
+    dynamic d3 = 'a';
+    EXPECT_EQ(d3, toDynamic(enum2::FOO));
+
+    dynamic d4 = 'b';
+    EXPECT_EQ(d4, toDynamic(enum2::BAR));
   }
 }
 

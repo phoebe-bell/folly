@@ -152,7 +152,7 @@ namespace {
 // Copy pointers to the given strings in a format suitable for posix_spawn
 std::unique_ptr<const char* []> cloneStrings(
     const std::vector<std::string>& s) {
-  std::unique_ptr<const char* []> d(new const char*[s.size() + 1]);
+  std::unique_ptr<const char*[]> d(new const char*[s.size() + 1]);
   for (size_t i = 0; i < s.size(); i++) {
     d[i] = s[i].c_str();
   }
@@ -247,7 +247,7 @@ void Subprocess::setAllNonBlocking() {
 }
 
 void Subprocess::spawn(
-    std::unique_ptr<const char* []> argv,
+    std::unique_ptr<const char*[]> argv,
     const char* executable,
     const Options& optionsIn,
     const std::vector<std::string>* env) {
@@ -308,6 +308,12 @@ void Subprocess::spawn(
   // calling exec()
   readChildErrorPipe(errFds[0], executable);
 
+  // If we spawned a detached child, wait on the intermediate child process.
+  // It always exits immediately.
+  if (options.detach_) {
+    wait();
+  }
+
   // We have fully succeeded now, so release the guard on pipes_
   pipesGuard.dismiss();
 }
@@ -319,7 +325,7 @@ void Subprocess::spawn(
 FOLLY_PUSH_WARNING
 FOLLY_GCC_DISABLE_WARNING("-Wclobbered")
 void Subprocess::spawnInternal(
-    std::unique_ptr<const char* []> argv,
+    std::unique_ptr<const char*[]> argv,
     const char* executable,
     Options& options,
     const std::vector<std::string>* env,
@@ -382,7 +388,7 @@ void Subprocess::spawnInternal(
   char** argVec = const_cast<char**>(argv.get());
 
   // Set up environment
-  std::unique_ptr<const char* []> envHolder;
+  std::unique_ptr<const char*[]> envHolder;
   char** envVec;
   if (env) {
     envHolder = cloneStrings(*env);
@@ -425,15 +431,45 @@ void Subprocess::spawnInternal(
 #ifdef __linux__
   if (options.cloneFlags_) {
     pid = syscall(SYS_clone, *options.cloneFlags_, 0, nullptr, nullptr);
-    checkUnixError(pid, errno, "clone");
   } else {
 #endif
-    pid = vfork();
-    checkUnixError(pid, errno, "vfork");
+    if (options.detach_) {
+      // If we are detaching we must use fork() instead of vfork() for the first
+      // fork, since we aren't going to simply call exec() in the child.
+      pid = fork();
+    } else {
+      pid = vfork();
+    }
 #ifdef __linux__
   }
 #endif
+  checkUnixError(pid, errno, "failed to fork");
   if (pid == 0) {
+    // Fork a second time if detach_ was requested.
+    // This must be done before signals are restored in prepareChild()
+    if (options.detach_) {
+#ifdef __linux__
+      if (options.cloneFlags_) {
+        pid = syscall(SYS_clone, *options.cloneFlags_, 0, nullptr, nullptr);
+      } else {
+#endif
+        pid = vfork();
+#ifdef __linux__
+      }
+#endif
+      if (pid == -1) {
+        // Inform our parent process of the error so it can throw in the parent.
+        childError(errFd, kChildFailure, errno);
+      } else if (pid != 0) {
+        // We are the intermediate process.  Exit immediately.
+        // Our child will still inform the original parent of success/failure
+        // through errFd.  The pid of the grandchild process never gets
+        // propagated back up to the original parent.  In the future we could
+        // potentially send it back using errFd if we needed to.
+        _exit(0);
+      }
+    }
+
     int errnoValue = prepareChild(options, &oldSignals, childDir);
     if (errnoValue != 0) {
       childError(errFd, kChildFailure, errnoValue);
