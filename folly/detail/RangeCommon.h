@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -39,21 +39,11 @@ class StringPieceLite {
   template <typename Range>
   /* implicit */ StringPieceLite(const Range& r)
       : StringPieceLite(r.data(), r.data() + r.size()) {}
-  const char* data() const {
-    return b_;
-  }
-  const char* begin() const {
-    return b_;
-  }
-  const char* end() const {
-    return e_;
-  }
-  size_t size() const {
-    return size_t(e_ - b_);
-  }
-  bool empty() const {
-    return size() == 0;
-  }
+  const char* data() const { return b_; }
+  const char* begin() const { return b_; }
+  const char* end() const { return e_; }
+  size_t size() const { return size_t(e_ - b_); }
+  bool empty() const { return size() == 0; }
   const char& operator[](size_t i) const {
     assert(size() > i);
     return b_[i];

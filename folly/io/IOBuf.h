@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -228,6 +228,8 @@ class IOBuf {
   enum TakeOwnershipOp { TAKE_OWNERSHIP };
   enum CopyBufferOp { COPY_BUFFER };
 
+  enum class CombinedOption { DEFAULT, COMBINED, SEPARATE };
+
   typedef ByteRange value_type;
   typedef Iterator iterator;
   typedef Iterator const_iterator;
@@ -277,6 +279,20 @@ class IOBuf {
   static std::unique_ptr<IOBuf> createChain(
       size_t totalCapacity,
       std::size_t maxBufCapacity);
+
+  /**
+   * Uses folly::goodMallocSize() to figure out what the largest capacity would
+   * be that would trigger the same underlying allocation size as would be
+   * triggered by the given capacity.
+   *
+   * Note that IOBufs do this up-sizing for you: they will round up to the full
+   * allocation size and make that capacity available to you without your using
+   * this function. This just lets you introspect into that process, so you can
+   * for example figure out whether a given IOBuf can be usefully compacted.
+   */
+  static size_t goodSize(
+      size_t minCapacity,
+      CombinedOption combined = CombinedOption::DEFAULT);
 
   /**
    * Create a new IOBuf pointing to an existing data buffer.
@@ -497,9 +513,7 @@ class IOBuf {
   /**
    * Get the pointer to the start of the data.
    */
-  const uint8_t* data() const {
-    return data_;
-  }
+  const uint8_t* data() const { return data_; }
 
   /**
    * Get a writable pointer to the start of the data.
@@ -507,16 +521,12 @@ class IOBuf {
    * The caller is responsible for calling unshare() first to ensure that it is
    * actually safe to write to the buffer.
    */
-  uint8_t* writableData() {
-    return data_;
-  }
+  uint8_t* writableData() { return data_; }
 
   /**
    * Get the pointer to the end of the data.
    */
-  const uint8_t* tail() const {
-    return data_ + length_;
-  }
+  const uint8_t* tail() const { return data_ + length_; }
 
   /**
    * Get a writable pointer to the end of the data.
@@ -524,35 +534,27 @@ class IOBuf {
    * The caller is responsible for calling unshare() first to ensure that it is
    * actually safe to write to the buffer.
    */
-  uint8_t* writableTail() {
-    return data_ + length_;
-  }
+  uint8_t* writableTail() { return data_ + length_; }
 
   /**
    * Get the length of the data for this individual IOBuf in the chain. See
    * computeChainDataLength() for the sum of data length for the full chain.
    */
-  std::size_t length() const {
-    return length_;
-  }
+  std::size_t length() const { return length_; }
 
   /**
    * Get the amount of head room.
    *
    * Returns the number of bytes in the buffer before the start of the data.
    */
-  std::size_t headroom() const {
-    return std::size_t(data_ - buffer());
-  }
+  std::size_t headroom() const { return std::size_t(data_ - buffer()); }
 
   /**
    * Get the amount of tail room.
    *
    * Returns the number of bytes in the buffer after the end of the data.
    */
-  std::size_t tailroom() const {
-    return std::size_t(bufferEnd() - tail());
-  }
+  std::size_t tailroom() const { return std::size_t(bufferEnd() - tail()); }
 
   /**
    * Get the pointer to the start of the buffer.
@@ -561,9 +563,7 @@ class IOBuf {
    * not the start of valid data within the buffer.  Use the data() method to
    * get a pointer to the start of the data within the buffer.
    */
-  const uint8_t* buffer() const {
-    return buf_;
-  }
+  const uint8_t* buffer() const { return buf_; }
 
   /**
    * Get a writable pointer to the start of the buffer.
@@ -571,9 +571,7 @@ class IOBuf {
    * The caller is responsible for calling unshare() first to ensure that it is
    * actually safe to write to the buffer.
    */
-  uint8_t* writableBuffer() {
-    return buf_;
-  }
+  uint8_t* writableBuffer() { return buf_; }
 
   /**
    * Get the pointer to the end of the buffer.
@@ -582,9 +580,7 @@ class IOBuf {
    * not the end of valid data within the buffer.  Use the tail() method to
    * get a pointer to the end of the data within the buffer.
    */
-  const uint8_t* bufferEnd() const {
-    return buf_ + capacity_;
-  }
+  const uint8_t* bufferEnd() const { return buf_ + capacity_; }
 
   /**
    * Get the total size of the buffer.
@@ -592,29 +588,19 @@ class IOBuf {
    * This returns the total usable length of the buffer.  Use the length()
    * method to get the length of the actual valid data in this IOBuf.
    */
-  std::size_t capacity() const {
-    return capacity_;
-  }
+  std::size_t capacity() const { return capacity_; }
 
   /**
    * Get a pointer to the next IOBuf in this chain.
    */
-  IOBuf* next() {
-    return next_;
-  }
-  const IOBuf* next() const {
-    return next_;
-  }
+  IOBuf* next() { return next_; }
+  const IOBuf* next() const { return next_; }
 
   /**
    * Get a pointer to the previous IOBuf in this chain.
    */
-  IOBuf* prev() {
-    return prev_;
-  }
-  const IOBuf* prev() const {
-    return prev_;
-  }
+  IOBuf* prev() { return prev_; }
+  const IOBuf* prev() const { return prev_; }
 
   /**
    * Shift the data forwards in the buffer.
@@ -981,12 +967,10 @@ class IOBuf {
    * (and so the lifetime of the underlying memory can be extended by
    * cloneOne()).
    */
-  bool isManagedOne() const noexcept {
-    return sharedInfo();
-  }
+  bool isManagedOne() const noexcept { return sharedInfo(); }
 
   /**
-   * For most of the  use-cases where it seems like a good idea to call this
+   * For most of the use-cases where it seems like a good idea to call this
    * function, what you really want is `isSharedOne()`.
    *
    * If this IOBuf is managed by the usual refcounting mechanism (ie
@@ -1020,19 +1004,7 @@ class IOBuf {
       return true;
     }
 
-    if (LIKELY(!(flags() & kFlagMaybeShared))) {
-      return false;
-    }
-
-    // kFlagMaybeShared is set, so we need to check the reference count.
-    // (Checking the reference count requires an atomic operation, which is why
-    // we prefer to only check kFlagMaybeShared if possible.)
-    bool shared = sharedInfo()->refcount.load(std::memory_order_acquire) > 1;
-    if (!shared) {
-      // we're the last one left
-      clearFlags(kFlagMaybeShared);
-    }
-    return shared;
+    return sharedInfo()->refcount.load(std::memory_order_acquire) > 1;
   }
 
   /**
@@ -1271,17 +1243,13 @@ class IOBuf {
    * Similar to Clone(). But use other as the head node. Other nodes in the
    * chain (if any) will be allocted on heap.
    */
-  void cloneInto(IOBuf& other) const {
-    other = cloneAsValue();
-  }
+  void cloneInto(IOBuf& other) const { other = cloneAsValue(); }
 
   /**
    * Similar to CloneOne(). But to fill an existing IOBuf instead of a new
    * IOBuf.
    */
-  void cloneOneInto(IOBuf& other) const {
-    other = cloneOneAsValue();
-  }
+  void cloneOneInto(IOBuf& other) const { other = cloneOneAsValue(); }
 
   /**
    * Return an iovector suitable for e.g. writev()
@@ -1409,8 +1377,7 @@ class IOBuf {
     // as these flags are stashed in the least significant 2 bits of a
     // max-align-aligned pointer.
     kFlagFreeSharedInfo = 0x1,
-    kFlagMaybeShared = 0x2,
-    kFlagMask = kFlagFreeSharedInfo | kFlagMaybeShared
+    kFlagMask = (1 << 2 /* least significant bits */) - 1,
   };
 
   struct SharedInfoObserverEntryBase {
@@ -1541,7 +1508,7 @@ class IOBuf {
   std::size_t capacity_{0};
 
   // Pack flags in least significant 2 bits, sharedInfo in the rest
-  mutable uintptr_t flagsAndSharedInfo_{0};
+  uintptr_t flagsAndSharedInfo_{0};
 
   static inline uintptr_t packFlagsAndSharedInfo(
       uintptr_t flags,
@@ -1567,12 +1534,12 @@ class IOBuf {
   }
 
   // flags_ are changed from const methods
-  inline void setFlags(uintptr_t flags) const noexcept {
+  inline void setFlags(uintptr_t flags) noexcept {
     DCHECK_EQ(flags & ~kFlagMask, 0u);
     flagsAndSharedInfo_ |= flags;
   }
 
-  inline void clearFlags(uintptr_t flags) const noexcept {
+  inline void clearFlags(uintptr_t flags) noexcept {
     DCHECK_EQ(flags & ~kFlagMask, 0u);
     flagsAndSharedInfo_ &= ~flags;
   }
@@ -1750,9 +1717,7 @@ class IOBuf::Iterator : public detail::IteratorFacade<
     return *this;
   }
 
-  const ByteRange& dereference() const {
-    return val_;
-  }
+  const ByteRange& dereference() const { return val_; }
 
   bool equal(const Iterator& other) const {
     // We must compare end_ in addition to pos_, because forward traversal
@@ -1767,9 +1732,7 @@ class IOBuf::Iterator : public detail::IteratorFacade<
   }
 
  private:
-  void setVal() {
-    val_ = ByteRange(pos_->data(), pos_->tail());
-  }
+  void setVal() { val_ = ByteRange(pos_->data(), pos_->tail()); }
 
   void adjustForEnd() {
     if (pos_ == end_) {

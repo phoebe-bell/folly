@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -72,30 +72,18 @@ TEST(PackedSyncPtr, Basic) {
 template <typename T>
 struct SyncVec {
   PackedSyncPtr<T> base;
-  SyncVec() {
-    base.init();
-  }
-  ~SyncVec() {
-    free(base.get());
-  }
+  SyncVec() { base.init(); }
+  ~SyncVec() { free(base.get()); }
   void push_back(const T& t) {
     base.set((T*)realloc(base.get(), (base.extra() + 1) * sizeof(T)));
     base[base.extra()] = t;
     base.setExtra(base.extra() + 1);
   }
-  void lock() {
-    base.lock();
-  }
-  void unlock() {
-    base.unlock();
-  }
+  void lock() { base.lock(); }
+  void unlock() { base.unlock(); }
 
-  T* begin() const {
-    return base.get();
-  }
-  T* end() const {
-    return base.get() + base.extra();
-  }
+  T* begin() const { return base.get(); }
+  T* end() const { return base.get() + base.extra(); }
 };
 typedef SyncVec<intptr_t> VecT;
 typedef std::unordered_map<int64_t, VecT> Map;

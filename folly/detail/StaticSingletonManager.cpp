@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -28,11 +28,13 @@ namespace {
 class StaticSingletonManagerWithRttiImpl {
  public:
   using Make = void*();
-  using Cache = std::atomic<void*>;
 
-  void* create(std::type_info const& key, Make& make, Cache& cache) {
-    auto const ptr = entry(key).get(make);
-    cache.store(ptr, std::memory_order_release);
+  template <typename Arg>
+  static void* create(Arg& arg) {
+    // This Leaky Meyers Singleton must always live in the .cpp file.
+    static auto& instance = *new StaticSingletonManagerWithRttiImpl();
+    auto const ptr = instance.entry(*arg.key).get(arg.make);
+    arg.cache.store(ptr, std::memory_order_release);
     return ptr;
   }
 
@@ -59,11 +61,13 @@ class StaticSingletonManagerWithRttiImpl {
 
 } // namespace
 
-void* StaticSingletonManagerWithRtti::create_(Arg& arg) {
-  // This Leaky Meyers Singleton must always live in the .cpp file.
-  static auto& instance = *new StaticSingletonManagerWithRttiImpl();
-  return instance.create(*arg.key, arg.make, arg.cache);
+template <bool Noexcept>
+void* StaticSingletonManagerWithRtti::create_(Arg& arg) noexcept(Noexcept) {
+  return StaticSingletonManagerWithRttiImpl::create(arg);
 }
+
+template void* StaticSingletonManagerWithRtti::create_<false>(Arg& arg);
+template void* StaticSingletonManagerWithRtti::create_<true>(Arg& arg) noexcept;
 
 } // namespace detail
 } // namespace folly

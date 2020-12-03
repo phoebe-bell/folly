@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -237,9 +237,9 @@ class UnboundedQueue {
   struct Consumer {
     Atom<Segment*> head;
     Atom<Ticket> ticket;
-    hazptr_obj_batch<Atom> batch;
+    hazptr_obj_cohort<Atom> cohort;
     explicit Consumer(Segment* s) : head(s), ticket(0) {
-      s->set_batch_no_tag(&batch); // defined in hazptr_obj
+      s->set_cohort_no_tag(&cohort); // defined in hazptr_obj
     }
   };
   struct Producer {
@@ -259,27 +259,18 @@ class UnboundedQueue {
   /** destructor */
   ~UnboundedQueue() {
     cleanUpRemainingItems();
-    c_.batch.shutdown_and_reclaim();
     reclaimRemainingSegments();
   }
 
   /** enqueue */
-  FOLLY_ALWAYS_INLINE void enqueue(const T& arg) {
-    enqueueImpl(arg);
-  }
+  FOLLY_ALWAYS_INLINE void enqueue(const T& arg) { enqueueImpl(arg); }
 
-  FOLLY_ALWAYS_INLINE void enqueue(T&& arg) {
-    enqueueImpl(std::move(arg));
-  }
+  FOLLY_ALWAYS_INLINE void enqueue(T&& arg) { enqueueImpl(std::move(arg)); }
 
   /** dequeue */
-  FOLLY_ALWAYS_INLINE void dequeue(T& item) noexcept {
-    item = dequeueImpl();
-  }
+  FOLLY_ALWAYS_INLINE void dequeue(T& item) noexcept { item = dequeueImpl(); }
 
-  FOLLY_ALWAYS_INLINE T dequeue() noexcept {
-    return dequeueImpl();
-  }
+  FOLLY_ALWAYS_INLINE T dequeue() noexcept { return dequeueImpl(); }
 
   /** try_dequeue */
   FOLLY_ALWAYS_INLINE bool try_dequeue(T& item) noexcept {
@@ -560,7 +551,7 @@ class UnboundedQueue {
   Segment* allocNextSegment(Segment* s) {
     auto t = s->minTicket() + SegmentSize;
     Segment* next = new Segment(t);
-    next->set_batch_no_tag(&c_.batch); // defined in hazptr_obj
+    next->set_cohort_no_tag(&c_.cohort); // defined in hazptr_obj
     next->acquire_ref_safe(); // defined in hazptr_obj_base_linked
     if (!s->casNextSegment(next)) {
       delete next;
@@ -785,9 +776,7 @@ class UnboundedQueue {
       return flag_.try_wait_until(deadline, opt);
     }
 
-    FOLLY_ALWAYS_INLINE void destroyItem() noexcept {
-      itemPtr()->~T();
-    }
+    FOLLY_ALWAYS_INLINE void destroyItem() noexcept { itemPtr()->~T(); }
 
    private:
     FOLLY_ALWAYS_INLINE T getItem() noexcept {

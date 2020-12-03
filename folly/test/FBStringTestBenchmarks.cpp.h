@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -36,9 +36,7 @@ BENCHMARK_PARAM(BENCHFUN(defaultCtor), 0)
 
 void BENCHFUN(copyCtor)(size_t iters, size_t arg) {
   STRING s;
-  BENCHMARK_SUSPEND {
-    randomString(&s, arg);
-  }
+  BENCHMARK_SUSPEND { randomString(&s, arg); }
   FOR_EACH_RANGE (i, 0, iters) {
     STRING s1 = s;
     doNotOptimizeAway(&s1);
@@ -89,9 +87,7 @@ BENCHMARK_PARAM(BENCHFUN(ctorFromChar), 1048576)
 
 void BENCHFUN(assignmentOp)(size_t iters, size_t arg) {
   STRING s;
-  BENCHMARK_SUSPEND {
-    randomString(&s, arg);
-  }
+  BENCHMARK_SUSPEND { randomString(&s, arg); }
   FOR_EACH_RANGE (i, 0, iters) {
     STRING s1;
     BENCHMARK_SUSPEND {
@@ -210,9 +206,7 @@ BENCHMARK_PARAM(BENCHFUN(equality), 65536)
 
 void BENCHFUN(replace)(size_t iters, size_t arg) {
   STRING s;
-  BENCHMARK_SUSPEND {
-    randomString(&s, arg);
-  }
+  BENCHMARK_SUSPEND { randomString(&s, arg); }
   FOR_EACH_RANGE (i, 0, iters) {
     BenchmarkSuspender susp;
     doNotOptimizeAway(&s);

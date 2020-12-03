@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/synchronization/Rcu.h>
 
 #include <thread>
@@ -40,9 +41,7 @@ class des {
 
  public:
   des(bool* d) : d_(d) {}
-  ~des() {
-    *d_ = true;
-  }
+  ~des() { *d_ = true; }
 };
 
 TEST(RcuTest, Guard) {
@@ -278,13 +277,34 @@ TEST(RcuTest, RcuObjBase) {
   struct base_test : rcu_obj_base<base_test> {
     bool* ret_;
     base_test(bool* ret) : ret_(ret) {}
-    ~base_test() {
-      (*ret_) = true;
-    }
+    ~base_test() { (*ret_) = true; }
   };
 
   auto foo = new base_test(&retired);
   foo->retire();
   synchronize_rcu();
   EXPECT_TRUE(retired);
+}
+
+TEST(RcuTest, Tsan) {
+  int data = 0;
+  std::thread t1([&] {
+    auto epoch = rcu_default_domain()->lock_shared();
+    data = 1;
+    rcu_default_domain()->unlock_shared(std::move(epoch));
+    // Delay before exiting so the thread is still alive for TSAN detection.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  });
+
+  std::thread t2([&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // This should establish a happens-before relationship between the earlier
+    // write (data = 1) and this write below (data = 2).
+    rcu_default_domain()->synchronize();
+    data = 2;
+  });
+
+  t1.join();
+  t2.join();
+  EXPECT_EQ(data, 2);
 }

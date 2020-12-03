@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 /**
  * Like folly::Optional, but can store a value *or* an error.
  *
@@ -37,7 +38,6 @@
 #include <folly/Traits.h>
 #include <folly/Unit.h>
 #include <folly/Utility.h>
-#include <folly/lang/ColdClass.h>
 #include <folly/lang/Exception.h>
 
 #define FOLLY_EXPECTED_ID(X) FB_CONCATENATE(FB_CONCATENATE(Folly, X), __LINE__)
@@ -71,14 +71,14 @@ constexpr Expected<typename std::decay<Value>::type, Error> makeExpected(
     Value&&);
 
 /**
- * Alias for an Expected type's assiciated value_type
+ * Alias for an Expected type's associated value_type
  */
 template <class Expected>
 using ExpectedValueType =
     typename std::remove_reference<Expected>::type::value_type;
 
 /**
- * Alias for an Expected type's assiciated error_type
+ * Alias for an Expected type's associated error_type
  */
 template <class Expected>
 using ExpectedErrorType =
@@ -212,29 +212,18 @@ struct ExpectedStorage {
       case Which::eError:
         this->assignError(static_cast<Other&&>(that).error());
         break;
+      case Which::eEmpty:
       default:
         this->clear();
         break;
     }
   }
-  Value& value() & {
-    return value_;
-  }
-  const Value& value() const& {
-    return value_;
-  }
-  Value&& value() && {
-    return std::move(value_);
-  }
-  Error& error() & {
-    return error_;
-  }
-  const Error& error() const& {
-    return error_;
-  }
-  Error&& error() && {
-    return std::move(error_);
-  }
+  Value& value() & { return value_; }
+  const Value& value() const& { return value_; }
+  Value&& value() && { return std::move(value_); }
+  Error& error() & { return error_; }
+  const Error& error() const& { return error_; }
+  Error&& error() && { return std::move(error_); }
 };
 
 template <class Value, class Error>
@@ -257,31 +246,15 @@ struct ExpectedUnion {
       : error_(static_cast<Es&&>(es)...), which_(Which::eError) {}
   ExpectedUnion(const ExpectedUnion&) {}
   ExpectedUnion(ExpectedUnion&&) noexcept {}
-  ExpectedUnion& operator=(const ExpectedUnion&) {
-    return *this;
-  }
-  ExpectedUnion& operator=(ExpectedUnion&&) noexcept {
-    return *this;
-  }
+  ExpectedUnion& operator=(const ExpectedUnion&) { return *this; }
+  ExpectedUnion& operator=(ExpectedUnion&&) noexcept { return *this; }
   ~ExpectedUnion() {}
-  Value& value() & {
-    return value_;
-  }
-  const Value& value() const& {
-    return value_;
-  }
-  Value&& value() && {
-    return std::move(value_);
-  }
-  Error& error() & {
-    return error_;
-  }
-  const Error& error() const& {
-    return error_;
-  }
-  Error&& error() && {
-    return std::move(error_);
-  }
+  Value& value() & { return value_; }
+  const Value& value() const& { return value_; }
+  Value&& value() && { return std::move(value_); }
+  Error& error() & { return error_; }
+  const Error& error() const& { return error_; }
+  Error&& error() && { return std::move(error_); }
 };
 
 template <class Derived, bool, bool Noexcept>
@@ -395,9 +368,7 @@ struct ExpectedStorage<Value, Error, StorageType::eUnion>
   ExpectedStorage& operator=(const ExpectedStorage&) = default;
   ExpectedStorage& operator=(ExpectedStorage&&) = default;
   using ExpectedUnion<Value, Error>::ExpectedUnion;
-  ~ExpectedStorage() {
-    clear();
-  }
+  ~ExpectedStorage() { clear(); }
   void clear() noexcept {
     switch (this->which_) {
       case Which::eValue:
@@ -406,6 +377,7 @@ struct ExpectedStorage<Value, Error, StorageType::eUnion>
       case Which::eError:
         this->error().~Error();
         break;
+      case Which::eEmpty:
       default:
         break;
     }
@@ -438,12 +410,8 @@ struct ExpectedStorage<Value, Error, StorageType::eUnion>
       this->which_ = Which::eError;
     }
   }
-  bool isSelfAssign(const ExpectedStorage* that) const {
-    return this == that;
-  }
-  constexpr bool isSelfAssign(const void*) const {
-    return false;
-  }
+  bool isSelfAssign(const ExpectedStorage* that) const { return this == that; }
+  constexpr bool isSelfAssign(const void*) const { return false; }
   template <class Other>
   void assign(Other&& that) {
     if (isSelfAssign(&that)) {
@@ -456,6 +424,7 @@ struct ExpectedStorage<Value, Error, StorageType::eUnion>
       case Which::eError:
         this->assignError(static_cast<Other&&>(that).error());
         break;
+      case Which::eEmpty:
       default:
         this->clear();
         break;
@@ -485,9 +454,7 @@ struct ExpectedStorage<Value, Error, StorageType::ePODStruct> {
       noexcept(Error(static_cast<Es&&>(es)...)))
       : which_(Which::eError), error_(static_cast<Es&&>(es)...), value_{} {}
   void clear() noexcept {}
-  constexpr static bool uninitializedByException() noexcept {
-    return false;
-  }
+  constexpr static bool uninitializedByException() noexcept { return false; }
   template <class... Vs>
   void assignValue(Vs&&... vs) {
     expected_detail::doEmplaceAssign(0, value_, static_cast<Vs&&>(vs)...);
@@ -507,29 +474,18 @@ struct ExpectedStorage<Value, Error, StorageType::ePODStruct> {
       case Which::eError:
         this->assignError(static_cast<Other&&>(that).error());
         break;
+      case Which::eEmpty:
       default:
         this->clear();
         break;
     }
   }
-  Value& value() & {
-    return value_;
-  }
-  const Value& value() const& {
-    return value_;
-  }
-  Value&& value() && {
-    return std::move(value_);
-  }
-  Error& error() & {
-    return error_;
-  }
-  const Error& error() const& {
-    return error_;
-  }
-  Error&& error() && {
-    return std::move(error_);
-  }
+  Value& value() & { return value_; }
+  const Value& value() const& { return value_; }
+  Value&& value() && { return std::move(value_); }
+  Error& error() & { return error_; }
+  const Error& error() const& { return error_; }
+  Error&& error() && { return std::move(error_); }
 };
 
 namespace expected_detail_ExpectedHelper {
@@ -645,7 +601,7 @@ namespace expected_detail {
  * Expected objects in the error state.
  */
 template <class Error>
-class Unexpected final : ColdClass {
+class Unexpected final {
   template <class E>
   friend class Unexpected;
   template <class V, class E>
@@ -666,9 +622,7 @@ class Unexpected final : ColdClass {
      * The error code that was held by the Expected object when the user
      * erroneously requested the value.
      */
-    Error error() const {
-      return error_;
-    }
+    Error error() const { return error_; }
 
    private:
     Error error_;
@@ -682,8 +636,10 @@ class Unexpected final : ColdClass {
   Unexpected(Unexpected&&) = default;
   Unexpected& operator=(const Unexpected&) = default;
   Unexpected& operator=(Unexpected&&) = default;
-  constexpr /* implicit */ Unexpected(const Error& err) : error_(err) {}
-  constexpr /* implicit */ Unexpected(Error&& err) : error_(std::move(err)) {}
+  FOLLY_COLD constexpr /* implicit */ Unexpected(const Error& err)
+      : error_(err) {}
+  FOLLY_COLD constexpr /* implicit */ Unexpected(Error&& err)
+      : error_(std::move(err)) {}
 
   template <class Other FOLLY_REQUIRES_TRAILING(
       std::is_constructible<Error, Other&&>::value)>
@@ -702,15 +658,9 @@ class Unexpected final : ColdClass {
   /**
    * Observers
    */
-  Error& error() & {
-    return error_;
-  }
-  const Error& error() const& {
-    return error_;
-  }
-  Error&& error() && {
-    return std::move(error_);
-  }
+  Error& error() & { return error_; }
+  const Error& error() const& { return error_; }
+  Error&& error() && { return std::move(error_); }
 
  private:
   struct MakeBadExpectedAccess {
@@ -862,15 +812,9 @@ class Expected final : expected_detail::ExpectedStorage<Value, Error> {
   using Base = expected_detail::ExpectedStorage<Value, Error>;
   using MakeBadExpectedAccess =
       typename Unexpected<Error>::MakeBadExpectedAccess;
-  Base& base() & {
-    return *this;
-  }
-  const Base& base() const& {
-    return *this;
-  }
-  Base&& base() && {
-    return std::move(*this);
-  }
+  Base& base() & { return *this; }
+  const Base& base() const& { return *this; }
+  Base&& base() && { return std::move(*this); }
 
  public:
   using value_type = Value;
@@ -1131,29 +1075,17 @@ class Expected final : expected_detail::ExpectedStorage<Value, Error> {
     return static_cast<U&&>(dflt);
   }
 
-  explicit constexpr operator bool() const noexcept {
-    return hasValue();
-  }
+  explicit constexpr operator bool() const noexcept { return hasValue(); }
 
-  const Value& operator*() const& {
-    return this->value();
-  }
+  const Value& operator*() const& { return this->value(); }
 
-  Value& operator*() & {
-    return this->value();
-  }
+  Value& operator*() & { return this->value(); }
 
-  Value&& operator*() && {
-    return std::move(this->value());
-  }
+  Value&& operator*() && { return std::move(this->value()); }
 
-  const Value* operator->() const {
-    return std::addressof(this->value());
-  }
+  const Value* operator->() const { return std::addressof(this->value()); }
 
-  Value* operator->() {
-    return std::addressof(this->value());
-  }
+  Value* operator->() { return std::addressof(this->value()); }
 
   const Value* get_pointer() const& noexcept {
     return hasValue() ? std::addressof(this->value_) : nullptr;
@@ -1255,9 +1187,7 @@ class Expected final : expected_detail::ExpectedStorage<Value, Error> {
     }
   }
 
-  expected_detail::Which which() const noexcept {
-    return this->which_;
-  }
+  expected_detail::Which which() const noexcept { return this->which_; }
 };
 
 template <class Value, class Error>
@@ -1433,15 +1363,11 @@ struct Promise {
   //    folly::Expected<Value, Error> retobj{ p.get_return_object(); } // MSVC
   // or:
   //    auto retobj = p.get_return_object(); // clang
-  PromiseReturn<Value, Error> get_return_object() noexcept {
-    return *this;
-  }
+  PromiseReturn<Value, Error> get_return_object() noexcept { return *this; }
   std::experimental::suspend_never initial_suspend() const noexcept {
     return {};
   }
-  std::experimental::suspend_never final_suspend() const {
-    return {};
-  }
+  std::experimental::suspend_never final_suspend() const noexcept { return {}; }
   template <typename U>
   void return_value(U&& u) {
     value_->emplace(static_cast<U&&>(u));
@@ -1449,7 +1375,7 @@ struct Promise {
   void unhandled_exception() {
     // Technically, throwing from unhandled_exception is underspecified:
     // https://github.com/GorNishanov/CoroutineWording/issues/17
-    throw;
+    rethrow_current_exception();
   }
 };
 
@@ -1459,12 +1385,8 @@ struct Awaitable {
 
   explicit Awaitable(Expected<Value, Error> o) : o_(std::move(o)) {}
 
-  bool await_ready() const noexcept {
-    return o_.hasValue();
-  }
-  Value await_resume() {
-    return std::move(o_.value());
-  }
+  bool await_ready() const noexcept { return o_.hasValue(); }
+  Value await_resume() { return std::move(o_.value()); }
 
   // Explicitly only allow suspension into a Promise
   template <typename U>

@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -40,12 +40,8 @@ namespace {
 static std::atomic<std::size_t> fooCreatedCount{0};
 static std::atomic<std::size_t> fooDeletedCount{0};
 struct Foo {
-  Foo() {
-    ++fooCreatedCount;
-  }
-  ~Foo() {
-    ++fooDeletedCount;
-  }
+  Foo() { ++fooCreatedCount; }
+  ~Foo() { ++fooDeletedCount; }
 };
 using FooSingletonTL = SingletonThreadLocal<Foo>;
 } // namespace
@@ -113,9 +109,7 @@ TEST(SingletonThreadLocalTest, SameTypeMake) {
   };
   struct Tag {};
   struct Make {
-    Foo operator()() const {
-      return Foo(3, 4);
-    }
+    Foo operator()() const { return Foo(3, 4); }
   };
   auto& single = SingletonThreadLocal<Foo, Tag, Make>::get();
   EXPECT_EQ(4, single.b);
@@ -146,9 +140,7 @@ TEST(SingletonThreadLocalTest, AccessAfterFastPathDestruction) {
     int i = 3;
   };
   struct Bar {
-    ~Bar() {
-      counter += SingletonThreadLocal<Foo>::get().i;
-    }
+    ~Bar() { counter += SingletonThreadLocal<Foo>::get().i; }
   };
   auto th = std::thread([] {
     SingletonThreadLocal<Bar>::get();

@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -76,9 +76,7 @@ class Random {
         std::is_integral<T>::value && !std::is_same<T, bool>::value,
         T>::type;
 
-    result_type operator()() {
-      return Random::secureRandom<result_type>();
-    }
+    result_type operator()() { return Random::secureRandom<result_type>(); }
 
     static constexpr result_type min() {
       return std::numeric_limits<result_type>::min();
@@ -100,7 +98,7 @@ class Random {
   /**
    * Get secure random bytes. (On Linux and OSX, this means /dev/urandom).
    */
-  static void secureRandom(void* data, size_t len);
+  static void secureRandom(void* data, size_t size);
 
   /**
    * Shortcut to get a secure random value of integral type.
@@ -118,9 +116,7 @@ class Random {
   /**
    * Returns a secure random uint32_t
    */
-  static uint32_t secureRand32() {
-    return secureRandom<uint32_t>();
-  }
+  static uint32_t secureRand32() { return secureRandom<uint32_t>(); }
 
   /**
    * Returns a secure random uint32_t in [0, max). If max == 0, returns 0.
@@ -141,9 +137,7 @@ class Random {
   /**
    * Returns a secure random uint64_t
    */
-  static uint64_t secureRand64() {
-    return secureRandom<uint64_t>();
-  }
+  static uint64_t secureRand64() { return secureRandom<uint64_t>(); }
 
   /**
    * Returns a secure random uint64_t in [0, max). If max == 0, returns 0.
@@ -210,9 +204,7 @@ class Random {
   /**
    * Returns a random uint32_t
    */
-  static uint32_t rand32() {
-    return rand32(ThreadLocalPRNG());
-  }
+  static uint32_t rand32() { return rand32(ThreadLocalPRNG()); }
 
   /**
    * Returns a random uint32_t given a specific RNG
@@ -260,9 +252,7 @@ class Random {
   /**
    * Returns a random uint64_t
    */
-  static uint64_t rand64() {
-    return rand64(ThreadLocalPRNG());
-  }
+  static uint64_t rand64() { return rand64(ThreadLocalPRNG()); }
 
   /**
    * Returns a random uint64_t
@@ -308,17 +298,15 @@ class Random {
   /**
    * Returns true 1/n of the time. If n == 0, always returns false
    */
-  static bool oneIn(uint32_t n) {
-    return oneIn(n, ThreadLocalPRNG());
-  }
+  static bool oneIn(uint32_t n) { return oneIn(n, ThreadLocalPRNG()); }
 
   /**
    * Returns true 1/n of the time. If n == 0, always returns false
    */
   template <class RNG = ThreadLocalPRNG, class /* EnableIf */ = ValidRNG<RNG>>
   static bool oneIn(uint32_t n, RNG&& rng) {
-    if (n == 0) {
-      return false;
+    if (n < 2) {
+      return n;
     }
     return rand32(0, n, rng) == 0;
   }
@@ -326,9 +314,7 @@ class Random {
   /**
    * Returns a double in [0, 1)
    */
-  static double randDouble01() {
-    return randDouble01(ThreadLocalPRNG());
-  }
+  static double randDouble01() { return randDouble01(ThreadLocalPRNG()); }
 
   /**
    * Returns a double in [0, 1)

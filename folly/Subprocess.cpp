@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,7 +20,7 @@
 
 #include <folly/Subprocess.h>
 
-#if __linux__
+#if defined(__linux__)
 #include <sys/prctl.h>
 #endif
 #include <fcntl.h>
@@ -28,18 +28,19 @@
 #include <algorithm>
 #include <array>
 #include <system_error>
+#include <thread>
 
 #include <boost/container/flat_set.hpp>
 #include <boost/range/adaptors.hpp>
-
-#include <glog/logging.h>
 
 #include <folly/Conv.h>
 #include <folly/Exception.h>
 #include <folly/ScopeGuard.h>
 #include <folly/String.h>
+#include <folly/detail/AtFork.h>
 #include <folly/io/Cursor.h>
 #include <folly/lang/Assume.h>
+#include <folly/logging/xlog.h>
 #include <folly/portability/Sockets.h>
 #include <folly/portability/Stdlib.h>
 #include <folly/portability/SysSyscall.h>
@@ -185,13 +186,14 @@ Subprocess::Options& Subprocess::Options::fd(int fd, int action) {
   return *this;
 }
 
-Subprocess::Subprocess() {}
+Subprocess::Subprocess() = default;
 
 Subprocess::Subprocess(
     const std::vector<std::string>& argv,
     const Options& options,
     const char* executable,
-    const std::vector<std::string>* env) {
+    const std::vector<std::string>* env)
+    : destroyOkWhileRunning_(options.allowDestructionWhileProcessRunning_) {
   if (argv.empty()) {
     throw std::invalid_argument("argv must not be empty");
   }
@@ -204,7 +206,8 @@ Subprocess::Subprocess(
 Subprocess::Subprocess(
     const std::string& cmd,
     const Options& options,
-    const std::vector<std::string>* env) {
+    const std::vector<std::string>* env)
+    : destroyOkWhileRunning_(options.allowDestructionWhileProcessRunning_) {
   if (options.usePath_) {
     throw std::invalid_argument("usePath() not allowed when running in shell");
   }
@@ -213,9 +216,21 @@ Subprocess::Subprocess(
   spawn(cloneStrings(argv), argv[0].c_str(), options, env);
 }
 
+Subprocess Subprocess::fromExistingProcess(pid_t pid) {
+  Subprocess sp;
+  sp.pid_ = pid;
+  sp.destroyOkWhileRunning_ = false;
+  sp.returnCode_ = ProcessReturnCode::makeRunning();
+  return sp;
+}
+
 Subprocess::~Subprocess() {
-  CHECK_NE(returnCode_.state(), ProcessReturnCode::RUNNING)
-      << "Subprocess destroyed without reaping child";
+  if (!destroyOkWhileRunning_) {
+    CHECK_NE(returnCode_.state(), ProcessReturnCode::RUNNING)
+        << "Subprocess destroyed without reaping child";
+  } else if (returnCode_.state() == ProcessReturnCode::RUNNING) {
+    XLOG(DBG) << "Subprocess destroyed without reaping child process";
+  }
 }
 
 namespace {
@@ -385,7 +400,7 @@ void Subprocess::spawnInternal(
   // Note that the const casts below are legit, per
   // http://pubs.opengroup.org/onlinepubs/009695399/functions/exec.html
 
-  char** argVec = const_cast<char**>(argv.get());
+  auto argVec = const_cast<char**>(argv.get());
 
   // Set up environment
   std::unique_ptr<const char*[]> envHolder;
@@ -436,9 +451,15 @@ void Subprocess::spawnInternal(
     if (options.detach_) {
       // If we are detaching we must use fork() instead of vfork() for the first
       // fork, since we aren't going to simply call exec() in the child.
-      pid = fork();
+      pid = detail::AtFork::forkInstrumented(fork);
     } else {
-      pid = vfork();
+      if (kIsSanitizeThread) {
+        // TSAN treats vfork as fork, so use the instrumented version
+        // instead
+        pid = detail::AtFork::forkInstrumented(fork);
+      } else {
+        pid = vfork();
+      }
     }
 #ifdef __linux__
   }
@@ -453,7 +474,13 @@ void Subprocess::spawnInternal(
         pid = syscall(SYS_clone, *options.cloneFlags_, 0, nullptr, nullptr);
       } else {
 #endif
-        pid = vfork();
+        if (kIsSanitizeThread) {
+          // TSAN treats vfork as fork, so use the instrumented version
+          // instead
+          pid = detail::AtFork::forkInstrumented(fork);
+        } else {
+          pid = vfork();
+        }
 #ifdef __linux__
       }
 #endif
@@ -545,7 +572,7 @@ int Subprocess::prepareChild(
     }
   }
 
-#if __linux__
+#if defined(__linux__)
   // Opt to receive signal on parent death, if requested
   if (options.parentDeathSignal_ != 0) {
     const auto parentDeathSignal =
@@ -557,7 +584,11 @@ int Subprocess::prepareChild(
 #endif
 
   if (options.processGroupLeader_) {
+#if !defined(__FreeBSD__)
     if (setpgrp() == -1) {
+#else
+    if (setpgrp(getpid(), getpgrp()) == -1) {
+#endif
       return errno;
     }
   }
@@ -602,8 +633,11 @@ void Subprocess::readChildErrorPipe(int pfd, const char* executable) {
     // normally, as if the child executed successfully.  If something bad
     // happened the caller should at least get a non-normal exit status from
     // the child.
-    LOG(ERROR) << "unexpected error trying to read from child error pipe "
-               << "rc=" << rc << ", errno=" << errno;
+    XLOGF(
+        ERR,
+        "unexpected error trying to read from child error pipe rc={}, errno={}",
+        rc,
+        errno);
     return;
   }
 
@@ -651,7 +685,7 @@ ProcessReturnCode Subprocess::wait() {
   } while (found == -1 && errno == EINTR);
   // The only two remaining errors are ECHILD (other code reaped the
   // child?), or EINVAL (cosmic rays?), and both merit an abort:
-  PCHECK(found != -1) << "waitpid(" << pid_ << ", &status, WNOHANG)";
+  PCHECK(found != -1) << "waitpid(" << pid_ << ", &status, 0)";
   // Though the child process had quit, this call does not close the pipes
   // since its descendants may still be using them.
   DCHECK_EQ(found, pid_);
@@ -665,10 +699,83 @@ void Subprocess::waitChecked() {
   checkStatus(returnCode_);
 }
 
+ProcessReturnCode Subprocess::waitTimeout(TimeoutDuration timeout) {
+  returnCode_.enforce(ProcessReturnCode::RUNNING);
+  DCHECK_GT(pid_, 0) << "The subprocess has been waited already";
+
+  auto pollUntil = std::chrono::steady_clock::now() + timeout;
+  auto sleepDuration = std::chrono::milliseconds{2};
+  constexpr auto maximumSleepDuration = std::chrono::milliseconds{100};
+
+  for (;;) {
+    // Always call waitpid once after the full timeout has elapsed.
+    auto now = std::chrono::steady_clock::now();
+
+    int status;
+    pid_t found;
+    do {
+      found = ::waitpid(pid_, &status, WNOHANG);
+    } while (found == -1 && errno == EINTR);
+    PCHECK(found != -1) << "waitpid(" << pid_ << ", &status, WNOHANG)";
+    if (found) {
+      // Just on the safe side, make sure it's the actual pid we are waiting.
+      DCHECK_EQ(found, pid_);
+      returnCode_ = ProcessReturnCode::make(status);
+      // Change pid_ to -1 to detect programming error like calling
+      // this method multiple times.
+      pid_ = -1;
+      return returnCode_;
+    }
+    if (now > pollUntil) {
+      // Timed out: still running().
+      return returnCode_;
+    }
+    // The subprocess is still running, sleep for increasing periods of time.
+    std::this_thread::sleep_for(sleepDuration);
+    sleepDuration =
+        std::min(maximumSleepDuration, sleepDuration + sleepDuration);
+  }
+}
+
 void Subprocess::sendSignal(int signal) {
   returnCode_.enforce(ProcessReturnCode::RUNNING);
   int r = ::kill(pid_, signal);
   checkUnixError(r, "kill");
+}
+
+ProcessReturnCode Subprocess::waitOrTerminateOrKill(
+    TimeoutDuration waitTimeout,
+    TimeoutDuration sigtermTimeout) {
+  returnCode_.enforce(ProcessReturnCode::RUNNING);
+  DCHECK_GT(pid_, 0) << "The subprocess has been waited already";
+
+  this->waitTimeout(waitTimeout);
+
+  if (returnCode_.running()) {
+    return terminateOrKill(sigtermTimeout);
+  }
+  return returnCode_;
+}
+
+ProcessReturnCode Subprocess::terminateOrKill(TimeoutDuration sigtermTimeout) {
+  returnCode_.enforce(ProcessReturnCode::RUNNING);
+  DCHECK_GT(pid_, 0) << "The subprocess has been waited already";
+  // 1. Send SIGTERM to kill the process
+  terminate();
+  // 2. check whether subprocess has terminated using non-blocking waitpid
+  waitTimeout(sigtermTimeout);
+  if (!returnCode_.running()) {
+    return returnCode_;
+  }
+  // 3. If we are at this point, we have waited enough time after
+  // sending SIGTERM, we have to use nuclear option SIGKILL to kill
+  // the subprocess.
+  XLOGF(INFO, "Send SIGKILL to {}", pid_);
+  kill();
+  // 4. SIGKILL should kill the process otherwise there must be
+  // something seriously wrong, just use blocking wait to wait for the
+  // subprocess to finish.
+  return wait();
 }
 
 pid_t Subprocess::pid() const {

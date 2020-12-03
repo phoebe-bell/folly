@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -24,14 +24,12 @@
 #include <folly/init/Init.h>
 
 using namespace folly;
-using namespace folly::detail;
 
 // Benchmarks:
 // 1. Benchmark iterating through the man with FOR_EACH, and also assign
 //    iter->first and iter->second to local vars inside the FOR_EACH loop.
 // 2. Benchmark iterating through the man with FOR_EACH, but use iter->first and
 //    iter->second as is, without assigning to local variables.
-// 3. Use FOR_EACH_KV loop to iterate through the map.
 
 // For use in benchmarks below.
 std::map<int, std::string> bmMap;
@@ -280,9 +278,7 @@ BENCHMARK(ForEachKVNoMacroAssign, iters) {
   int sumKeys = 0;
   std::string sumValues;
 
-  BENCHMARK_SUSPEND {
-    setupBenchmark(iters);
-  }
+  BENCHMARK_SUSPEND { setupBenchmark(iters); }
 
   FOR_EACH (iter, bmMap) {
     const int k = iter->first;
@@ -296,27 +292,11 @@ BENCHMARK(ForEachKVNoMacroNoAssign, iters) {
   int sumKeys = 0;
   std::string sumValues;
 
-  BENCHMARK_SUSPEND {
-    setupBenchmark(iters);
-  }
+  BENCHMARK_SUSPEND { setupBenchmark(iters); }
 
   FOR_EACH (iter, bmMap) {
     sumKeys += iter->first;
     sumValues += iter->second;
-  }
-}
-
-BENCHMARK(ForEachKVMacro, iters) {
-  int sumKeys = 0;
-  std::string sumValues;
-
-  BENCHMARK_SUSPEND {
-    setupBenchmark(iters);
-  }
-
-  FOR_EACH_KV (k, v, bmMap) {
-    sumKeys += k;
-    sumValues += v;
   }
 }
 
@@ -343,9 +323,7 @@ BENCHMARK(ForEachDescendingManual, iters) {
 }
 
 BENCHMARK(CharVecForRange, iters) {
-  BENCHMARK_SUSPEND {
-    setupCharVecBenchmark(iters);
-  }
+  BENCHMARK_SUSPEND { setupCharVecBenchmark(iters); }
   size_t sum = 0;
   for (auto& c : vec_char) {
     sum += c;
@@ -354,9 +332,7 @@ BENCHMARK(CharVecForRange, iters) {
 }
 
 BENCHMARK(CharVecForRangeExplicitIndex, iters) {
-  BENCHMARK_SUSPEND {
-    setupCharVecBenchmark(iters);
-  }
+  BENCHMARK_SUSPEND { setupCharVecBenchmark(iters); }
   size_t sum = 0;
   size_t index = 0;
   for (auto& c : vec_char) {
@@ -367,27 +343,21 @@ BENCHMARK(CharVecForRangeExplicitIndex, iters) {
 }
 
 BENCHMARK(CharVecForEach, iters) {
-  BENCHMARK_SUSPEND {
-    setupCharVecBenchmark(iters);
-  }
+  BENCHMARK_SUSPEND { setupCharVecBenchmark(iters); }
   size_t sum = 0;
   folly::for_each(vec_char, [&](auto& c) { sum += c; });
   doNotOptimizeAway(sum);
 }
 
 BENCHMARK(CharVecForEachIndex, iters) {
-  BENCHMARK_SUSPEND {
-    setupCharVecBenchmark(iters);
-  }
+  BENCHMARK_SUSPEND { setupCharVecBenchmark(iters); }
   size_t sum = 0;
   folly::for_each(vec_char, [&](auto& c, auto index) { sum += c * index; });
   doNotOptimizeAway(sum);
 }
 
 BENCHMARK(CharVecForRangeEnumerate, iters) {
-  BENCHMARK_SUSPEND {
-    setupCharVecBenchmark(iters);
-  }
+  BENCHMARK_SUSPEND { setupCharVecBenchmark(iters); }
   size_t sum = 0;
   for (auto&& it : enumerate(vec_char)) {
     sum += *it * it.index;

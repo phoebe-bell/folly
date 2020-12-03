@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/logging/xlog.h>
 
 #include <folly/logging/LogConfigParser.h>
@@ -483,6 +484,20 @@ TEST(Xlog, xlogStripFilename) {
           xlogStripFilename("/my/project/src/test.cpp", "/my/project"),
           "src/test.cpp") == 0,
       "incorrect xlogStripFilename() behavior");
+
+  if (kIsWindows) {
+    EXPECT_STREQ(
+        "c\\d.txt", xlogStripFilename("Z:\\a\\b\\c\\d.txt", "Z:\\a\\b"));
+    EXPECT_STREQ("c\\d.txt", xlogStripFilename("Z:\\a\\b\\c\\d.txt", "Z:/a/b"));
+
+    EXPECT_STREQ("c/d.txt", xlogStripFilename("Z:/a/b/c/d.txt", "Z:\\a\\b"));
+    EXPECT_STREQ("c/d.txt", xlogStripFilename("Z:/a/b/c/d.txt", "Z:/a/b"));
+
+    EXPECT_STREQ(
+        "c\\d.txt", xlogStripFilename("Z:\\a\\b\\c\\d.txt", "C:/x/y:Z:/a/b"));
+    EXPECT_STREQ(
+        "c\\d.txt", xlogStripFilename("Z:\\a\\b\\c\\d.txt", "Z:/x/y:Z:/a/b"));
+  }
 }
 
 TEST(Xlog, XCheckPrecedence) {

@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -53,13 +53,9 @@ class AtomicReadMostlyMainPtr {
     mainPtrs_[0] = ReadMostlyMainPtr<T>{std::move(ptr)};
   }
 
-  void operator=(std::shared_ptr<T> desired) {
-    store(std::move(desired));
-  }
+  void operator=(std::shared_ptr<T> desired) { store(std::move(desired)); }
 
-  bool is_lock_free() const {
-    return false;
-  }
+  bool is_lock_free() const { return false; }
 
   ReadMostlySharedPtr<T> load(
       std::memory_order order = std::memory_order_seq_cst) const {

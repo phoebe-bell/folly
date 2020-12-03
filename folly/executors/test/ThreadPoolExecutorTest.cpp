@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -182,7 +182,7 @@ void destroy<IOThreadPoolExecutor>() {
   for (int i = 0; i < 10; i++) {
     tpe->add(f);
   }
-  tpe.clear();
+  tpe.reset();
   EXPECT_EQ(10, completed);
 }
 
@@ -266,14 +266,20 @@ template <class TPE>
 static void taskStats() {
   TPE tpe(1);
   std::atomic<int> c(0);
+  auto now = std::chrono::steady_clock::now();
   tpe.subscribeToTaskStats([&](ThreadPoolExecutor::TaskStats stats) {
     int i = c++;
+    EXPECT_LT(now, stats.enqueueTime);
     EXPECT_LT(milliseconds(0), stats.runTime);
     if (i == 1) {
       EXPECT_LT(milliseconds(0), stats.waitTime);
+      EXPECT_NE(0, stats.requestId);
+    } else {
+      EXPECT_EQ(0, stats.requestId);
     }
   });
   tpe.add(burnMs(10));
+  RequestContextScopeGuard rctx;
   tpe.add(burnMs(10));
   tpe.join();
   EXPECT_EQ(2, c);
@@ -407,21 +413,15 @@ TEST(ThreadPoolExecutorTest, PriorityPreemptionTest) {
 
 class TestObserver : public ThreadPoolExecutor::Observer {
  public:
-  void threadStarted(ThreadPoolExecutor::ThreadHandle*) override {
-    threads_++;
-  }
-  void threadStopped(ThreadPoolExecutor::ThreadHandle*) override {
-    threads_--;
-  }
+  void threadStarted(ThreadPoolExecutor::ThreadHandle*) override { threads_++; }
+  void threadStopped(ThreadPoolExecutor::ThreadHandle*) override { threads_--; }
   void threadPreviouslyStarted(ThreadPoolExecutor::ThreadHandle*) override {
     threads_++;
   }
   void threadNotYetStopped(ThreadPoolExecutor::ThreadHandle*) override {
     threads_--;
   }
-  void checkCalls() {
-    ASSERT_EQ(threads_, 0);
-  }
+  void checkCalls() { ASSERT_EQ(threads_, 0); }
 
  private:
   std::atomic<int> threads_{0};
@@ -583,9 +583,7 @@ class TestData : public folly::RequestData {
   explicit TestData(int data) : data_(data) {}
   ~TestData() override {}
 
-  bool hasCallback() override {
-    return false;
-  }
+  bool hasCallback() override { return false; }
 
   int data_;
 };
@@ -610,9 +608,7 @@ std::atomic<int> g_sequence{};
 
 struct SlowMover {
   explicit SlowMover(bool slow_ = false) : slow(slow_) {}
-  SlowMover(SlowMover&& other) noexcept {
-    *this = std::move(other);
-  }
+  SlowMover(SlowMover&& other) noexcept { *this = std::move(other); }
   SlowMover& operator=(SlowMover&& other) noexcept {
     ++g_sequence;
     slow = other.slow;
@@ -1001,4 +997,48 @@ TEST(ThreadPoolExecutorTest, VirtualExecutorTestCPU) {
 
 TEST(ThreadPoolExecutorTest, VirtualExecutorTestEDF) {
   virtualExecutorTest<EDFThreadPoolExecutor>();
+}
+
+// Test use of guard inside executors
+template <class TPE>
+static void currentThreadTest(folly::StringPiece executorName) {
+  folly::Optional<ExecutorBlockingContext> ctx{};
+  TPE tpe(1);
+  tpe.add([&ctx]() { ctx = getExecutorBlockingContext(); });
+  tpe.join();
+  EXPECT_EQ(ctx->name, executorName);
+}
+
+// Test the nesting of the permit guard
+template <class TPE>
+static void currentThreadTestDisabled(folly::StringPiece executorName) {
+  folly::Optional<ExecutorBlockingContext> ctxPermit{};
+  folly::Optional<ExecutorBlockingContext> ctxForbid{};
+  TPE tpe(1);
+  tpe.add([&]() {
+    {
+      // Nest the guard that permits blocking
+      ExecutorBlockingGuard guard{ExecutorBlockingGuard::PermitTag{}};
+      ctxPermit = getExecutorBlockingContext();
+    }
+    ctxForbid = getExecutorBlockingContext();
+  });
+  tpe.join();
+  EXPECT_TRUE(!ctxPermit.has_value());
+  EXPECT_EQ(ctxForbid->name, executorName);
+}
+
+TEST(ThreadPoolExecutorTest, CPUCurrentThreadExecutor) {
+  currentThreadTest<CPUThreadPoolExecutor>("CPUThreadPoolExecutor");
+  currentThreadTestDisabled<CPUThreadPoolExecutor>("CPUThreadPoolExecutor");
+}
+
+TEST(ThreadPoolExecutorTest, IOCurrentThreadExecutor) {
+  currentThreadTest<IOThreadPoolExecutor>("EventBase");
+  currentThreadTestDisabled<IOThreadPoolExecutor>("EventBase");
+}
+
+TEST(ThreadPoolExecutorTest, EDFCurrentThreadExecutor) {
+  currentThreadTest<EDFThreadPoolExecutor>("EDFThreadPoolExecutor");
+  currentThreadTestDisabled<EDFThreadPoolExecutor>("EDFThreadPoolExecutor");
 }

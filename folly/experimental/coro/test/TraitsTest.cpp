@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -57,17 +57,6 @@ struct WrongAwaitReadyReturnType {
   int await_resume();
 };
 
-struct MissingAwaitSuspend {
-  bool await_ready();
-  int await_resume();
-};
-
-struct WrongAwaitSuspendArgType {
-  bool await_ready();
-  void await_suspend(float);
-  int await_resume();
-};
-
 struct MissingAwaitResume {
   bool await_ready();
   void await_suspend(std::experimental::coroutine_handle<void>);
@@ -96,8 +85,6 @@ static_assert(!is_awaiter_v<void>, "");
 static_assert(!is_awaiter_v<int>, "");
 static_assert(!is_awaiter_v<MissingAwaitReady>, "");
 static_assert(!is_awaiter_v<WrongAwaitReadyReturnType>, "");
-static_assert(!is_awaiter_v<MissingAwaitSuspend>, "");
-static_assert(!is_awaiter_v<WrongAwaitSuspendArgType>, "");
 static_assert(!is_awaiter_v<MissingAwaitResume>, "");
 static_assert(!is_awaiter_v<MemberOperatorCoAwait>, "");
 

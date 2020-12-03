@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <algorithm>
@@ -267,14 +268,10 @@ class RelaxedConcurrentPriorityQueue {
   }
 
   /// Returns true only if the queue was empty during the call.
-  bool empty() {
-    return isEmpty();
-  }
+  bool empty() { return isEmpty(); }
 
  private:
-  uint32_t getBottomLevel() {
-    return bottom_.load(std::memory_order_acquire);
-  }
+  uint32_t getBottomLevel() { return bottom_.load(std::memory_order_acquire); }
 
   /// This function is only called by the destructor
   void deleteSharedBuffer() {
@@ -483,11 +480,11 @@ class RelaxedConcurrentPriorityQueue {
   }
 
   FOLLY_ALWAYS_INLINE Node* getList(const Position& pos) {
-    return levels_[pos.level][pos.index].head.load(std::memory_order_relaxed);
+    return levels_[pos.level][pos.index].head.load(std::memory_order_acquire);
   }
 
   FOLLY_ALWAYS_INLINE void setTreeNode(const Position& pos, Node* t) {
-    levels_[pos.level][pos.index].head.store(t, std::memory_order_relaxed);
+    levels_[pos.level][pos.index].head.store(t, std::memory_order_release);
   }
 
   // Merge two sorted lists
@@ -1143,9 +1140,7 @@ class RelaxedConcurrentPriorityQueue {
     return false;
   }
 
-  FOLLY_ALWAYS_INLINE static folly::WaitOptions wait_options() {
-    return {};
-  }
+  FOLLY_ALWAYS_INLINE static folly::WaitOptions wait_options() { return {}; }
 
   template <typename Clock, typename Duration>
   FOLLY_NOINLINE bool tryWait(

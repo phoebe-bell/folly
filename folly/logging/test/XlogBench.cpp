@@ -1,11 +1,11 @@
 /*
- * Copyright 2019-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -46,15 +46,11 @@ class NullHandler : public LogHandler {
  public:
   void handleMessage(const LogMessage&, const LogCategory*) override {}
   void flush() override {}
-  LogHandlerConfig getConfig() const override {
-    return LogHandlerConfig{""};
-  }
+  LogHandlerConfig getConfig() const override { return LogHandlerConfig{""}; }
 };
 class NullHandlerFactory : public LogHandlerFactory {
  public:
-  StringPiece getType() const override {
-    return "null";
-  }
+  StringPiece getType() const override { return "null"; }
   std::shared_ptr<LogHandler> createHandler(const Options&) override {
     return std::make_shared<NullHandler>();
   }

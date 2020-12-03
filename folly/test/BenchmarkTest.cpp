@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -146,18 +146,10 @@ class NonTrivialLong {
   explicit NonTrivialLong(long v) : value_(v) {}
   virtual ~NonTrivialLong() {}
 
-  void operator++() {
-    ++value_;
-  }
-  void operator+=(long rhs) {
-    value_ += rhs;
-  }
-  void operator+=(const NonTrivialLong& rhs) {
-    value_ += rhs.value_;
-  }
-  bool operator<(long rhs) {
-    return value_ < rhs;
-  }
+  void operator++() { ++value_; }
+  void operator+=(long rhs) { value_ += rhs; }
+  void operator+=(const NonTrivialLong& rhs) { value_ += rhs.value_; }
+  bool operator<(long rhs) { return value_ < rhs; }
   NonTrivialLong operator+(const NonTrivialLong& rhs) {
     return NonTrivialLong(value_ + rhs.value_);
   }
@@ -256,9 +248,7 @@ BENCHMARK_DRAW_LINE();
 BENCHMARK(baselinevector) {
   vector<int> v;
 
-  BENCHMARK_SUSPEND {
-    v.resize(1000);
-  }
+  BENCHMARK_SUSPEND { v.resize(1000); }
 
   FOR_EACH_RANGE (i, 0, 100) { v.push_back(42); }
 }
@@ -362,6 +352,7 @@ BENCHMARK(BenchmarkSuspender_dismissing_value, iter) {
 
 int main(int argc, char** argv) {
   gflags::ParseCommandLineFlags(&argc, &argv, true);
+  folly::addBenchmark("-", std::string("string_name"), [] { return 0; });
   runBenchmarks();
   runBenchmarksOnFlag();
 }

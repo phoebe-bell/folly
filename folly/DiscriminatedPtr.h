@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -127,9 +127,7 @@ class DiscriminatedPtr {
   /**
    * Return true iff this DiscriminatedPtr is empty.
    */
-  bool empty() const {
-    return index() == 0;
-  }
+  bool empty() const { return index() == 0; }
 
   /**
    * Return true iff the object pointed by this DiscriminatedPtr has type T,
@@ -144,9 +142,7 @@ class DiscriminatedPtr {
   /**
    * Clear this DiscriminatedPtr, making it empty.
    */
-  void clear() {
-    data_ = 0;
-  }
+  void clear() { data_ = 0; }
 
   /**
    * Assignment operator from a pointer of type T.
@@ -200,9 +196,7 @@ class DiscriminatedPtr {
     return uint16_t(dptr_detail::GetTypeIndex<T, Types...>::value);
   }
 
-  uint16_t index() const {
-    return data_ >> 48;
-  }
+  uint16_t index() const { return data_ >> 48; }
   void* ptr() const {
     return reinterpret_cast<void*>(data_ & ((1ULL << 48) - 1));
   }

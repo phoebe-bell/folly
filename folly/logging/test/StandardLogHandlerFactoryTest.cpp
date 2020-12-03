@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -51,9 +51,7 @@ class TestLogWriter : public LogWriter {
 
   std::vector<std::string> messages;
 
-  bool ttyOutput() const override {
-    return false;
-  }
+  bool ttyOutput() const override { return false; }
 };
 
 class TestHandlerFactory : public LogHandlerFactory {
@@ -63,9 +61,7 @@ class TestHandlerFactory : public LogHandlerFactory {
       const std::shared_ptr<TestLogFormatter> formatter = nullptr)
       : writer_(writer), formatter_(formatter) {}
 
-  StringPiece getType() const override {
-    return "test";
-  }
+  StringPiece getType() const override { return "test"; }
 
   std::shared_ptr<LogHandler> createHandler(const Options& options) override {
     TestWriterFactory writerFactory{writer_};
@@ -91,9 +87,7 @@ class TestHandlerFactory : public LogHandlerFactory {
       return false;
     }
 
-    std::shared_ptr<LogWriter> createWriter() override {
-      return writer_;
-    }
+    std::shared_ptr<LogWriter> createWriter() override { return writer_; }
 
    private:
     std::shared_ptr<TestLogWriter> writer_;

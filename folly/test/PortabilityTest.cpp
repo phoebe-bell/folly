@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -27,16 +27,12 @@
 class Base {
  public:
   virtual ~Base() {}
-  virtual int foo() const {
-    return 1;
-  }
+  virtual int foo() const { return 1; }
 };
 
 class Derived : public Base {
  public:
-  int foo() const final {
-    return 2;
-  }
+  int foo() const final { return 2; }
 };
 
 // A compiler that supports final will likely inline the call to p->foo()

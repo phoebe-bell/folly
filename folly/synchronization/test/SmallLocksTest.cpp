@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,6 +19,7 @@
 #include <cassert>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -29,6 +30,7 @@
 #include <folly/Random.h>
 #include <folly/portability/Asm.h>
 #include <folly/portability/GFlags.h>
+#include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include <folly/portability/PThread.h>
 #include <folly/portability/Unistd.h>
@@ -37,7 +39,6 @@
 using folly::MicroLock;
 using folly::MicroSpinLock;
 using folly::MSLGuard;
-using std::string;
 
 #ifdef FOLLY_PICO_SPIN_LOCK_H_
 using folly::PicoSpinLock;
@@ -86,10 +87,7 @@ void splock_test() {
     folly::asm_volatile_pause();
     MSLGuard g(v.lock);
 
-    int first = v.ar[0];
-    for (size_t j = 1; j < sizeof v.ar / sizeof j; ++j) {
-      EXPECT_EQ(first, v.ar[j]);
-    }
+    EXPECT_THAT(v.ar, testing::Each(testing::Eq(v.ar[0])));
 
     int byte = folly::Random::rand32(rng);
     memset(v.ar, char(byte), sizeof v.ar);
@@ -101,9 +99,7 @@ template <class T>
 struct PslTest {
   PicoSpinLock<T> lock;
 
-  PslTest() {
-    lock.init();
-  }
+  PslTest() { lock.init(); }
 
   void doTest() {
     using UT = typename std::make_unsigned<T>::type;
@@ -135,9 +131,7 @@ void doPslTest() {
 #endif
 
 struct TestClobber {
-  TestClobber() {
-    lock_.init();
-  }
+  TestClobber() { lock_.init(); }
 
   void go() {
     std::lock_guard<MicroSpinLock> g(lock_);
@@ -189,20 +183,41 @@ TEST(SmallLocks, PicoSpinSigned) {
   }
   EXPECT_EQ(val.getData(), -8);
 }
+
+TEST(SmallLocks, PicoSpinLockThreadSanitizer) {
+  SKIP_IF(!folly::kIsSanitizeThread) << "Enabled in TSAN mode only";
+
+  typedef PicoSpinLock<int16_t, 0> Lock;
+
+  {
+    Lock a;
+    Lock b;
+    a.init(-8);
+    b.init(-8);
+    {
+      std::lock_guard<Lock> ga(a);
+      std::lock_guard<Lock> gb(b);
+    }
+    {
+      std::lock_guard<Lock> gb(b);
+      EXPECT_DEATH(
+          [&]() {
+            std::lock_guard<Lock> ga(a);
+            // If halt_on_error is turned off for TSAN, then death would
+            // happen on exit, so give that a chance as well.
+            std::_Exit(1);
+          }(),
+          "Cycle in lock order graph");
+    }
+  }
+}
 #endif
 
 TEST(SmallLocks, RegClobber) {
   TestClobber().go();
 }
 
-FOLLY_PACK_PUSH
-#if defined(__SANITIZE_ADDRESS__) && !defined(__clang__) && \
-    (defined(__GNUC__) || defined(__GNUG__))
-static_assert(sizeof(MicroLock) == 4, "Size check failed");
-#else
 static_assert(sizeof(MicroLock) == 1, "Size check failed");
-#endif
-FOLLY_PACK_POP
 
 namespace {
 
@@ -370,9 +385,7 @@ class MutexWrapper {
     while (!mutex_.try_lock()) {
     }
   }
-  void unlock() {
-    mutex_.unlock();
-  }
+  void unlock() { mutex_.unlock(); }
 
   Mutex mutex_;
 };
@@ -418,7 +431,12 @@ TEST(SmallLocksk, MicroSpinLockThreadSanitizer) {
     {
       std::lock_guard<MicroSpinLock> gb(b);
       EXPECT_DEATH(
-          [&]() { std::lock_guard<MicroSpinLock> ga(a); }(),
+          [&]() {
+            std::lock_guard<MicroSpinLock> ga(a);
+            // If halt_on_error is turned off for TSAN, then death would
+            // happen on exit, so give that a chance as well.
+            std::_Exit(1);
+          }(),
           "Cycle in lock order graph");
     }
   }
@@ -439,6 +457,9 @@ TEST(SmallLocksk, MicroSpinLockThreadSanitizer) {
           [&]() {
             std::lock_guard<MicroSpinLock> ga(
                 *reinterpret_cast<MicroSpinLock*>(&a));
+            // If halt_on_error is turned off for TSAN, then death would
+            // happen on exit, so give that a chance as well.
+            std::_Exit(1);
           }(),
           "Cycle in lock order graph");
     }

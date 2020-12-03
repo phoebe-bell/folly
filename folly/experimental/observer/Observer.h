@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,9 +13,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/ThreadLocal.h>
+#include <folly/experimental/ReadMostlySharedPtr.h>
 #include <folly/experimental/observer/Observer-pre.h>
 #include <folly/experimental/observer/detail/Core.h>
 
@@ -79,28 +81,20 @@ class Observer;
 template <typename T>
 class Snapshot {
  public:
-  const T& operator*() const {
-    return *get();
-  }
+  const T& operator*() const { return *get(); }
 
-  const T* operator->() const {
-    return get();
-  }
+  const T* operator->() const { return get(); }
 
-  const T* get() const {
-    return data_.get();
-  }
+  const T* get() const { return data_.get(); }
 
-  std::shared_ptr<const T> getShared() const {
-    return data_;
-  }
+  std::shared_ptr<const T> getShared() const& { return data_; }
+
+  std::shared_ptr<const T> getShared() && { return std::move(data_); }
 
   /**
    * Return the version of the observed object.
    */
-  size_t getVersion() const {
-    return version_;
-  }
+  size_t getVersion() const { return version_; }
 
  private:
   friend class Observer<T>;
@@ -128,7 +122,7 @@ class CallbackHandle {
   CallbackHandle(const CallbackHandle&) = delete;
   CallbackHandle(CallbackHandle&&) = default;
   CallbackHandle& operator=(const CallbackHandle&) = delete;
-  CallbackHandle& operator=(CallbackHandle&&) = default;
+  CallbackHandle& operator=(CallbackHandle&&) noexcept;
   ~CallbackHandle();
 
   // If callback is currently running, waits until it completes.
@@ -149,9 +143,7 @@ class Observer {
   explicit Observer(observer_detail::Core::Ptr core);
 
   Snapshot<T> getSnapshot() const;
-  Snapshot<T> operator*() const {
-    return getSnapshot();
-  }
+  Snapshot<T> operator*() const { return getSnapshot(); }
 
   /**
    * Check if we have a newer version of the observed object than the snapshot.
@@ -171,6 +163,18 @@ class Observer {
   observer_detail::Core::Ptr core_;
 };
 
+template <typename T>
+Observer<T> unwrap(Observer<T>);
+
+template <typename T>
+Observer<T> unwrapValue(Observer<T>);
+
+template <typename T>
+Observer<T> unwrap(Observer<Observer<T>>);
+
+template <typename T>
+Observer<T> unwrapValue(Observer<Observer<T>>);
+
 /**
  * makeObserver(...) creates a new Observer<T> object given a functor to
  * compute it. The functor can return T or std::shared_ptr<const T>.
@@ -188,6 +192,27 @@ Observer<observer_detail::ResultOf<F>> makeObserver(F&& creator);
 template <typename F>
 Observer<observer_detail::ResultOfUnwrapSharedPtr<F>> makeObserver(F&& creator);
 
+template <typename F>
+Observer<observer_detail::ResultOfUnwrapObserver<F>> makeObserver(F&& creator);
+
+/**
+ * The returned Observer will proxy updates from the input observer, but will
+ * skip updates that contain the same (according to operator==) value even if
+ * the actual object in the update is different.
+ */
+template <typename T>
+Observer<T> makeValueObserver(Observer<T> observer);
+
+/**
+ * A more efficient short-cut for makeValueObserver(makeObserver(...)).
+ */
+template <typename F>
+Observer<observer_detail::ResultOf<F>> makeValueObserver(F&& creator);
+
+template <typename F>
+Observer<observer_detail::ResultOfUnwrapSharedPtr<F>> makeValueObserver(
+    F&& creator);
+
 template <typename T>
 class TLObserver {
  public:
@@ -195,14 +220,63 @@ class TLObserver {
   TLObserver(const TLObserver<T>& other);
 
   const Snapshot<T>& getSnapshotRef() const;
-  const Snapshot<T>& operator*() const {
-    return getSnapshotRef();
-  }
+  const Snapshot<T>& operator*() const { return getSnapshotRef(); }
 
  private:
   Observer<T> observer_;
   folly::ThreadLocal<Snapshot<T>> snapshot_;
 };
+
+/**
+ * A TLObserver that optimizes for getting shared_ptr to data
+ */
+template <typename T>
+class ReadMostlyTLObserver {
+ public:
+  explicit ReadMostlyTLObserver(Observer<T> observer);
+  ReadMostlyTLObserver(const ReadMostlyTLObserver<T>& other);
+
+  folly::ReadMostlySharedPtr<const T> getShared() const;
+
+ private:
+  folly::ReadMostlySharedPtr<const T> refresh() const;
+
+  struct LocalSnapshot {
+    LocalSnapshot() {}
+    LocalSnapshot(
+        const folly::ReadMostlyMainPtr<const T>& data,
+        int64_t version)
+        : data_(data), version_(version) {}
+
+    folly::ReadMostlyWeakPtr<const T> data_;
+    int64_t version_;
+  };
+
+  Observer<T> observer_;
+
+  folly::Synchronized<folly::ReadMostlyMainPtr<const T>, std::mutex>
+      globalData_;
+  std::atomic<int64_t> globalVersion_;
+
+  folly::ThreadLocal<LocalSnapshot> localSnapshot_;
+
+  // Construct callback last so that it's joined before members it may
+  // be accessing are destructed
+  CallbackHandle callback_;
+};
+
+/**
+ * Same as makeObserver(...), but creates ReadMostlyTLObserver.
+ */
+template <typename T>
+ReadMostlyTLObserver<T> makeReadMostlyTLObserver(Observer<T> observer) {
+  return ReadMostlyTLObserver<T>(std::move(observer));
+}
+
+template <typename F>
+auto makeReadMostlyTLObserver(F&& creator) {
+  return makeReadMostlyTLObserver(makeObserver(std::forward<F>(creator)));
+}
 
 /**
  * Same as makeObserver(...), but creates TLObserver.

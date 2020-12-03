@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -36,9 +36,7 @@ class VirtualExecutor : public DefaultKeepAliveExecutor {
       FuncAndKeepAlive(Func&& f, VirtualExecutor* executor)
           : keepAlive_(getKeepAliveToken(executor)), f_(std::move(f)) {}
 
-      void operator()() {
-        f_();
-      }
+      void operator()() { f_(); }
 
      private:
       Executor::KeepAlive<VirtualExecutor> keepAlive_;
@@ -67,17 +65,13 @@ class VirtualExecutor : public DefaultKeepAliveExecutor {
     return executor_->getNumPriorities();
   }
 
-  void add(Func f) override {
-    executor_->add(wrapFunc(std::move(f)));
-  }
+  void add(Func f) override { executor_->add(wrapFunc(std::move(f))); }
 
   void addWithPriority(Func f, int8_t priority) override {
     executor_->addWithPriority(wrapFunc(std::move(f)), priority);
   }
 
-  ~VirtualExecutor() override {
-    joinKeepAlive();
-  }
+  ~VirtualExecutor() override { joinKeepAlive(); }
 
  private:
   const KeepAlive<> executor_;

@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -36,9 +36,7 @@ void Appender::vprintf(const char* fmt, va_list ap) {
   // passed the used arguments.  We'll only use apCopy if we need to retry.
   va_list apCopy;
   va_copy(apCopy, ap);
-  SCOPE_EXIT {
-    va_end(apCopy);
-  };
+  SCOPE_EXIT { va_end(apCopy); };
 
   // First try writing into our available data space.
   int ret =

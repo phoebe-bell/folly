@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,30 +16,25 @@
 
 #pragma once
 
-#include <climits> // for PATH_MAX
-#include <cstring>
+#include <forward_list>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
-#include <boost/container/flat_map.hpp>
-#include <boost/intrusive/list.hpp>
-#include <boost/operators.hpp>
-#include <glog/logging.h>
+#include <boost/intrusive/avl_set.hpp>
 
 #include <folly/Range.h>
 #include <folly/experimental/symbolizer/Elf.h>
 #include <folly/hash/Hash.h>
+#include <folly/memory/ReentrantAllocator.h>
+#include <folly/portability/Config.h>
 
 namespace folly {
 namespace symbolizer {
 
-/**
- * Number of ELF files loaded by the dynamic loader.
- */
-size_t countLoadedElfFiles();
+#if FOLLY_HAVE_ELF
 
 class ElfCacheBase {
  public:
@@ -48,66 +43,71 @@ class ElfCacheBase {
 };
 
 /**
- * Cache ELF files. Async-signal-safe: does memory allocation upfront.
- *
- * Will not grow; once the capacity is reached, lookups for files that
- * aren't already in the cache will fail (return nullptr).
+ * Cache ELF files. Async-signal-safe: does memory allocation via mmap.
  *
  * Not MT-safe. May not be used concurrently from multiple threads.
- *
- * NOTE that async-signal-safety is preserved only as long as the
- * SignalSafeElfCache object exists; after the SignalSafeElfCache object
- * is destroyed, destroying returned shared_ptr<ElfFile> objects may
- * cause ElfFile objects to be destroyed, and that's not async-signal-safe.
  */
 class SignalSafeElfCache : public ElfCacheBase {
  public:
-  explicit SignalSafeElfCache(size_t capacity);
-
   std::shared_ptr<ElfFile> getFile(StringPiece path) override;
 
- private:
-  // We can't use std::string (allocating memory is bad!) so we roll our
-  // own wrapper around a fixed-size, null-terminated string.
-  class Path : private boost::totally_ordered<Path> {
+  //  Path
+  //
+  //  A minimal implementation of the subset of std::string used below, as if:
+  //
+  //    using Path = std::basic_string<
+  //        char, std::char_traits<char>, reentrant_allocator<char>>;
+  //
+  //  Since some library implementations of std::basic_string, as on CentOS 7,
+  //  do not build when instantiated with a non-default-constructible allocator,
+  //  and since other library replacements, such as folly::basic_fbstring, just
+  //  ignore the allocator parameter.
+  class Path {
    public:
-    Path() {
-      assign(folly::StringPiece());
-    }
+    Path(
+        char const* data,
+        std::size_t size,
+        reentrant_allocator<char> const& alloc) noexcept;
+    Path() = delete;
+    Path(Path const&) = delete;
+    void operator=(Path const&) = delete;
 
-    explicit Path(StringPiece s) {
-      assign(s);
-    }
+    /* implicit */ operator StringPiece() const noexcept { return data_; }
 
-    void assign(StringPiece s) {
-      DCHECK_LE(s.size(), kMaxSize);
-      if (!s.empty()) {
-        memcpy(data_, s.data(), s.size());
-      }
-      data_[s.size()] = '\0';
-    }
+    char const* c_str() const noexcept { return data_.data(); }
 
-    bool operator<(const Path& other) const {
-      return strcmp(data_, other.data_) < 0;
+    friend bool operator<(Path const& a, Path const& b) noexcept {
+      return a.data_ < b.data_;
     }
-
-    bool operator==(const Path& other) const {
-      return strcmp(data_, other.data_) == 0;
-    }
-
-    const char* data() const {
-      return data_;
-    }
-
-    static constexpr size_t kMaxSize = PATH_MAX - 1;
 
    private:
-    char data_[kMaxSize + 1];
+    std::vector<char, reentrant_allocator<char>> data_;
   };
 
-  Path scratchpad_; // Preallocated key for map_ lookups.
-  boost::container::flat_map<Path, int> map_;
-  std::vector<std::shared_ptr<ElfFile>> slots_;
+  struct Entry : boost::intrusive::avl_set_base_hook<> {
+    Path path;
+    std::shared_ptr<ElfFile> file;
+    bool init = false;
+
+    explicit Entry(StringPiece p, reentrant_allocator<char> alloc) noexcept
+        : path{p.data(), p.size(), alloc},
+          file{std::allocate_shared<ElfFile>(alloc)} {}
+    Entry(Entry const&) = delete;
+    Entry& operator=(Entry const& that) = delete;
+
+    friend bool operator<(Entry const& a, Entry const& b) noexcept {
+      return a.path < b.path;
+    }
+  };
+
+  struct State {
+    reentrant_allocator<void> alloc{
+        reentrant_allocator_options().block_size_lg(16).large_size_lg(12)};
+    std::forward_list<Entry, reentrant_allocator<Entry>> list{alloc};
+    // note: map entry dtors check that they have already been unlinked
+    boost::intrusive::avl_set<Entry> map; // must follow list
+  };
+  Optional<State> state_;
 };
 
 /**
@@ -117,32 +117,22 @@ class SignalSafeElfCache : public ElfCacheBase {
  */
 class ElfCache : public ElfCacheBase {
  public:
-  explicit ElfCache(size_t capacity);
-
   std::shared_ptr<ElfFile> getFile(StringPiece path) override;
 
  private:
   std::mutex mutex_;
 
-  typedef boost::intrusive::list_member_hook<> LruLink;
-
   struct Entry {
     std::string path;
     ElfFile file;
-    LruLink lruLink;
   };
 
   static std::shared_ptr<ElfFile> filePtr(const std::shared_ptr<Entry>& e);
 
-  size_t capacity_;
   std::unordered_map<StringPiece, std::shared_ptr<Entry>, Hash> files_;
-
-  typedef boost::intrusive::list<
-      Entry,
-      boost::intrusive::member_hook<Entry, LruLink, &Entry::lruLink>,
-      boost::intrusive::constant_time_size<false>>
-      LruList;
-  LruList lruList_;
 };
+
+#endif // FOLLY_HAVE_ELF
+
 } // namespace symbolizer
 } // namespace folly

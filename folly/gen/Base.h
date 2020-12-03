@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -120,17 +120,11 @@ class MemberFunction {
  public:
   explicit MemberFunction(MemberPtr member) : member_(member) {}
 
-  Result operator()(Class&& x) const {
-    return (x.*member_)();
-  }
+  Result operator()(Class&& x) const { return (x.*member_)(); }
 
-  Result operator()(Class& x) const {
-    return (x.*member_)();
-  }
+  Result operator()(Class& x) const { return (x.*member_)(); }
 
-  Result operator()(Class* x) const {
-    return (x->*member_)();
-  }
+  Result operator()(Class* x) const { return (x->*member_)(); }
 };
 
 template <class Class, class Result>
@@ -144,19 +138,15 @@ class ConstMemberFunction {
  public:
   explicit ConstMemberFunction(MemberPtr member) : member_(member) {}
 
-  Result operator()(const Class& x) const {
-    return (x.*member_)();
-  }
+  Result operator()(const Class& x) const { return (x.*member_)(); }
 
-  Result operator()(const Class* x) const {
-    return (x->*member_)();
-  }
+  Result operator()(const Class* x) const { return (x->*member_)(); }
 };
 
 template <class Class, class FieldType>
 class Field {
  public:
-  typedef FieldType(Class::*FieldPtr);
+  typedef FieldType Class::*FieldPtr;
 
  private:
   FieldPtr field_;
@@ -164,25 +154,15 @@ class Field {
  public:
   explicit Field(FieldPtr field) : field_(field) {}
 
-  const FieldType& operator()(const Class& x) const {
-    return x.*field_;
-  }
+  const FieldType& operator()(const Class& x) const { return x.*field_; }
 
-  const FieldType& operator()(const Class* x) const {
-    return x->*field_;
-  }
+  const FieldType& operator()(const Class* x) const { return x->*field_; }
 
-  FieldType& operator()(Class& x) const {
-    return x.*field_;
-  }
+  FieldType& operator()(Class& x) const { return x.*field_; }
 
-  FieldType& operator()(Class* x) const {
-    return x->*field_;
-  }
+  FieldType& operator()(Class* x) const { return x->*field_; }
 
-  FieldType&& operator()(Class&& x) const {
-    return std::move(x.*field_);
-  }
+  FieldType&& operator()(Class&& x) const { return std::move(x.*field_); }
 };
 
 class Move {
@@ -247,9 +227,7 @@ class TryTo {
 template <>
 class To<StringPiece> {
  public:
-  StringPiece operator()(StringPiece src) const {
-    return src;
-  }
+  StringPiece operator()(StringPiece src) const { return src; }
 };
 
 template <class Key, class Value>

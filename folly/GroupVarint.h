@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,19 +21,23 @@
 
 #include <glog/logging.h>
 
-#if !defined(__GNUC__) && !defined(_MSC_VER)
-#error GroupVarint.h requires GCC or MSVC
-#endif
-
 #include <folly/Portability.h>
-
-#if FOLLY_X64 || defined(__i386__) || FOLLY_PPC64 || FOLLY_AARCH64
-#define HAVE_GROUP_VARINT 1
-
 #include <folly/Range.h>
 #include <folly/detail/GroupVarintDetail.h>
 #include <folly/lang/Bits.h>
 #include <folly/portability/Builtins.h>
+
+#if !defined(__GNUC__) && !defined(_MSC_VER)
+#error GroupVarint.h requires GCC or MSVC
+#endif
+
+#if FOLLY_X64 || defined(__i386__) || FOLLY_PPC64 || FOLLY_AARCH64
+#define FOLLY_HAVE_GROUP_VARINT 1
+#else
+#define FOLLY_HAVE_GROUP_VARINT 0
+#endif
+
+#if FOLLY_HAVE_GROUP_VARINT
 
 #if FOLLY_SSE >= 3
 #include <nmmintrin.h>
@@ -79,9 +83,7 @@ class GroupVarint<uint32_t> : public detail::GroupVarintBase<uint32_t> {
    * Return the number of bytes used to encode four uint32_t values stored
    * at consecutive positions in an array.
    */
-  static size_t size(const uint32_t* p) {
-    return size(p[0], p[1], p[2], p[3]);
-  }
+  static size_t size(const uint32_t* p) { return size(p[0], p[1], p[2], p[3]); }
 
   /**
    * Return the number of bytes used to encode count (<= 4) values.
@@ -260,18 +262,10 @@ class GroupVarint<uint32_t> : public detail::GroupVarintBase<uint32_t> {
     // __builtin_clz is undefined for the x==0 case
     return uint8_t(3 - (__builtin_clz(x | 1) / 8));
   }
-  static size_t b0key(size_t x) {
-    return x & 3;
-  }
-  static size_t b1key(size_t x) {
-    return (x >> 2) & 3;
-  }
-  static size_t b2key(size_t x) {
-    return (x >> 4) & 3;
-  }
-  static size_t b3key(size_t x) {
-    return (x >> 6) & 3;
-  }
+  static size_t b0key(size_t x) { return x & 3; }
+  static size_t b1key(size_t x) { return (x >> 2) & 3; }
+  static size_t b2key(size_t x) { return (x >> 4) & 3; }
+  static size_t b3key(size_t x) { return (x >> 6) & 3; }
 
   static const uint32_t kMask[];
 };
@@ -449,21 +443,11 @@ class GroupVarint<uint64_t> : public detail::GroupVarintBase<uint64_t> {
     return uint8_t(7 - (__builtin_clzll(x | 1) / 8));
   }
 
-  static uint8_t b0key(uint16_t x) {
-    return x & 7u;
-  }
-  static uint8_t b1key(uint16_t x) {
-    return (x >> 3) & 7u;
-  }
-  static uint8_t b2key(uint16_t x) {
-    return (x >> 6) & 7u;
-  }
-  static uint8_t b3key(uint16_t x) {
-    return (x >> 9) & 7u;
-  }
-  static uint8_t b4key(uint16_t x) {
-    return (x >> 12) & 7u;
-  }
+  static uint8_t b0key(uint16_t x) { return x & 7u; }
+  static uint8_t b1key(uint16_t x) { return (x >> 3) & 7u; }
+  static uint8_t b2key(uint16_t x) { return (x >> 6) & 7u; }
+  static uint8_t b3key(uint16_t x) { return (x >> 9) & 7u; }
+  static uint8_t b4key(uint16_t x) { return (x >> 12) & 7u; }
 
   static const uint64_t kMask[];
 };
@@ -487,9 +471,7 @@ class GroupVarintEncoder {
 
   explicit GroupVarintEncoder(Output out) : out_(out), count_(0) {}
 
-  ~GroupVarintEncoder() {
-    finish();
-  }
+  ~GroupVarintEncoder() { finish(); }
 
   /**
    * Add a value to the encoder.
@@ -525,20 +507,14 @@ class GroupVarintEncoder {
   /**
    * Return the appender that was used.
    */
-  Output& output() {
-    return out_;
-  }
-  const Output& output() const {
-    return out_;
-  }
+  Output& output() { return out_; }
+  const Output& output() const { return out_; }
 
   /**
    * Reset the encoder, disregarding any state (except what was already
    * flushed to the output, of course).
    */
-  void clear() {
-    count_ = 0;
-  }
+  void clear() { count_ = 0; }
 
  private:
   Output out_;
@@ -661,4 +637,4 @@ typedef GroupVarintDecoder<uint64_t> GroupVarint64Decoder;
 
 } // namespace folly
 
-#endif /* FOLLY_X64 || defined(__i386__) || FOLLY_PPC64 */
+#endif // FOLLY_HAVE_GROUP_VARINT

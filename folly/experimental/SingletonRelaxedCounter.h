@@ -1,11 +1,11 @@
 /*
- * Copyright 2019-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -63,18 +63,14 @@ namespace folly {
 template <typename Int, typename Tag>
 class SingletonRelaxedCounter {
  public:
-  static void add(Int value) {
-    mutate(+to_signed(value));
-  }
-  static void sub(Int value) {
-    mutate(-to_signed(value));
-  }
+  static void add(Int value) { mutate(+to_signed(value)); }
+  static void sub(Int value) { mutate(-to_signed(value)); }
 
   static Int count() {
     auto const& global = Global::instance();
     auto count = global.fallback.load(std::memory_order_relaxed);
     auto const tracking = global.tracking.rlock();
-    for (auto const kvp : tracking->locals) {
+    for (auto const& kvp : tracking->locals) {
       count += kvp.first->load(std::memory_order_relaxed);
     }
     return std::is_unsigned<Int>::value

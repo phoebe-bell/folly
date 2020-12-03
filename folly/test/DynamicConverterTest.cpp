@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -214,16 +214,12 @@ TEST(DynamicConverter, nested_containers) {
 
 struct A {
   int i;
-  bool operator==(const A& o) const {
-    return i == o.i;
-  }
+  bool operator==(const A& o) const { return i == o.i; }
 };
 namespace folly {
 template <>
 struct DynamicConverter<A> {
-  static A convert(const dynamic& d) {
-    return {convertTo<int>(d["i"])};
-  }
+  static A convert(const dynamic& d) { return {convertTo<int>(d["i"])}; }
 };
 } // namespace folly
 TEST(DynamicConverter, custom_class) {
@@ -456,20 +452,14 @@ struct B {
     }
     constructB++;
   }
-  B(const B& o) : x_(o.x_) {
-    constructB++;
-  }
-  ~B() {
-    destroyB++;
-  }
+  B(const B& o) : x_(o.x_) { constructB++; }
+  ~B() { destroyB++; }
   int x_;
 };
 namespace folly {
 template <>
 struct DynamicConverter<B> {
-  static B convert(const dynamic& d) {
-    return B(convertTo<int>(d));
-  }
+  static B convert(const dynamic& d) { return B(convertTo<int>(d)); }
 };
 } // namespace folly
 

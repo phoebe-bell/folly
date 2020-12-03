@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <functional>
@@ -28,10 +29,21 @@
 #include <folly/io/async/Request.h>
 
 namespace folly {
+struct AsyncStackRoot;
+
 namespace fibers {
 
 class Baton;
 class FiberManager;
+
+struct TaskOptions {
+  TaskOptions() {}
+  /**
+   * Should log the running time of the task? Refer to
+   * getCurrentTaskRunningTime() for details.
+   */
+  bool logRunningTime = false;
+};
 
 /**
  * @class Fiber
@@ -85,7 +97,7 @@ class Fiber {
   void init(bool recordStackUsed);
 
   template <typename F>
-  void setFunction(F&& func);
+  void setFunction(F&& func, TaskOptions taskOptions);
 
   template <typename F, typename G>
   void setFunctionFinally(F&& func, G&& finally);
@@ -111,9 +123,12 @@ class Fiber {
   unsigned char* fiberStackLimit_;
   FiberImpl fiberImpl_; /**< underlying fiber implementation */
   std::shared_ptr<RequestContext> rcontext_; /**< current RequestContext */
+  folly::AsyncStackRoot* asyncRoot_ = nullptr;
   folly::Function<void()> func_; /**< task function */
   bool recordStackUsed_{false};
   bool stackFilledWithMagic_{false};
+  std::chrono::steady_clock::time_point currStartTime_;
+  std::chrono::steady_clock::duration prevDuration_{0};
 
   /**
    * Points to next fiber in remote ready list
@@ -127,6 +142,7 @@ class Fiber {
 
   folly::Function<void()> resultFunc_;
   folly::Function<void()> finallyFunc_;
+  TaskOptions taskOptions_;
 
   class LocalData {
    public:

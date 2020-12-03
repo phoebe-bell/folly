@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -27,17 +27,13 @@ using namespace folly;
 struct global_counter {
   global_counter() : count_(0) {}
 
-  void increase() {
-    ++count_;
-  }
+  void increase() { ++count_; }
   void decrease() {
     EXPECT_GT(count_, 0);
     --count_;
   }
 
-  unsigned count() const {
-    return count_;
-  }
+  unsigned count() const { return count_; }
 
  private:
   unsigned count_;
@@ -48,9 +44,7 @@ struct Foo {
     counter_.increase();
   }
 
-  ~Foo() {
-    counter_.decrease();
-  }
+  ~Foo() { counter_.decrease(); }
 
  private:
   global_counter& counter_;

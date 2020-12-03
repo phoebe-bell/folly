@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -130,9 +130,7 @@ class SocketAddress {
     }
   }
 
-  bool isInitialized() const {
-    return (getFamily() != AF_UNSPEC);
-  }
+  bool isInitialized() const { return (getFamily() != AF_UNSPEC); }
 
   /**
    * Return whether this address is within private network.
@@ -409,9 +407,7 @@ class SocketAddress {
     return external_ ? sa_family_t(AF_UNIX) : storage_.addr.family();
   }
 
-  bool empty() const {
-    return getFamily() == AF_UNSPEC;
-  }
+  bool empty() const { return getFamily() == AF_UNSPEC; }
 
   /**
    * Get a string representation of the IPv4 or IPv6 address.
@@ -574,15 +570,13 @@ class SocketAddress {
       len = other.len;
       memcpy(addr, other.addr, size_t(len));
     }
-    void free() {
-      delete addr;
-    }
+    void free() { delete addr; }
   };
 
   struct addrinfo* getAddrInfo(const char* host, uint16_t port, int flags);
   struct addrinfo* getAddrInfo(const char* host, const char* port, int flags);
-  void setFromAddrInfo(const struct addrinfo* results);
-  void setFromLocalAddr(const struct addrinfo* results);
+  void setFromAddrInfo(const struct addrinfo* info);
+  void setFromLocalAddr(const struct addrinfo* info);
   void setFromSocket(
       NetworkSocket socket,
       int (*fn)(NetworkSocket, struct sockaddr*, socklen_t*));

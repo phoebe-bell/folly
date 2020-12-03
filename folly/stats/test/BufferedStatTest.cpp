@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <folly/stats/detail/BufferedStat-defs.h>
+#include <folly/stats/detail/BufferedStat.h>
 
 #include <folly/Range.h>
 #include <folly/portability/GTest.h>
@@ -29,18 +29,14 @@ struct MockClock {
   using duration = std::chrono::steady_clock::duration;
   using time_point = std::chrono::steady_clock::time_point;
 
-  static time_point now() {
-    return Now;
-  }
+  static time_point now() { return Now; }
 
   static time_point Now;
 };
 
 class SimpleDigest {
  public:
-  explicit SimpleDigest(size_t sz) {
-    EXPECT_EQ(kDigestSize, sz);
-  }
+  explicit SimpleDigest(size_t sz) { EXPECT_EQ(kDigestSize, sz); }
 
   SimpleDigest merge(Range<const double*> r) const {
     SimpleDigest digest(100);
@@ -62,13 +58,9 @@ class SimpleDigest {
     return digest;
   }
 
-  std::vector<double> getValues() const {
-    return values_;
-  }
+  std::vector<double> getValues() const { return values_; }
 
-  bool empty() const {
-    return values_.empty();
-  }
+  bool empty() const { return values_.empty(); }
 
  private:
   std::vector<double> values_;

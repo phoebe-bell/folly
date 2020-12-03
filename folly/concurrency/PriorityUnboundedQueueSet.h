@@ -1,11 +1,11 @@
 /*
- * Copyright 2019-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,6 +19,7 @@
 #include <atomic>
 #include <vector>
 
+#include <folly/Memory.h>
 #include <folly/concurrency/UnboundedQueue.h>
 #include <folly/lang/Align.h>
 
@@ -79,9 +80,7 @@ class PriorityUnboundedQueueSet {
       delete;
   PriorityUnboundedQueueSet& operator=(PriorityUnboundedQueueSet&&) = delete;
 
-  queue& at_priority(size_t priority) {
-    return queues_.at(priority);
-  }
+  queue& at_priority(size_t priority) { return queues_.at(priority); }
 
   queue const& at_priority(size_t priority) const {
     return queues_.at(priority);
@@ -132,12 +131,15 @@ class PriorityUnboundedQueueSet {
     return true;
   }
 
-  size_t priorities() const noexcept {
-    return queues_.size();
-  }
+  size_t priorities() const noexcept { return queues_.size(); }
 
  private:
-  std::vector<queue> queues_;
+  //  queue_alloc custom allocator is necessary until C++17
+  //    http://open-std.org/JTC1/SC22/WG21/docs/papers/2012/n3396.htm
+  //    https://gcc.gnu.org/bugzilla/show_bug.cgi?id=65122
+  //    https://bugs.llvm.org/show_bug.cgi?id=22634
+  using queue_alloc = AlignedSysAllocator<queue, FixedAlign<alignof(queue)>>;
+  std::vector<queue, queue_alloc> queues_;
 }; // PriorityUnboundedQueueSet
 
 /* Aliases */

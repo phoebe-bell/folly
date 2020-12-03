@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <atomic>
@@ -61,13 +62,9 @@ class SimpleLoopController : public LoopController {
   /**
    * Requests exit from loop() as soon as all waiting tasks complete.
    */
-  void stop() {
-    stopRequested_ = true;
-  }
+  void stop() { stopRequested_ = true; }
 
-  int remoteScheduleCalled() const {
-    return remoteScheduleCalled_;
-  }
+  int remoteScheduleCalled() const { return remoteScheduleCalled_; }
 
   void runLoop() override {
     do {
@@ -83,13 +80,11 @@ class SimpleLoopController : public LoopController {
     } while (remoteLoopRun_ < remoteScheduleCalled_);
   }
 
-  void schedule() override {
-    scheduled_ = true;
-  }
+  void runEagerFiber(Fiber* fiber) override { fm_->runEagerFiberImpl(fiber); }
 
-  HHWheelTimer& timer() override {
-    return *timer_;
-  }
+  void schedule() override { scheduled_ = true; }
+
+  HHWheelTimer* timer() override { return timer_.get(); }
 
   bool isInLoopThread() const {
     auto tid = loopThread_.load(std::memory_order_relaxed);
@@ -110,9 +105,7 @@ class SimpleLoopController : public LoopController {
 
   /* LoopController interface */
 
-  void setFiberManager(FiberManager* fm) override {
-    fm_ = fm;
-  }
+  void setFiberManager(FiberManager* fm) override { fm_ = fm; }
 
   void scheduleThreadSafe() override {
     ++remoteScheduleCalled_;

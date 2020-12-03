@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -20,30 +20,13 @@
 #include <string>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <folly/ScopeGuard.h>
 #include <folly/portability/GTest.h>
 
 using namespace folly;
 using namespace std;
-
-namespace {
-
-FOLLY_CREATE_HAS_MEMBER_TYPE_TRAITS(has_member_type_x, x);
-} // namespace
-
-TEST(Traits, has_member_type) {
-  struct membership_no {};
-  struct membership_yes {
-    using x = void;
-  };
-
-  EXPECT_TRUE((is_same<false_type, has_member_type_x<membership_no>>::value));
-  EXPECT_TRUE((is_same<true_type, has_member_type_x<membership_yes>>::value));
-}
-
-//  Note: FOLLY_CREATE_HAS_MEMBER_FN_TRAITS tests are in
-//  folly/test/HasMemberFnTraitsTest.cpp.
 
 struct T1 {}; // old-style IsRelocatable, below
 struct T2 {}; // old-style IsRelocatable, below
@@ -61,6 +44,10 @@ struct F3 : T3 {
 };
 struct F4 : T1 {};
 
+template <class>
+struct A {};
+struct B {};
+
 namespace folly {
 template <>
 struct IsRelocatable<T1> : std::true_type {};
@@ -76,7 +63,7 @@ TEST(Traits, scalars) {
 }
 
 TEST(Traits, containers) {
-  EXPECT_TRUE(IsRelocatable<vector<F1>>::value);
+  EXPECT_FALSE(IsRelocatable<vector<F1>>::value);
   EXPECT_TRUE((IsRelocatable<pair<F1, F1>>::value));
   EXPECT_TRUE((IsRelocatable<pair<T1, T2>>::value));
 }
@@ -107,11 +94,11 @@ template <bool V>
 struct Cond {
   template <typename K = std::string>
   static auto fun_std(std::conditional_t<V, K, std::string>&& arg) {
-    return std::is_same<remove_cvref_t<decltype(arg)>, std::string>{};
+    return std::is_same<folly::remove_cvref_t<decltype(arg)>, std::string>{};
   }
   template <typename K = std::string>
   static auto fun_folly(folly::conditional_t<V, K, std::string>&& arg) {
-    return std::is_same<remove_cvref_t<decltype(arg)>, std::string>{};
+    return std::is_same<folly::remove_cvref_t<decltype(arg)>, std::string>{};
   }
 };
 
@@ -168,10 +155,31 @@ TEST(Traits, relational) {
   EXPECT_FALSE((folly::less_than<uint8_t, 255u, uint8_t>(255u)));
   EXPECT_TRUE((folly::less_than<uint8_t, 255u, uint8_t>(254u)));
 
+  // Making sure signed to unsigned comparisons are not truncated.
+  EXPECT_TRUE((folly::less_than<uint8_t, 0, int8_t>(-1)));
+  EXPECT_TRUE((folly::less_than<uint16_t, 0, int16_t>(-1)));
+  EXPECT_TRUE((folly::less_than<uint32_t, 0, int32_t>(-1)));
+  EXPECT_TRUE((folly::less_than<uint64_t, 0, int64_t>(-1)));
+
+  EXPECT_FALSE((folly::less_than<int8_t, -1, uint8_t>(0)));
+  EXPECT_FALSE((folly::less_than<int16_t, -1, uint16_t>(0)));
+  EXPECT_FALSE((folly::less_than<int32_t, -1, uint32_t>(0)));
+  EXPECT_FALSE((folly::less_than<int64_t, -1, uint64_t>(0)));
+
   EXPECT_FALSE((folly::greater_than<uint8_t, 0u, uint8_t>(0u)));
   EXPECT_TRUE((folly::greater_than<uint8_t, 0u, uint8_t>(254u)));
   EXPECT_FALSE((folly::greater_than<uint8_t, 255u, uint8_t>(255u)));
   EXPECT_FALSE((folly::greater_than<uint8_t, 255u, uint8_t>(254u)));
+
+  EXPECT_FALSE((folly::greater_than<uint8_t, 0, int8_t>(-1)));
+  EXPECT_FALSE((folly::greater_than<uint16_t, 0, int16_t>(-1)));
+  EXPECT_FALSE((folly::greater_than<uint32_t, 0, int32_t>(-1)));
+  EXPECT_FALSE((folly::greater_than<uint64_t, 0, int64_t>(-1)));
+
+  EXPECT_TRUE((folly::greater_than<int8_t, -1, uint8_t>(0)));
+  EXPECT_TRUE((folly::greater_than<int16_t, -1, uint16_t>(0)));
+  EXPECT_TRUE((folly::greater_than<int32_t, -1, uint32_t>(0)));
+  EXPECT_TRUE((folly::greater_than<int64_t, -1, uint64_t>(0)));
 }
 
 #if FOLLY_HAVE_INT128_T
@@ -216,15 +224,11 @@ void testIsRelocatable(Args&&... args) {
   char vcpy[sizeof(T)];
 
   T* src = new (vsrc) T(std::forward<Args>(args)...);
-  SCOPE_EXIT {
-    src->~T();
-  };
+  SCOPE_EXIT { src->~T(); };
   std::memcpy(vcpy, vsrc, sizeof(T));
   T deep(*src);
   T* dst = new (vdst) T(std::move(*src));
-  SCOPE_EXIT {
-    dst->~T();
-  };
+  SCOPE_EXIT { dst->~T(); };
 
   EXPECT_EQ(deep, *dst);
 #pragma GCC diagnostic push
@@ -251,9 +255,7 @@ struct inspects_tag {
   std::false_type is_char(tag_t<T>) const {
     return {};
   }
-  std::true_type is_char(tag_t<char>) const {
-    return {};
-  }
+  std::true_type is_char(tag_t<char>) const { return {}; }
 };
 
 TEST(Traits, tag) {
@@ -309,6 +311,43 @@ TEST(Traits, type_t) {
   EXPECT_FALSE(
       (::std::is_constructible<::container<std::string>, some_tag, float>::
            value));
+}
+
+namespace {
+template <typename T, typename V>
+using detector_find = decltype(std::declval<T>().find(std::declval<V>()));
+}
+
+TEST(Traits, detected_or_t) {
+  EXPECT_TRUE(( //
+      std::is_same<
+          folly::detected_or_t<float, detector_find, std::string, char>,
+          std::string::size_type>::value));
+  EXPECT_TRUE(( //
+      std::is_same<
+          folly::detected_or_t<float, detector_find, double, char>,
+          float>::value));
+}
+
+TEST(Traits, detected_t) {
+  EXPECT_TRUE(( //
+      std::is_same<
+          folly::detected_t<detector_find, std::string, char>,
+          std::string::size_type>::value));
+  EXPECT_TRUE(( //
+      std::is_same<
+          folly::detected_t<detector_find, double, char>,
+          folly::nonesuch>::value));
+}
+
+TEST(Traits, is_detected) {
+  EXPECT_TRUE((folly::is_detected<detector_find, std::string, char>::value));
+  EXPECT_FALSE((folly::is_detected<detector_find, double, char>::value));
+}
+
+TEST(Traits, is_detected_v) {
+  EXPECT_TRUE((folly::is_detected_v<detector_find, std::string, char>));
+  EXPECT_FALSE((folly::is_detected_v<detector_find, double, char>));
 }
 
 TEST(Traits, aligned_storage_for_t) {
@@ -390,4 +429,63 @@ TEST(Traits, like) {
   EXPECT_TRUE(
       (std::is_same<like_t<int const volatile&&, char>, char const volatile&&>::
            value));
+}
+
+TEST(Traits, is_instantiation_of_v) {
+  EXPECT_TRUE((detail::is_instantiation_of_v<A, A<int>>));
+  EXPECT_FALSE((detail::is_instantiation_of_v<A, B>));
+}
+
+TEST(Traits, is_instantiation_of) {
+  EXPECT_TRUE((detail::is_instantiation_of<A, A<int>>::value));
+  EXPECT_FALSE((detail::is_instantiation_of<A, B>::value));
+}
+
+TEST(Traits, is_similar_instantiation_v) {
+  EXPECT_TRUE((detail::is_similar_instantiation_v<A<int>, A<long>>));
+  EXPECT_FALSE((detail::is_similar_instantiation_v<A<int>, tag_t<int>>));
+  EXPECT_FALSE((detail::is_similar_instantiation_v<A<int>, B>));
+  EXPECT_FALSE((detail::is_similar_instantiation_v<B, B>));
+}
+
+TEST(Traits, is_similar_instantiation) {
+  EXPECT_TRUE((detail::is_similar_instantiation<A<int>, A<long>>::value));
+  EXPECT_FALSE((detail::is_similar_instantiation<A<int>, tag_t<int>>::value));
+  EXPECT_FALSE((detail::is_similar_instantiation<A<int>, B>::value));
+  EXPECT_FALSE((detail::is_similar_instantiation<B, B>::value));
+}
+
+TEST(Traits, is_constexpr_default_constructible) {
+  EXPECT_TRUE(is_constexpr_default_constructible_v<int>);
+  EXPECT_TRUE(is_constexpr_default_constructible<int>{});
+
+  struct Empty {};
+  EXPECT_TRUE(is_constexpr_default_constructible_v<Empty>);
+  EXPECT_TRUE(is_constexpr_default_constructible<Empty>{});
+
+  struct NonTrivialDtor {
+    FOLLY_MAYBE_UNUSED ~NonTrivialDtor() {}
+  };
+  EXPECT_FALSE(is_constexpr_default_constructible_v<NonTrivialDtor>);
+  EXPECT_FALSE(is_constexpr_default_constructible<NonTrivialDtor>{});
+
+  struct ConstexprCtor {
+    int x, y;
+    constexpr ConstexprCtor() noexcept : x(7), y(11) {}
+  };
+  EXPECT_TRUE(is_constexpr_default_constructible_v<ConstexprCtor>);
+  EXPECT_TRUE(is_constexpr_default_constructible<ConstexprCtor>{});
+
+  struct NonConstexprCtor {
+    int x, y;
+    NonConstexprCtor() noexcept : x(7), y(11) {}
+  };
+  EXPECT_FALSE(is_constexpr_default_constructible_v<NonConstexprCtor>);
+  EXPECT_FALSE(is_constexpr_default_constructible<NonConstexprCtor>{});
+
+  struct NoDefaultCtor {
+    constexpr NoDefaultCtor(int, int) noexcept {}
+  };
+  EXPECT_FALSE(is_constexpr_default_constructible_v<NoDefaultCtor>);
+  EXPECT_FALSE(is_constexpr_default_constructible<NoDefaultCtor>{});
 }

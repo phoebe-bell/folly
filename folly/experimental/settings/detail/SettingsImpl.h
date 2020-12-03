@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <memory>
@@ -20,12 +21,13 @@
 #include <string>
 #include <typeindex>
 
-#include <folly/CachelinePadded.h>
 #include <folly/Conv.h>
 #include <folly/Range.h>
 #include <folly/SharedMutex.h>
 #include <folly/ThreadLocal.h>
+#include <folly/Utility.h>
 #include <folly/experimental/settings/SettingsMetadata.h>
+#include <folly/lang/Aligned.h>
 
 namespace folly {
 namespace settings {
@@ -70,9 +72,7 @@ class SettingCoreBase {
   /**
    * Hashable key uniquely identifying this setting in this process
    */
-  Key getKey() const {
-    return reinterpret_cast<Key>(this);
-  }
+  Key getKey() const { return reinterpret_cast<Key>(this); }
 };
 
 void registerSetting(SettingCoreBase& core);
@@ -268,9 +268,7 @@ class SettingCore : public SettingCoreBase {
     set(defaultValue_, "default", snapshot);
   }
 
-  const SettingMetadata& meta() const override {
-    return meta_;
-  }
+  const SettingMetadata& meta() const override { return meta_; }
 
   /**
    * @param trivialStorage must refer to the same location
@@ -282,9 +280,7 @@ class SettingCore : public SettingCoreBase {
       std::atomic<uint64_t>& trivialStorage) const {
     return getImpl(IsSmallPOD<T>(), trivialStorage);
   }
-  const SettingContents<T>& getSlow() const {
-    return *tlValue();
-  }
+  const SettingContents<T>& getSlow() const { return *tlValue(); }
   /***
    * SmallPOD version: just read the global atomic
    */
@@ -327,9 +323,7 @@ class SettingCore : public SettingCoreBase {
     *settingVersion_ = nextGlobalVersion();
   }
 
-  const T& defaultValue() const {
-    return defaultValue_;
-  }
+  const T& defaultValue() const { return defaultValue_; }
 
   SettingCore(
       SettingMetadata meta,
@@ -339,8 +333,9 @@ class SettingCore : public SettingCoreBase {
         defaultValue_(std::move(defaultValue)),
         trivialStorage_(trivialStorage),
         localValue_([]() {
-          return new CachelinePadded<
-              std::pair<Version, std::shared_ptr<Contents>>>(0, nullptr);
+          return new cacheline_aligned<
+              std::pair<Version, std::shared_ptr<Contents>>>(
+              in_place, 0, nullptr);
         }) {
     set(defaultValue_, "default");
     registerSetting(*this);
@@ -357,9 +352,9 @@ class SettingCore : public SettingCoreBase {
 
   /* Thread local versions start at 0, this will force a read on first access.
    */
-  CachelinePadded<std::atomic<Version>> settingVersion_{1};
+  cacheline_aligned<std::atomic<Version>> settingVersion_{in_place, 1};
 
-  ThreadLocal<CachelinePadded<std::pair<Version, std::shared_ptr<Contents>>>>
+  ThreadLocal<cacheline_aligned<std::pair<Version, std::shared_ptr<Contents>>>>
       localValue_;
 
   FOLLY_ALWAYS_INLINE const std::shared_ptr<Contents>& tlValue() const {

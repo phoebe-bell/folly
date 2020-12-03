@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -46,9 +46,7 @@ class Concatenator {
   void cat(const std::string& name);
   void cat(FILE* file);
 
-  bool printLineNumbers() const {
-    return printLineNumbers_;
-  }
+  bool printLineNumbers() const { return printLineNumbers_; }
 
  private:
   bool printLineNumbers_;
@@ -57,20 +55,18 @@ class Concatenator {
 
 // clang-format off
 [[noreturn]] void throwOutputError() {
-  throw OutputError(folly::errnoStr(errno).toStdString());
+  throw OutputError(folly::errnoStr(errno));
 }
 
 [[noreturn]] void throwInputError() {
-  throw InputError(folly::errnoStr(errno).toStdString());
+  throw InputError(folly::errnoStr(errno));
 }
 // clang-format on
 
 void Concatenator::cat(FILE* file) {
   char* lineBuf = nullptr;
   size_t lineBufSize = 0;
-  SCOPE_EXIT {
-    free(lineBuf);
-  };
+  SCOPE_EXIT { free(lineBuf); };
 
   ssize_t n;
   while ((n = getline(&lineBuf, &lineBufSize, file)) >= 0) {
@@ -146,13 +142,13 @@ void runEcho(
     const char* sep = "";
     for (auto& arg : args) {
       if (printf("%s%s", sep, arg.c_str()) < 0) {
-        throw OutputError(folly::errnoStr(errno).toStdString());
+        throw OutputError(folly::errnoStr(errno));
       }
       sep = " ";
     }
     if (!options["-n"].as<bool>()) {
       if (putchar('\n') == EOF) {
-        throw OutputError(folly::errnoStr(errno).toStdString());
+        throw OutputError(folly::errnoStr(errno));
       }
     }
   } catch (const OutputError& e) {

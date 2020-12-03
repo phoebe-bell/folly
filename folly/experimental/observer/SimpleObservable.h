@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/Function.h>
@@ -31,7 +32,7 @@ class SimpleObservable {
   void setValue(T value);
   void setValue(std::shared_ptr<const T> value);
 
-  Observer<T> getObserver();
+  auto getObserver();
 
  private:
   struct Context {
@@ -42,7 +43,8 @@ class SimpleObservable {
   std::shared_ptr<Context> context_;
 
   std::once_flag observerInit_;
-  folly::Optional<Observer<T>> observer_;
+  folly::Optional<Observer<typename observer_detail::Unwrap<T>::type>>
+      observer_;
 };
 } // namespace observer
 } // namespace folly

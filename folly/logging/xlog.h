@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/Likely.h>
@@ -113,6 +114,20 @@
       }(),                                                               \
       ##__VA_ARGS__)
 
+namespace folly {
+namespace detail {
+
+template <typename Tag>
+FOLLY_EXPORT FOLLY_ALWAYS_INLINE bool xlogEveryNImpl(size_t n) {
+  static std::atomic<size_t> count{0};
+  auto const value = count.load(std::memory_order_relaxed);
+  count.store(value + 1, std::memory_order_relaxed);
+  return FOLLY_UNLIKELY((value % n) == 0);
+}
+
+} // namespace detail
+} // namespace folly
+
 /**
  * Similar to XLOG(...) except only log a message every @param n
  * invocations, approximately.
@@ -123,18 +138,27 @@
  * contention, leading to possible over-logging or under-logging
  * effects.
  */
-#define XLOG_EVERY_N(level, n, ...)                                        \
-  XLOG_IF(                                                                 \
-      level,                                                               \
-      []() FOLLY_EXPORT -> bool {                                          \
-        static std::atomic<size_t> folly_detail_xlog_count{0};             \
-        auto const folly_detail_xlog_count_value =                         \
-            folly_detail_xlog_count.load(std::memory_order_relaxed);       \
-        folly_detail_xlog_count.store(                                     \
-            folly_detail_xlog_count_value + 1, std::memory_order_relaxed); \
-        return FOLLY_UNLIKELY((folly_detail_xlog_count_value % (n)) == 0); \
-      }(),                                                                 \
+#define XLOG_EVERY_N(level, n, ...)                                       \
+  XLOG_IF(                                                                \
+      level,                                                              \
+      [] {                                                                \
+        struct folly_detail_xlog_tag {};                                  \
+        return ::folly::detail::xlogEveryNImpl<folly_detail_xlog_tag>(n); \
+      }(),                                                                \
       ##__VA_ARGS__)
+
+namespace folly {
+namespace detail {
+
+template <typename Tag>
+FOLLY_EXPORT FOLLY_ALWAYS_INLINE bool xlogEveryNExactImpl(size_t n) {
+  static std::atomic<size_t> count{0};
+  auto const value = count.fetch_add(1, std::memory_order_relaxed);
+  return FOLLY_UNLIKELY((value % n) == 0);
+}
+
+} // namespace detail
+} // namespace folly
 
 /**
  * Similar to XLOG(...) except only log a message every @param n
@@ -148,11 +172,9 @@
 #define XLOG_EVERY_N_EXACT(level, n, ...)                                      \
   XLOG_IF(                                                                     \
       level,                                                                   \
-      []() FOLLY_EXPORT -> bool {                                              \
-        static std::atomic<size_t> folly_detail_xlog_count{0};                 \
-        return FOLLY_UNLIKELY(                                                 \
-            (folly_detail_xlog_count.fetch_add(1, std::memory_order_relaxed) % \
-             (n)) == 0);                                                       \
+      [] {                                                                     \
+        struct folly_detail_xlog_tag {};                                       \
+        return ::folly::detail::xlogEveryNExactImpl<folly_detail_xlog_tag>(n); \
       }(),                                                                     \
       ##__VA_ARGS__)
 
@@ -160,6 +182,13 @@ namespace folly {
 namespace detail {
 
 size_t& xlogEveryNThreadEntry(void const* const key);
+
+template <typename Tag>
+FOLLY_EXPORT FOLLY_ALWAYS_INLINE bool xlogEveryNThreadImpl(size_t n) {
+  static char key;
+  auto& count = xlogEveryNThreadEntry(&key);
+  return FOLLY_UNLIKELY((count++ % n) == 0);
+}
 
 } // namespace detail
 } // namespace folly
@@ -180,15 +209,14 @@ size_t& xlogEveryNThreadEntry(void const* const key);
  * single thread-local map to control TLS overhead, at the cost
  * of a small runtime performance hit.
  */
-#define XLOG_EVERY_N_THREAD(level, n, ...)                                  \
-  XLOG_IF(                                                                  \
-      level,                                                                \
-      []() FOLLY_EXPORT -> bool {                                           \
-        static char folly_detail_xlog_key;                                  \
-        auto& folly_detail_xlog_count =                                     \
-            ::folly::detail::xlogEveryNThreadEntry(&folly_detail_xlog_key); \
-        return FOLLY_UNLIKELY((folly_detail_xlog_count++ % (n)) == 0);      \
-      }(),                                                                  \
+#define XLOG_EVERY_N_THREAD(level, n, ...)                                   \
+  XLOG_IF(                                                                   \
+      level,                                                                 \
+      [] {                                                                   \
+        struct folly_detail_xlog_tag {};                                     \
+        return ::folly::detail::xlogEveryNThreadImpl<folly_detail_xlog_tag>( \
+            n);                                                              \
+      }(),                                                                   \
       ##__VA_ARGS__)
 
 /**
@@ -369,19 +397,17 @@ size_t& xlogEveryNThreadEntry(void const* const key);
 #define XLOG_SET_CATEGORY_CHECK
 #endif
 
-#define XLOG_SET_CATEGORY_NAME(category)                   \
-  namespace xlog_detail {                                  \
-  namespace {                                              \
-  XLOG_SET_CATEGORY_CHECK                                  \
-  constexpr inline folly::StringPiece getXlogCategoryName( \
-      folly::StringPiece,                                  \
-      int) {                                               \
-    return category;                                       \
-  }                                                        \
-  constexpr inline bool isXlogCategoryOverridden(int) {    \
-    return true;                                           \
-  }                                                        \
-  }                                                        \
+#define XLOG_SET_CATEGORY_NAME(category)                               \
+  namespace xlog_detail {                                              \
+  namespace {                                                          \
+  XLOG_SET_CATEGORY_CHECK                                              \
+  constexpr inline folly::StringPiece getXlogCategoryName(             \
+      folly::StringPiece,                                              \
+      int) {                                                           \
+    return category;                                                   \
+  }                                                                    \
+  constexpr inline bool isXlogCategoryOverridden(int) { return true; } \
+  }                                                                    \
   }
 
 /**
@@ -562,17 +588,13 @@ class XlogCategoryInfo {
 
   LogCategory* init(folly::StringPiece categoryName, bool isOverridden);
 
-  LogCategory* getCategory(XlogFileScopeInfo*) {
-    return category_;
-  }
+  LogCategory* getCategory(XlogFileScopeInfo*) { return category_; }
 
   /**
    * Get a pointer to pass into the LogStreamProcessor constructor,
    * so that it is able to look up the LogCategory information.
    */
-  XlogCategoryInfo<IsInHeaderFile>* getInfo(XlogFileScopeInfo*) {
-    return this;
-  }
+  XlogCategoryInfo<IsInHeaderFile>* getInfo(XlogFileScopeInfo*) { return this; }
 
  private:
   // These variables will always be zero-initialized on program start.
@@ -676,7 +698,8 @@ constexpr const char* xlogStripFilenameRecursive(
   // However, in order to maintain compatibility with pre-C++14 compilers we
   // have implemented it recursively to adhere to C++11 restrictions for
   // constexpr functions.
-  return (prefixes[prefixIdx] == ':' || prefixes[prefixIdx] == '\0')
+  return ((prefixes[prefixIdx] == ':' && filename[filenameIdx] != ':') ||
+          prefixes[prefixIdx] == '\0')
       ? ((match && filenameIdx > 0 &&
           (xlogIsDirSeparator(prefixes[filenameIdx - 1]) ||
            xlogIsDirSeparator(filename[filenameIdx])))
@@ -686,7 +709,10 @@ constexpr const char* xlogStripFilenameRecursive(
                     ? filename
                     : xlogStripFilenameRecursive(
                           filename, prefixes, prefixIdx + 1, 0, true)))
-      : ((match && (prefixes[prefixIdx] == filename[filenameIdx]))
+      : ((match &&
+          ((prefixes[prefixIdx] == filename[filenameIdx]) ||
+           (xlogIsDirSeparator(prefixes[prefixIdx]) &&
+            xlogIsDirSeparator(filename[filenameIdx]))))
              ? xlogStripFilenameRecursive(
                    filename, prefixes, prefixIdx + 1, filenameIdx + 1, true)
              : xlogStripFilenameRecursive(

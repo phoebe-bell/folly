@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -24,8 +24,11 @@
 
 #include <cstdint>
 
+#include <process.h> // @manual
+
 #include <sys/locking.h> // @manual
 
+#include <folly/Portability.h>
 #include <folly/portability/SysTypes.h>
 
 // This is different from the normal headers because there are a few cases,
@@ -68,7 +71,6 @@ int ftruncate(int fd, off_t len);
 char* getcwd(char* buf, int sz);
 int getdtablesize();
 int getgid();
-pid_t getpid();
 pid_t getppid();
 int getuid();
 int isatty(int fh);
@@ -90,6 +92,8 @@ ssize_t write(int fh, void const* buf, size_t count);
 } // namespace portability
 } // namespace folly
 
+FOLLY_PUSH_WARNING
+FOLLY_CLANG_DISABLE_WARNING("-Wheader-hygiene")
 /* using override */ using namespace folly::portability::unistd;
-
+FOLLY_POP_WARNING
 #endif

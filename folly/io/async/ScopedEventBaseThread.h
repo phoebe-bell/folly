@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -39,27 +39,30 @@ typedef Range<const char*> StringPiece;
 class ScopedEventBaseThread : public IOExecutor, public SequencedExecutor {
  public:
   ScopedEventBaseThread();
-  explicit ScopedEventBaseThread(const StringPiece& name);
+  explicit ScopedEventBaseThread(StringPiece name);
   explicit ScopedEventBaseThread(EventBaseManager* ebm);
-  explicit ScopedEventBaseThread(
+  explicit ScopedEventBaseThread(EventBaseManager* ebm, StringPiece name);
+  ScopedEventBaseThread(
+      EventBase::Options eventBaseOptions,
       EventBaseManager* ebm,
-      const StringPiece& name);
+      StringPiece name);
   ~ScopedEventBaseThread();
 
-  EventBase* getEventBase() const {
-    return &eb_;
+  EventBase* getEventBase() const { return &eb_; }
+
+  EventBase* getEventBase() override { return &eb_; }
+
+  std::thread::id getThreadId() const { return th_.get_id(); }
+
+  void add(Func func) override { getEventBase()->add(std::move(func)); }
+
+ protected:
+  bool keepAliveAcquire() noexcept override {
+    return getEventBase()->keepAliveAcquire();
   }
 
-  EventBase* getEventBase() override {
-    return &eb_;
-  }
-
-  std::thread::id getThreadId() const {
-    return th_.get_id();
-  }
-
-  void add(Func func) override {
-    getEventBase()->add(std::move(func));
+  void keepAliveRelease() noexcept override {
+    getEventBase()->keepAliveRelease();
   }
 
  private:

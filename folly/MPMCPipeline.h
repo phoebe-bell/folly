@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -112,9 +112,7 @@ class MPMCPipeline {
           value_(std::exchange(other.value_, 0xdeadbeeffaceb00c)) {}
     explicit TicketBaseDebug(MPMCPipeline* owner, uint64_t value) noexcept
         : owner_(owner), value_(value) {}
-    void check_owner(MPMCPipeline* owner) const {
-      CHECK(owner == owner_);
-    }
+    void check_owner(MPMCPipeline* owner) const { CHECK(owner == owner_); }
 
     MPMCPipeline* owner_;
     uint64_t value_;

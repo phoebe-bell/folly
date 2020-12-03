@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -51,8 +51,8 @@ class TimekeeperScheduledExecutor : public ScheduledExecutor {
       override;
 
  protected:
-  bool keepAliveAcquire() override;
-  void keepAliveRelease() override;
+  bool keepAliveAcquire() noexcept override;
+  void keepAliveRelease() noexcept override;
 
  private:
   TimekeeperScheduledExecutor(
@@ -60,9 +60,7 @@ class TimekeeperScheduledExecutor : public ScheduledExecutor {
       Function<std::shared_ptr<Timekeeper>()> getTimekeeper)
       : parent_(std::move(parent)), getTimekeeper_(std::move(getTimekeeper)) {}
 
-  ~TimekeeperScheduledExecutor() {
-    DCHECK(!keepAliveCounter_);
-  }
+  ~TimekeeperScheduledExecutor() { DCHECK(!keepAliveCounter_); }
 
   void run(Func);
 

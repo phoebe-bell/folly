@@ -1,3 +1,17 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 # Generate variables that can be used to help emit a pkg-config file
 # using configure_file().
 #
@@ -78,7 +92,19 @@ function(gen_pkgconfig_vars)
 
   # Set the output variables
   string(REPLACE ";" " " cflags "${cflags}")
-  set("${var_prefix}_CFLAGS" "${cflags}" PARENT_SCOPE)
   string(REPLACE ";" " " private_libs "${private_libs}")
+
+  # Since CMake 3.18 FindThreads may include a generator expression requiring
+  # a target, which gets propagated to us through INTERFACE_COMPILE_OPTIONS.
+  # Before CMake 3.19 there's no way to solve this in a general way, so we
+  # work around the specific case. See #1414 and CMake bug #21074.
+  if(CMAKE_VERSION VERSION_LESS 3.19)
+    string(REPLACE
+      "<COMPILE_LANG_AND_ID:CUDA,NVIDIA>" "<COMPILE_LANGUAGE:CUDA>"
+      cflags "${cflags}"
+    )
+  endif()
+
+  set("${var_prefix}_CFLAGS" "${cflags}" PARENT_SCOPE)
   set("${var_prefix}_PRIVATE_LIBS" "${private_libs}" PARENT_SCOPE)
 endfunction()

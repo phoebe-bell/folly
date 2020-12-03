@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -90,6 +90,46 @@ TEST_F(HHWheelTimerTest, FireOnce) {
   T_CHECK_TIMEOUT(start, t2.timestamps[0], milliseconds(5));
   T_CHECK_TIMEOUT(start, t3.timestamps[0], milliseconds(10));
   T_CHECK_TIMEOUT(start, end, milliseconds(10));
+}
+
+TEST_F(HHWheelTimerTest, NoRequestContextLeak) {
+  StackWheelTimer t(&eventBase, milliseconds(1));
+  std::set<int> destructed;
+
+  class TestData : public RequestData {
+   public:
+    TestData(int data, std::set<int>& destructed)
+        : data_(data), destructed_(destructed) {}
+    ~TestData() override { destructed_.insert(data_); }
+
+    bool hasCallback() override { return false; }
+
+   private:
+    int data_;
+    std::set<int>& destructed_;
+  };
+
+  folly::Optional<TestTimeout> t1 = TestTimeout{};
+  folly::Optional<TestTimeout> t2 = TestTimeout{};
+
+  {
+    RequestContextScopeGuard g;
+    RequestContext::get()->setContextData(
+        "k", std::make_unique<TestData>(1, destructed));
+    t.scheduleTimeout(&*t1, milliseconds(5));
+  }
+
+  {
+    RequestContextScopeGuard g;
+    RequestContext::get()->setContextData(
+        "k", std::make_unique<TestData>(2, destructed));
+    t.scheduleTimeout(&*t2, milliseconds(5));
+  }
+
+  EXPECT_EQ(0, destructed.size());
+  t1.reset();
+  EXPECT_EQ(1, destructed.count(1));
+  EXPECT_EQ(0, destructed.count(2));
 }
 
 /*

@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,13 +19,13 @@
 namespace folly {
 
 template <class T>
-size_t SharedPromise<T>::size() {
+size_t SharedPromise<T>::size() const {
   std::lock_guard<std::mutex> g(mutex_);
   return size_.value;
 }
 
 template <class T>
-SemiFuture<T> SharedPromise<T>::getSemiFuture() {
+SemiFuture<T> SharedPromise<T>::getSemiFuture() const {
   std::lock_guard<std::mutex> g(mutex_);
   size_.value++;
   if (hasResult()) {
@@ -40,7 +40,7 @@ SemiFuture<T> SharedPromise<T>::getSemiFuture() {
 }
 
 template <class T>
-Future<T> SharedPromise<T>::getFuture() {
+Future<T> SharedPromise<T>::getFuture() const {
   return getSemiFuture().via(&InlineExecutor::instance());
 }
 
@@ -72,13 +72,13 @@ void SharedPromise<T>::setInterruptHandler(
 template <class T>
 template <class M>
 void SharedPromise<T>::setValue(M&& v) {
-  setTry(Try<T>(std::forward<M>(v)));
+  setTry(Try<T>(static_cast<M&&>(v)));
 }
 
 template <class T>
 template <class F>
 void SharedPromise<T>::setWith(F&& func) {
-  setTry(makeTryWith(std::forward<F>(func)));
+  setTry(makeTryWith(static_cast<F&&>(func)));
 }
 
 template <class T>
@@ -100,9 +100,14 @@ void SharedPromise<T>::setTry(Try<T>&& t) {
 }
 
 template <class T>
-bool SharedPromise<T>::isFulfilled() {
+bool SharedPromise<T>::isFulfilled() const {
   std::lock_guard<std::mutex> g(mutex_);
   return hasResult();
 }
+
+#if FOLLY_USE_EXTERN_FUTURE_UNIT
+// limited to the instances unconditionally forced by the futures library
+extern template class SharedPromise<Unit>;
+#endif
 
 } // namespace folly

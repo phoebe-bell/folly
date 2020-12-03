@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/fibers/Baton.h>
 
 #include <chrono>
@@ -60,6 +61,8 @@ void Baton::wait(TimeoutHandler& timeoutHandler) {
 void Baton::waitThread() {
   auto waiter = waiter_.load();
 
+  auto waitStart = std::chrono::steady_clock::now();
+
   if (LIKELY(
           waiter == NO_WAITER &&
           waiter_.compare_exchange_strong(waiter, THREAD_WAITING))) {
@@ -69,6 +72,10 @@ void Baton::waitThread() {
       waiter = waiter_.load(std::memory_order_acquire);
     } while (waiter == THREAD_WAITING);
   }
+
+  folly::async_tracing::logBlockingOperation(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - waitStart));
 
   if (LIKELY(waiter == POSTED)) {
     return;
@@ -131,7 +138,7 @@ void Baton::TimeoutHandler::scheduleTimeout(std::chrono::milliseconds timeout) {
   assert(timeoutFunc_ != nullptr);
 
   if (timeout.count() > 0) {
-    fiberManager_->loopController_->timer().scheduleTimeout(this, timeout);
+    fiberManager_->loopController_->timer()->scheduleTimeout(this, timeout);
   }
 }
 

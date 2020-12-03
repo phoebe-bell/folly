@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -23,6 +23,7 @@
 #include <typeinfo>
 #include <utility>
 
+#include <folly/Portability.h>
 #include <folly/Traits.h>
 #include <folly/Utility.h>
 #include <folly/detail/TypeList.h>
@@ -370,9 +371,7 @@ struct Data {
   Data() = default;
   // Suppress compiler-generated copy ops to not copy anything:
   Data(Data const&) {}
-  Data& operator=(Data const&) {
-    return *this;
-  }
+  Data& operator=(Data const&) { return *this; }
   union {
     void* pobj_ = nullptr;
     std::aligned_storage_t<sizeof(double[2])> buff_;
@@ -404,7 +403,7 @@ struct SignatureOf_<R (C::*)(As...) const, I> {
   using type = Ret<R, I> (*)(Data const&, Arg<As, I>...);
 };
 
-#ifdef __cpp_noexcept_function_type
+#if FOLLY_HAVE_NOEXCEPT_FUNCTION_TYPE
 template <class R, class C, class... As, class I>
 struct SignatureOf_<R (C::*)(As...) noexcept, I> {
   using type = std::add_pointer_t<Ret<R, I>(Data&, Arg<As, I>...) noexcept>;
@@ -438,7 +437,7 @@ struct ArgTypes_<User, I, Ret (*)(Data, Args...)> {
   using type = TypeList<Args...>;
 };
 
-#ifdef __cpp_noexcept_function_type
+#if FOLLY_HAVE_NOEXCEPT_FUNCTION_TYPE
 template <FOLLY_AUTO User, class I, class Ret, class Data, class... Args>
 struct ArgTypes_<User, I, Ret (*)(Data, Args...) noexcept> {
   using type = TypeList<Args...>;
@@ -455,9 +454,7 @@ struct ThrowThunk {
   template <class R, class... Args>
   constexpr /* implicit */ operator FnPtr<R, Args...>() const noexcept {
     struct _ {
-      static R call(Args...) {
-        throw_exception<BadPolyAccess>();
-      }
+      static R call(Args...) { throw_exception<BadPolyAccess>(); }
     };
     return &_::call;
   }
@@ -520,6 +517,14 @@ struct IsConstMember<R (C::*)(As...) const> : std::true_type {};
 
 template <class R, class C, class... As>
 struct IsConstMember<R (*)(C const&, As...)> : std::true_type {};
+
+#if FOLLY_HAVE_NOEXCEPT_FUNCTION_TYPE
+template <class R, class C, class... As>
+struct IsConstMember<R (C::*)(As...) const noexcept> : std::true_type {};
+
+template <class R, class C, class... As>
+struct IsConstMember<R (*)(C const&, As...) noexcept> : std::true_type {};
+#endif
 
 template <
     class T,
@@ -849,12 +854,8 @@ struct PolyRoot : private PolyBase, private Data {
   using _polyInterface_ = I;
 
  private:
-  PolyRoot& _polyRoot_() noexcept {
-    return *this;
-  }
-  PolyRoot const& _polyRoot_() const noexcept {
-    return *this;
-  }
+  PolyRoot& _polyRoot_() noexcept { return *this; }
+  PolyRoot const& _polyRoot_() const noexcept { return *this; }
   VTable<std::decay_t<I>> const* vptr_ = vtable<std::decay_t<I>>();
 };
 
@@ -900,9 +901,7 @@ struct SigImpl : Sig<R(As...) const> {
   constexpr Fun T::*operator()(Fun T::*t) const noexcept {
     return t;
   }
-  constexpr Fun* operator()(Fun* t) const noexcept {
-    return t;
-  }
+  constexpr Fun* operator()(Fun* t) const noexcept { return t; }
   template <class F>
   constexpr F* operator()(F* t) const noexcept {
     return t;

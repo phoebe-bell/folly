@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -125,13 +125,9 @@ struct NontrivialType {
   static int ctored;
   explicit NontrivialType() : a(0) {}
 
-  /* implicit */ NontrivialType(int a_) : a(a_) {
-    ++ctored;
-  }
+  /* implicit */ NontrivialType(int a_) : a(a_) { ++ctored; }
 
-  NontrivialType(NontrivialType const& /* s */) {
-    ++ctored;
-  }
+  NontrivialType(NontrivialType const& /* s */) { ++ctored; }
 
   NontrivialType& operator=(NontrivialType const& o) {
     a = o.a;
@@ -192,20 +188,12 @@ int Thrower::alive = 0;
 // construction.
 struct NoncopyableCounter {
   static int alive;
-  NoncopyableCounter() {
-    ++alive;
-  }
-  ~NoncopyableCounter() {
-    --alive;
-  }
-  NoncopyableCounter(NoncopyableCounter&&) noexcept {
-    ++alive;
-  }
+  NoncopyableCounter() { ++alive; }
+  ~NoncopyableCounter() { --alive; }
+  NoncopyableCounter(NoncopyableCounter&&) noexcept { ++alive; }
   NoncopyableCounter(NoncopyableCounter const&) = delete;
   NoncopyableCounter& operator=(NoncopyableCounter const&) const = delete;
-  NoncopyableCounter& operator=(NoncopyableCounter&&) {
-    return *this;
-  }
+  NoncopyableCounter& operator=(NoncopyableCounter&&) { return *this; }
 };
 int NoncopyableCounter::alive = 0;
 
@@ -228,9 +216,7 @@ struct TestBasicGuarantee {
     }
   }
 
-  ~TestBasicGuarantee() {
-    throwCounter = 1000;
-  }
+  ~TestBasicGuarantee() { throwCounter = 1000; }
 
   template <class Operation>
   void operator()(int insertCount, Operation const& op) {
@@ -363,7 +349,7 @@ TEST(small_vector, InsertNontrivial) {
   class TestClass {
    public:
     // explicit TestClass() = default;
-    explicit TestClass(std::string s) : s(s) {}
+    explicit TestClass(std::string s_) : s(s_) {}
     std::string s;
   };
   folly::small_vector<TestClass> v3(5, TestClass("asd"));
@@ -374,6 +360,16 @@ TEST(small_vector, InsertNontrivial) {
   EXPECT_EQ(v3[1].s, "wat");
   EXPECT_EQ(v3[10].s, "wat");
   EXPECT_EQ(v3[11].s, "asd");
+}
+
+TEST(small_vecctor, InsertFromBidirectionalList) {
+  folly::small_vector<std::string> v(6, "asd");
+  std::list<std::string> l(6, "wat");
+  v.insert(v.end(), l.begin(), l.end());
+  EXPECT_EQ(v[0], "asd");
+  EXPECT_EQ(v[5], "asd");
+  EXPECT_EQ(v[6], "wat");
+  EXPECT_EQ(v[11], "wat");
 }
 
 TEST(small_vector, Swap) {
@@ -656,9 +652,7 @@ TEST(small_vector, AllHeap) {
     double a, b, c, d, e;
     int val;
     SomeObj(int val_) : val(val_) {}
-    bool operator==(SomeObj const& o) const {
-      return o.val == val;
-    }
+    bool operator==(SomeObj const& o) const { return o.val == val; }
   };
 
   folly::small_vector<SomeObj, 0> vec = {1};
@@ -1162,6 +1156,20 @@ TEST(small_vector, SelfCopyAssignmentForVectorOfPair) {
   test = static_cast<decltype(test)&>(test); // suppress self-assign warning
   EXPECT_EQ(test.size(), 1);
   EXPECT_EQ(test[0].first, 13);
+}
+
+namespace {
+struct NonAssignableType {
+  int const i_{};
+};
+} // namespace
+
+TEST(small_vector, PopBackNonAssignableType) {
+  small_vector<NonAssignableType> v;
+  v.emplace_back();
+  EXPECT_EQ(1, v.size());
+  v.pop_back();
+  EXPECT_EQ(0, v.size());
 }
 
 TEST(small_vector, erase) {

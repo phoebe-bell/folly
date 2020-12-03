@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,13 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
+#include <Python.h>
 #include <folly/ExceptionString.h>
 #include <folly/Function.h>
 #include <folly/executors/DrivableExecutor.h>
 #include <folly/executors/SequencedExecutor.h>
 #include <folly/io/async/NotificationQueue.h>
+
+#if PY_VERSION_HEX <= 0x03070000
+#define FOLLY_DETAIL_PY_ISFINALIZING() false
+#else
+#define FOLLY_DETAIL_PY_ISFINALIZING() _Py_IsFinalizing()
+#endif
 
 namespace folly {
 namespace python {
@@ -35,16 +43,17 @@ class AsyncioExecutor : public DrivableExecutor, public SequencedExecutor {
     }
   }
 
-  void add(Func func) override {
-    queue_.putMessage(std::move(func));
-  }
+  void add(Func func) override { queue_.putMessage(std::move(func)); }
 
-  int fileno() const {
-    return consumer_.getFd();
-  }
+  int fileno() const { return consumer_.getFd(); }
 
   void drive() noexcept override {
     consumer_.consumeUntilDrained([](Func&& func) {
+      if (FOLLY_DETAIL_PY_ISFINALIZING()) {
+        // if Python is finalizing calling scheduled functions MAY segfault.
+        // any code that could have been called is now inconsequential.
+        return;
+      }
       try {
         func();
       } catch (...) {
@@ -56,7 +65,7 @@ class AsyncioExecutor : public DrivableExecutor, public SequencedExecutor {
   }
 
  protected:
-  bool keepAliveAcquire() override {
+  bool keepAliveAcquire() noexcept override {
     auto keepAliveCounter =
         keepAliveCounter_.fetch_add(1, std::memory_order_relaxed);
     // We should never increment from 0
@@ -64,7 +73,7 @@ class AsyncioExecutor : public DrivableExecutor, public SequencedExecutor {
     return true;
   }
 
-  void keepAliveRelease() override {
+  void keepAliveRelease() noexcept override {
     auto keepAliveCounter = --keepAliveCounter_;
     DCHECK(keepAliveCounter >= 0);
   }

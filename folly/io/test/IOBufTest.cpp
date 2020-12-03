@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -26,7 +26,6 @@
 
 using folly::ByteRange;
 using folly::fbstring;
-using folly::fbvector;
 using folly::IOBuf;
 using folly::ordering;
 using folly::StringPiece;
@@ -74,24 +73,24 @@ TEST(IOBuf, Simple) {
 }
 
 void testAllocSize(uint32_t requestedCapacity) {
+  auto expectedSize = IOBuf::goodSize(requestedCapacity);
   unique_ptr<IOBuf> iobuf(IOBuf::create(requestedCapacity));
   EXPECT_GE(iobuf->capacity(), requestedCapacity);
+  EXPECT_EQ(iobuf->capacity(), expectedSize);
 }
 
 TEST(IOBuf, AllocSizes) {
-  // Try with a small allocation size that should fit in the internal buffer
-  testAllocSize(28);
+  // cover small evil values exhaustively, including the
+  // kDefaultCombinedBufSize transition.
+  for (uint32_t i = 0; i < 1234; i++) {
+    testAllocSize(i);
+  }
 
-  // Try with a large allocation size that will require an external buffer.
+  // Try with large allocation sizes that will require an external buffer.
   testAllocSize(9000);
-
-  // 220 bytes is currently the cutoff
-  // (It would be nice to use the IOBuf::kMaxInternalDataSize constant,
-  // but it's private and it doesn't seem worth making it public just for this
-  // test code.)
-  testAllocSize(220);
-  testAllocSize(219);
-  testAllocSize(221);
+  testAllocSize(1048575);
+  testAllocSize(1048576);
+  testAllocSize(1048577);
 }
 
 void deleteArrayBuffer(void* buf, void* arg) {
@@ -797,9 +796,7 @@ int customDeleterCount = 0;
 int destructorCount = 0;
 struct OwnershipTestClass {
   explicit OwnershipTestClass(int v = 0) : val(v) {}
-  ~OwnershipTestClass() {
-    ++destructorCount;
-  }
+  ~OwnershipTestClass() { ++destructorCount; }
   int val;
 };
 
@@ -1536,6 +1533,24 @@ TEST(IOBuf, CloneCoalescedChain) {
   EXPECT_EQ(b->computeChainDataLength(), c.length()); // Same length
   gen.seed(fillSeed);
   checkBuf(&c, gen); // Same contents
+
+  auto newHeadroom = b->headroom() + 10;
+  auto newTailroom = b->tailroom();
+  c = b->cloneCoalescedAsValueWithHeadroomTailroom(newHeadroom, newTailroom);
+  EXPECT_FALSE(c.isChained()); // Not chained
+  EXPECT_GE(c.headroom(), newHeadroom);
+  EXPECT_GE(c.tailroom(), newTailroom);
+  gen.seed(fillSeed);
+  checkBuf(&c, gen); // Same contents
+
+  newHeadroom = b->headroom();
+  newTailroom = b->tailroom() + 10;
+  c = b->cloneCoalescedAsValueWithHeadroomTailroom(newHeadroom, newTailroom);
+  EXPECT_FALSE(c.isChained()); // Not chained
+  EXPECT_GE(c.headroom(), newHeadroom);
+  EXPECT_GE(c.tailroom(), newTailroom);
+  gen.seed(fillSeed);
+  checkBuf(&c, gen); // Same contents
 }
 
 TEST(IOBuf, CloneCoalescedSingle) {
@@ -1553,6 +1568,24 @@ TEST(IOBuf, CloneCoalescedSingle) {
   EXPECT_EQ(b->capacity(), c->capacity());
   EXPECT_EQ(b->data(), c->data());
   EXPECT_EQ(b->length(), c->length());
+
+  auto newHeadroom = b->headroom() + 10;
+  auto newTailroom = b->tailroom();
+  c = b->cloneCoalescedWithHeadroomTailroom(newHeadroom, newTailroom);
+  EXPECT_FALSE(c->isChained()); // Not chained
+  EXPECT_EQ(
+      ByteRange(c->data(), c->length()), ByteRange(b->data(), b->length()));
+  EXPECT_GE(c->headroom(), newHeadroom);
+  EXPECT_GE(c->tailroom(), newTailroom);
+
+  newHeadroom = b->headroom();
+  newTailroom = b->tailroom() + 10;
+  c = b->cloneCoalescedWithHeadroomTailroom(newHeadroom, newTailroom);
+  EXPECT_FALSE(c->isChained()); // Not chained
+  EXPECT_EQ(
+      ByteRange(c->data(), c->length()), ByteRange(b->data(), b->length()));
+  EXPECT_GE(c->headroom(), newHeadroom);
+  EXPECT_GE(c->tailroom(), newTailroom);
 }
 
 TEST(IOBuf, fillIov) {
@@ -1612,12 +1645,8 @@ TEST(IOBuf, FreeFn) {
     explicit IOBufFreeObserver(Func&& freeFunc, Func&& releaseFunc)
         : freeFunc_(std::move(freeFunc)),
           releaseFunc_(std::move(releaseFunc)) {}
-    void afterFreeExtBuffer() const noexcept {
-      freeFunc_();
-    }
-    void afterReleaseExtBuffer() const noexcept {
-      releaseFunc_();
-    }
+    void afterFreeExtBuffer() const noexcept { freeFunc_(); }
+    void afterReleaseExtBuffer() const noexcept { releaseFunc_(); }
 
    private:
     Func freeFunc_;

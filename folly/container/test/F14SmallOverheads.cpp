@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -46,12 +46,8 @@ struct LoggingAlloc {
     std::allocator<T>{}.deallocate(ptr, n);
   }
 
-  bool operator==(LoggingAlloc<T> const&) const {
-    return true;
-  }
-  bool operator!=(LoggingAlloc<T> const&) const {
-    return false;
-  }
+  bool operator==(LoggingAlloc<T> const&) const { return true; }
+  bool operator!=(LoggingAlloc<T> const&) const { return false; }
 
   // Everything below here is optional when properly using
   // allocator_traits, but dense_hash_map doesn't use allocator_traits yet
@@ -68,12 +64,8 @@ struct LoggingAlloc {
     using other = LoggingAlloc<U>;
   };
 
-  T* address(T& v) const {
-    return &v;
-  }
-  T const* address(T const& v) const {
-    return &v;
-  }
+  T* address(T& v) const { return &v; }
+  T const* address(T const& v) const { return &v; }
   std::size_t max_size() const {
     return std::numeric_limits<std::size_t>::max();
   }

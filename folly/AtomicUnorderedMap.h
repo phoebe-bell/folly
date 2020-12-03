@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -186,9 +186,7 @@ struct AtomicUnorderedInsertMap {
     bool operator==(const ConstIterator& rhs) const {
       return slot_ == rhs.slot_;
     }
-    bool operator!=(const ConstIterator& rhs) const {
-      return !(*this == rhs);
-    }
+    bool operator!=(const ConstIterator& rhs) const { return !(*this == rhs); }
 
    private:
     const AtomicUnorderedInsertMap& owner_;
@@ -328,9 +326,7 @@ struct AtomicUnorderedInsertMap {
     return ConstIterator(*this, slot);
   }
 
-  const_iterator cend() const {
-    return ConstIterator(*this, 0);
-  }
+  const_iterator cend() const { return ConstIterator(*this, 0); }
 
  private:
   enum : IndexType {

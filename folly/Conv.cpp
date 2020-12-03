@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/Conv.h>
 #include <array>
 
@@ -275,7 +276,7 @@ Expected<bool, ConversionCode> str_to_bool(StringPiece* src) noexcept {
   }
 
   bool result;
-  size_t len = size_t(e - b);
+  auto len = size_t(e - b);
   switch (*b) {
     case '0':
     case '1': {
@@ -396,17 +397,21 @@ Expected<Tgt, ConversionCode> str_to_floating(StringPiece* src) noexcept {
   auto* e = src->end();
   auto* b =
       std::find_if_not(src->begin(), e, [](char c) { return std::isspace(c); });
-
-  // There must be non-whitespace, otherwise we would have caught this above
-  assert(b < e);
-  size_t size = size_t(e - b);
+  if (b == e) {
+    return makeUnexpected(ConversionCode::EMPTY_INPUT_STRING);
+  }
+  auto size = size_t(e - b);
 
   bool negative = false;
   if (*b == '-') {
     negative = true;
     ++b;
     --size;
+    if (size == 0) {
+      return makeUnexpected(ConversionCode::STRING_TO_FLOAT_ERROR);
+    }
   }
+  assert(size > 0);
 
   result = 0.0;
 
@@ -488,7 +493,14 @@ class SignedValueHandler<T, true> {
   Expected<T, ConversionCode> finalize(U value) {
     T rv;
     if (negative_) {
+      FOLLY_PUSH_WARNING
+      FOLLY_MSVC_DISABLE_WARNING(4146)
+
+      // unary minus operator applied to unsigned type, result still unsigned
       rv = T(-value);
+
+      FOLLY_POP_WARNING
+
       if (UNLIKELY(rv > 0)) {
         return makeUnexpected(ConversionCode::NEGATIVE_OVERFLOW);
       }
@@ -509,17 +521,11 @@ class SignedValueHandler<T, true> {
 template <typename T>
 class SignedValueHandler<T, false> {
  public:
-  ConversionCode init(const char*&) {
-    return ConversionCode::SUCCESS;
-  }
+  ConversionCode init(const char*&) { return ConversionCode::SUCCESS; }
 
-  ConversionCode overflow() {
-    return ConversionCode::POSITIVE_OVERFLOW;
-  }
+  ConversionCode overflow() { return ConversionCode::POSITIVE_OVERFLOW; }
 
-  Expected<T, ConversionCode> finalize(T value) {
-    return value;
-  }
+  Expected<T, ConversionCode> finalize(T value) { return value; }
 };
 
 /**
@@ -543,7 +549,7 @@ inline Expected<Tgt, ConversionCode> digits_to(
     return makeUnexpected(err);
   }
 
-  size_t size = size_t(e - b);
+  auto size = size_t(e - b);
 
   /* Although the string is entirely made of digits, we still need to
    * check for overflow.
@@ -574,7 +580,7 @@ inline Expected<Tgt, ConversionCode> digits_to(
   UT result = 0;
 
   for (; e - b >= 4; b += 4) {
-    result *= static_cast<UT>(10000);
+    result *= UT(10000);
     const int32_t r0 = shift1000[static_cast<size_t>(b[0])];
     const int32_t r1 = shift100[static_cast<size_t>(b[1])];
     const int32_t r2 = shift10[static_cast<size_t>(b[2])];
@@ -777,7 +783,7 @@ ConversionError makeConversionError(ConversionCode code, StringPiece input) {
   if (err.quote) {
     tmp.append(1, '"');
   }
-  if (input.size() > 0) {
+  if (!input.empty()) {
     tmp.append(input.data(), input.size());
   }
   if (err.quote) {

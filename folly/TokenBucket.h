@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -98,17 +98,14 @@ class BasicDynamicTokenBucket {
    *                 starting to fill. Defaults to 0, so by default token
    *                 bucket is reset to "full".
    */
-  void reset(double zeroTime = 0) noexcept {
-    zeroTime_ = zeroTime;
-  }
+  void reset(double zeroTime = 0) noexcept { zeroTime_ = zeroTime; }
 
   /**
    * Returns the current time in seconds since Epoch.
    */
   static double defaultClockNow() noexcept {
-    using dur = std::chrono::duration<double>;
     auto const now = Clock::now().time_since_epoch();
-    return std::chrono::duration_cast<dur>(now).count();
+    return std::chrono::duration<double>(now).count();
   }
 
   /**
@@ -494,18 +491,14 @@ class BasicTokenBucket {
    *
    * Thread-safe (but returned value may immediately be outdated).
    */
-  double rate() const noexcept {
-    return rate_;
-  }
+  double rate() const noexcept { return rate_; }
 
   /**
    * Returns the maximum burst size.
    *
    * Thread-safe (but returned value may immediately be outdated).
    */
-  double burst() const noexcept {
-    return burstSize_;
-  }
+  double burst() const noexcept { return burstSize_; }
 
  private:
   Impl tokenBucket_;

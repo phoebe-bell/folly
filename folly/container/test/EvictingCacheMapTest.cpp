@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -309,9 +309,7 @@ TEST(EvictingCacheMap, SetClearSize) {
 TEST(EvictingCacheMap, DestructorInvocationTest) {
   struct SumInt {
     SumInt(int val_, int* ref_) : val(val_), ref(ref_) {}
-    ~SumInt() {
-      *ref += val;
-    }
+    ~SumInt() { *ref += val; }
 
     SumInt(SumInt const&) = delete;
     SumInt& operator=(SumInt const&) = delete;
@@ -683,9 +681,7 @@ TEST(EvictingCacheMap, CustomKeyEqual) {
     int mod;
   };
   struct Hash {
-    size_t operator()(const int& a) const {
-      return std::hash<int>()(a % mod);
-    }
+    size_t operator()(const int& a) const { return std::hash<int>()(a % mod); }
     int mod;
   };
   EvictingCacheMap<int, int, Hash, Eq> map(

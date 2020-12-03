@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -37,9 +37,7 @@ class BitReference {
  public:
   BitReference(Ref r, size_t bit) : ref_(r), bit_(bit) {}
 
-  /* implicit */ operator bool() const {
-    return ref_ & (one_ << bit_);
-  }
+  /* implicit */ operator bool() const { return ref_ & (one_ << bit_); }
 
   BitReference& operator=(bool b) {
     if (b) {
@@ -50,17 +48,11 @@ class BitReference {
     return *this;
   }
 
-  void set() {
-    ref_ |= (one_ << bit_);
-  }
+  void set() { ref_ |= (one_ << bit_); }
 
-  void clear() {
-    ref_ &= ~(one_ << bit_);
-  }
+  void clear() { ref_ &= ~(one_ << bit_); }
 
-  void flip() {
-    ref_ ^= (one_ << bit_);
-  }
+  void flip() { ref_ ^= (one_ << bit_); }
 
  private:
   // shortcut to avoid writing static_cast everywhere

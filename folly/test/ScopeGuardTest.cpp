@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -36,9 +36,7 @@ class MyFunctor {
  public:
   explicit MyFunctor(int* ptr) : ptr_(ptr) {}
 
-  void operator()() {
-    ++*ptr_;
-  }
+  void operator()() { ++*ptr_; }
 
  private:
   int* ptr_;
@@ -231,9 +229,7 @@ TEST(ScopeGuard, TryCatchFinally) {
 TEST(ScopeGuard, TEST_SCOPE_EXIT) {
   int x = 0;
   {
-    SCOPE_EXIT {
-      ++x;
-    };
+    SCOPE_EXIT { ++x; };
     EXPECT_EQ(0, x);
   }
   EXPECT_EQ(1, x);
@@ -247,9 +243,7 @@ class Foo {
       auto e = std::current_exception();
       int test = 0;
       {
-        SCOPE_EXIT {
-          ++test;
-        };
+        SCOPE_EXIT { ++test; };
         EXPECT_EQ(0, test);
       }
       EXPECT_EQ(1, test);
@@ -272,12 +266,8 @@ void testScopeFailAndScopeSuccess(ErrorBehavior error, bool expectFail) {
   bool scopeSuccessExecuted = false;
 
   try {
-    SCOPE_FAIL {
-      scopeFailExecuted = true;
-    };
-    SCOPE_SUCCESS {
-      scopeSuccessExecuted = true;
-    };
+    SCOPE_FAIL { scopeFailExecuted = true; };
+    SCOPE_SUCCESS { scopeSuccessExecuted = true; };
 
     try {
       if (error == ErrorBehavior::HANDLED_ERROR) {
@@ -300,9 +290,7 @@ TEST(ScopeGuard, TEST_SCOPE_FAIL_EXCEPTION_PTR) {
   bool failExecuted = false;
 
   try {
-    SCOPE_FAIL {
-      failExecuted = true;
-    };
+    SCOPE_FAIL { failExecuted = true; };
 
     std::exception_ptr ep;
     try {
@@ -311,7 +299,7 @@ TEST(ScopeGuard, TEST_SCOPE_FAIL_EXCEPTION_PTR) {
       ep = std::current_exception();
     }
     std::rethrow_exception(ep);
-  } catch (const std::exception& ex) {
+  } catch (const std::exception&) {
     catchExecuted = true;
   }
 
@@ -327,9 +315,7 @@ TEST(ScopeGuard, TEST_SCOPE_FAIL_AND_SCOPE_SUCCESS) {
 
 TEST(ScopeGuard, TEST_SCOPE_SUCCESS_THROW) {
   auto lambda = []() {
-    SCOPE_SUCCESS {
-      throw std::runtime_error("ehm");
-    };
+    SCOPE_SUCCESS { throw std::runtime_error("ehm"); };
   };
   EXPECT_THROW(lambda(), std::runtime_error);
 }
@@ -344,9 +330,7 @@ TEST(ScopeGuard, TEST_THROWING_CLEANUP_ACTION) {
       throw std::runtime_error("whoa");
     }
     // clang-format on
-    void operator()() {
-      ++scopeExitExecuted_;
-    }
+    void operator()() { ++scopeExitExecuted_; }
 
    private:
     int& scopeExitExecuted_;

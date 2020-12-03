@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -60,6 +60,14 @@
   (OPENSSL_VERSION_NUMBER >= 0x1000200fL && \
    OPENSSL_VERSION_NUMBER < 0x10100000L)
 #define FOLLY_OPENSSL_IS_110 (OPENSSL_VERSION_NUMBER >= 0x10100000L)
+
+// Defined according to version number description in
+// https://www.openssl.org/docs/man1.1.1/man3/OPENSSL_VERSION_NUMBER.html
+// ie. (nibbles) MNNFFPPS: major minor fix patch status
+#define FOLLY_OPENSSL_CALCULATE_VERSION(major, minor, fix) \
+  (((major << 28) | ((minor << 20) | (fix << 12))))
+#define FOLLY_OPENSSL_PREREQ(major, minor, fix) \
+  (OPENSSL_VERSION_NUMBER >= FOLLY_OPENSSL_CALCULATE_VERSION(major, minor, fix))
 #endif
 
 #if !defined(OPENSSL_IS_BORINGSSL) && !FOLLY_OPENSSL_IS_100 && \

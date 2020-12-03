@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -41,22 +41,12 @@ class Err {
   Err& operator=(Err const&) = default;
   Err& operator=(Err&&) = default;
 
-  friend bool operator==(Err a, Err b) {
-    return a.type_ == b.type_;
-  }
-  friend bool operator!=(Err a, Err b) {
-    return a.type_ != b.type_;
-  }
+  friend bool operator==(Err a, Err b) { return a.type_ == b.type_; }
+  friend bool operator!=(Err a, Err b) { return a.type_ != b.type_; }
 
-  static constexpr Err bad() {
-    return Type::Bad;
-  }
-  static constexpr Err badder() {
-    return Type::Badder;
-  }
-  static constexpr Err baddest() {
-    return Type::Baddest;
-  }
+  static constexpr Err bad() { return Type::Bad; }
+  static constexpr Err badder() { return Type::Badder; }
+  static constexpr Err baddest() { return Type::Baddest; }
 };
 
 Expected<int, Err> f1() {
@@ -109,7 +99,9 @@ TEST(Expected, CoroutineFailure) {
     co_return z;
   }();
   EXPECT_TRUE(r1.hasError());
+  EXPECT_NE(Err::bad(), r1.error());
   EXPECT_EQ(Err::badder(), r1.error());
+  EXPECT_NE(Err::baddest(), r1.error());
 }
 
 TEST(Expected, CoroutineException) {
@@ -126,9 +118,7 @@ TEST(Expected, CoroutineException) {
 TEST(Expected, CoroutineCleanedUp) {
   int count_dest = 0;
   auto r = [&]() -> Expected<int, Err> {
-    SCOPE_EXIT {
-      ++count_dest;
-    };
+    SCOPE_EXIT { ++count_dest; };
     auto x = co_await Expected<int, Err>(makeUnexpected(Err::badder()));
     ADD_FAILURE() << "Should not be resuming";
     co_return x;

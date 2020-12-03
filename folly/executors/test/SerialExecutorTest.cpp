@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -40,12 +40,8 @@ void simpleTest(std::shared_ptr<folly::Executor> const& parent) {
       return typeid(SerialExecutorContextData).name();
     }
     explicit SerialExecutorContextData(int id) : id_(id) {}
-    bool hasCallback() override {
-      return false;
-    }
-    int getId() const {
-      return id_;
-    }
+    bool hasCallback() override { return false; }
+    int getId() const { return id_; }
 
    private:
     const int id_;

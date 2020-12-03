@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,8 +21,31 @@
 #include <string>
 
 #include <folly/Portability.h>
+#include <folly/lang/Keep.h>
 #include <folly/lang/Pretty.h>
 #include <folly/portability/GTest.h>
+
+namespace folly {
+namespace exception_test {
+
+template <typename... T>
+FOLLY_ATTR_WEAK FOLLY_NOINLINE void sink(T&&...) {}
+
+} // namespace exception_test
+} // namespace folly
+
+extern "C" FOLLY_KEEP void check_cond_std_terminate(bool c) {
+  if (c) {
+    std::terminate();
+  }
+  folly::exception_test::sink();
+}
+extern "C" FOLLY_KEEP void check_cond_folly_terminate_with(bool c) {
+  if (c) {
+    folly::terminate_with<std::runtime_error>("bad error");
+  }
+  folly::exception_test::sink();
+}
 
 template <typename Ex>
 static std::string message_for_terminate_with(std::string const& what) {
@@ -55,9 +78,7 @@ class MyException : public std::exception {
   MyException(char const* const what, std::size_t const strip)
       : what_(what + strip) {}
 
-  char const* what() const noexcept override {
-    return what_;
-  }
+  char const* what() const noexcept override { return what_; }
 };
 
 class ExceptionTest : public testing::Test {};
@@ -114,4 +135,16 @@ TEST_F(ExceptionTest, catch_exception) {
   EXPECT_EQ(3, folly::catch_exception<int>(returner(3), identity));
   EXPECT_EQ(4, folly::catch_exception(thrower(3), returner(4)));
   EXPECT_EQ(3, folly::catch_exception<int>(thrower(3), identity));
+}
+
+TEST_F(ExceptionTest, rethrow_current_exception) {
+  EXPECT_THROW(
+      folly::invoke_noreturn_cold([] {
+        try {
+          throw std::runtime_error("bad");
+        } catch (...) {
+          folly::rethrow_current_exception();
+        }
+      }),
+      std::runtime_error);
 }

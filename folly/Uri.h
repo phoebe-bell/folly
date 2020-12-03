@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -47,22 +47,14 @@ class Uri {
    */
   explicit Uri(StringPiece str);
 
-  const std::string& scheme() const {
-    return scheme_;
-  }
-  const std::string& username() const {
-    return username_;
-  }
-  const std::string& password() const {
-    return password_;
-  }
+  const std::string& scheme() const { return scheme_; }
+  const std::string& username() const { return username_; }
+  const std::string& password() const { return password_; }
   /**
    * Get host part of URI. If host is an IPv6 address, square brackets will be
    * returned, for example: "[::1]".
    */
-  const std::string& host() const {
-    return host_;
-  }
+  const std::string& host() const { return host_; }
   /**
    * Get host part of URI. If host is an IPv6 address, square brackets will not
    * be returned, for exmaple "::1"; otherwise it returns the same thing as
@@ -73,30 +65,18 @@ class Uri {
    * IPv6 host without square brackets
    */
   std::string hostname() const;
-  uint16_t port() const {
-    return port_;
-  }
-  const std::string& path() const {
-    return path_;
-  }
-  const std::string& query() const {
-    return query_;
-  }
-  const std::string& fragment() const {
-    return fragment_;
-  }
+  uint16_t port() const { return port_; }
+  const std::string& path() const { return path_; }
+  const std::string& query() const { return query_; }
+  const std::string& fragment() const { return fragment_; }
 
   std::string authority() const;
 
   template <class String>
   String toString() const;
 
-  std::string str() const {
-    return toString<std::string>();
-  }
-  fbstring fbstr() const {
-    return toString<fbstring>();
-  }
+  std::string str() const { return toString<std::string>(); }
+  fbstring fbstr() const { return toString<fbstring>(); }
 
   void setPort(uint16_t port) {
     hasAuthority_ = true;

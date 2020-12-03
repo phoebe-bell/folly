@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 /*
  *
  * Author: Eric Niebler <eniebler@fb.com>
@@ -57,6 +58,41 @@ template <class Ret>
 struct exception_wrapper::arg_type_<Ret (*)(...)> {
   using type = AnyException;
 };
+
+#ifdef FOLLY_HAVE_NOEXCEPT_FUNCTION_TYPE
+template <class Ret, class Class, class Arg>
+struct exception_wrapper::arg_type_<Ret (Class::*)(Arg) noexcept> {
+  using type = Arg;
+};
+template <class Ret, class Class, class Arg>
+struct exception_wrapper::arg_type_<Ret (Class::*)(Arg) const noexcept> {
+  using type = Arg;
+};
+template <class Ret, class Arg>
+struct exception_wrapper::arg_type_<Ret(Arg) noexcept> {
+  using type = Arg;
+};
+template <class Ret, class Arg>
+struct exception_wrapper::arg_type_<Ret (*)(Arg) noexcept> {
+  using type = Arg;
+};
+template <class Ret, class Class>
+struct exception_wrapper::arg_type_<Ret (Class::*)(...) noexcept> {
+  using type = AnyException;
+};
+template <class Ret, class Class>
+struct exception_wrapper::arg_type_<Ret (Class::*)(...) const noexcept> {
+  using type = AnyException;
+};
+template <class Ret>
+struct exception_wrapper::arg_type_<Ret(...) noexcept> {
+  using type = AnyException;
+};
+template <class Ret>
+struct exception_wrapper::arg_type_<Ret (*)(...) noexcept> {
+  using type = AnyException;
+};
+#endif
 
 template <class Ret, class... Args>
 inline Ret exception_wrapper::noop_(Args...) {
@@ -201,7 +237,7 @@ inline void exception_wrapper::InPlace<Ex>::delete_(exception_wrapper* that) {
 template <class Ex>
 [[noreturn]] inline void exception_wrapper::InPlace<Ex>::throw_(
     exception_wrapper const* that) {
-  throw that->buff_.as<Ex>(); // @nolint
+  throw that->buff_.as<Ex>();
 }
 template <class Ex>
 inline std::type_info const* exception_wrapper::InPlace<Ex>::type_(
@@ -226,7 +262,7 @@ inline exception_wrapper exception_wrapper::InPlace<Ex>::get_exception_ptr_(
 template <class Ex>
 [[noreturn]] inline void exception_wrapper::SharedPtr::Impl<Ex>::throw_()
     const {
-  throw ex_; // @nolint
+  throw ex_;
 }
 template <class Ex>
 inline std::exception const*
@@ -424,10 +460,12 @@ inline Ex const* exception_wrapper::get_exception() const noexcept {
   return object;
 }
 
-inline std::exception_ptr const&
-exception_wrapper::to_exception_ptr() noexcept {
-  // Computing an exception_ptr is expensive so cache the result.
-  return (*this = vptr_->get_exception_ptr_(this)).eptr_.ptr_;
+inline std::exception_ptr exception_wrapper::to_exception_ptr() noexcept {
+  if (*this) {
+    // Computing an exception_ptr is expensive so cache the result.
+    return (*this = vptr_->get_exception_ptr_(this)).eptr_.ptr_;
+  }
+  return {};
 }
 inline std::exception_ptr exception_wrapper::to_exception_ptr() const noexcept {
   return vptr_->get_exception_ptr_(this).eptr_.ptr_;
@@ -618,9 +656,7 @@ namespace exception_wrapper_detail {
 template <class Ex, class Fn>
 struct catch_fn {
   Fn fn_;
-  auto operator()(Ex& ex) {
-    return fn_(ex);
-  }
+  auto operator()(Ex& ex) { return fn_(ex); }
 };
 
 template <class Ex, class Fn>

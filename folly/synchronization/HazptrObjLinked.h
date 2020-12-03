@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/synchronization/Hazptr-fwd.h>
@@ -54,13 +55,9 @@ class hazptr_root {
     }
   }
 
-  const Atom<T*>& operator()() const noexcept {
-    return link_;
-  }
+  const Atom<T*>& operator()() const noexcept { return link_; }
 
-  Atom<T*>& operator()() noexcept {
-    return link_;
-  }
+  Atom<T*>& operator()() noexcept { return link_; }
 }; // hazptr_root
 
 /**
@@ -99,21 +96,13 @@ class hazptr_obj_linked : public hazptr_obj<Atom> {
   Atom<Count> count_{0};
 
  public:
-  void acquire_link() noexcept {
-    count_inc(kLink);
-  }
+  void acquire_link() noexcept { count_inc(kLink); }
 
-  void acquire_link_safe() noexcept {
-    count_inc_safe(kLink);
-  }
+  void acquire_link_safe() noexcept { count_inc_safe(kLink); }
 
-  void acquire_ref() noexcept {
-    count_inc(kRef);
-  }
+  void acquire_ref() noexcept { count_inc(kRef); }
 
-  void acquire_ref_safe() noexcept {
-    count_inc_safe(kRef);
-  }
+  void acquire_ref_safe() noexcept { count_inc_safe(kRef); }
 
  private:
   template <typename, template <typename> class, typename>

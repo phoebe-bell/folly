@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -64,13 +64,9 @@ class AtomicIntrusiveLinkedList {
   /**
    * Note: list must be empty on destruction.
    */
-  ~AtomicIntrusiveLinkedList() {
-    assert(empty());
-  }
+  ~AtomicIntrusiveLinkedList() { assert(empty()); }
 
-  bool empty() const {
-    return head_.load() == nullptr;
-  }
+  bool empty() const { return head_.load() == nullptr; }
 
   /**
    * Atomically insert t at the head of the list.
@@ -145,9 +141,7 @@ class AtomicIntrusiveLinkedList {
  private:
   std::atomic<T*> head_{nullptr};
 
-  static T*& next(T* t) {
-    return (t->*HookMember).next;
-  }
+  static T*& next(T* t) { return (t->*HookMember).next; }
 
   /* Reverses a linked list, returning the pointer to the new head
      (old tail) */

@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,15 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-/*
- *  Copyright (c) 2015, Facebook, Inc.
- *  All rights reserved.
- *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
- */
+
 #pragma once
 
 #include <folly/CPortability.h>
@@ -207,9 +199,7 @@ struct FOLLY_EXPORT DynamicParserParseError : public std::runtime_error {
    * or:
    *   {"nested": {"key1": {"key_errors": {"key3": "err"}, "value": 7}}}
    */
-  const folly::dynamic& error() const {
-    return error_;
-  }
+  const folly::dynamic& error() const { return error_; }
 
  private:
   folly::dynamic error_;
@@ -247,9 +237,7 @@ class DynamicParser {
    * May NOT be called if the parse threw any kind of exception.  Returns an
    * empty object for successful OnError::THROW parsers.
    */
-  folly::dynamic releaseErrors() {
-    return stack_.releaseErrors();
-  }
+  folly::dynamic releaseErrors() { return stack_.releaseErrors(); }
 
   /**
    * Error-wraps fn(auto-converted key & value) if d[key] is set. The
@@ -280,16 +268,12 @@ class DynamicParser {
    * The key currently being parsed (integer if inside an array). Throws if
    * called outside of a parser callback.
    */
-  inline const folly::dynamic& key() const {
-    return stack_.key();
-  }
+  inline const folly::dynamic& key() const { return stack_.key(); }
   /**
    * The value currently being parsed (initially, the input dynamic).
    * Throws if parsing nullptr, or parsing after releaseErrors().
    */
-  inline const folly::dynamic& value() const {
-    return stack_.value();
-  }
+  inline const folly::dynamic& value() const { return stack_.value(); }
 
   /**
    * By default, DynamicParser's "nested" object coerces all keys to
@@ -338,9 +322,7 @@ class DynamicParser {
     };
     struct PopGuard {
       explicit PopGuard(ParserStack* sp) : pop_(in_place, sp) {}
-      ~PopGuard() {
-        pop_ && ((*pop_)(), true);
-      }
+      ~PopGuard() { pop_ && ((*pop_)(), true); }
 
      private:
       Optional<Pop> pop_;

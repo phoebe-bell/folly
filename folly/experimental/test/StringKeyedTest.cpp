@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,7 +13,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-// Copyright 2013-present Facebook. All Rights Reserved.
 
 #include <folly/experimental/StringKeyedMap.h>
 #include <folly/experimental/StringKeyedSet.h>
@@ -70,18 +69,14 @@ struct MemoryLeakCheckerAllocator {
     freed += n * sizeof(value_type);
   }
 
-  size_t max_size() const {
-    return alloc_.max_size();
-  }
+  size_t max_size() const { return alloc_.max_size(); }
 
   template <class... Args>
   void construct(value_type* p, Args&&... args) {
     alloc_.construct(p, std::forward<Args>(args)...);
   }
 
-  void destroy(value_type* p) {
-    alloc_.destroy(p);
-  }
+  void destroy(value_type* p) { alloc_.destroy(p); }
 
   template <class U>
   struct rebind {
@@ -90,9 +85,7 @@ struct MemoryLeakCheckerAllocator {
         other;
   };
 
-  const Alloc& allocator() const {
-    return alloc_;
-  }
+  const Alloc& allocator() const { return alloc_; }
 
   bool operator!=(const MemoryLeakCheckerAllocator& other) const {
     return alloc_ != other.alloc_;

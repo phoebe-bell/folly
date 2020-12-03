@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -32,9 +32,7 @@ namespace detail {
 template <int DEG>
 class FingerprintPolynomial {
  public:
-  static constexpr int size() {
-    return 1 + DEG / 64;
-  }
+  static constexpr int size() { return 1 + DEG / 64; }
 
   constexpr FingerprintPolynomial() {}
 
@@ -44,9 +42,7 @@ class FingerprintPolynomial {
     }
   }
 
-  constexpr uint64_t get(size_t i) const {
-    return val_[i];
-  }
+  constexpr uint64_t get(size_t i) const { return val_[i]; }
 
   constexpr void add(const FingerprintPolynomial<DEG>& other) {
     for (int i = 0; i < size(); i++) {

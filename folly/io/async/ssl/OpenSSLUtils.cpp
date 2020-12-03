@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -24,6 +24,7 @@
 #include <folly/portability/Sockets.h>
 #include <folly/portability/Unistd.h>
 #include <folly/ssl/Init.h>
+#include <folly/ssl/detail/OpenSSLSession.h>
 
 namespace {
 #ifdef OPENSSL_IS_BORINGSSL
@@ -40,13 +41,10 @@ namespace ssl {
 bool OpenSSLUtils::getTLSMasterKey(
     const SSL_SESSION* session,
     MutableByteRange keyOut) {
-#if FOLLY_OPENSSL_IS_101 || FOLLY_OPENSSL_IS_102
-  if (session &&
-      session->master_key_length == static_cast<int>(keyOut.size())) {
-    auto masterKey = session->master_key;
-    std::copy(
-        masterKey, masterKey + session->master_key_length, keyOut.begin());
-    return true;
+#if FOLLY_OPENSSL_IS_110
+  auto size = SSL_SESSION_get_master_key(session, nullptr, 0);
+  if (size == keyOut.size()) {
+    return SSL_SESSION_get_master_key(session, keyOut.begin(), keyOut.size());
   }
 #else
   (void)session;
@@ -55,15 +53,28 @@ bool OpenSSLUtils::getTLSMasterKey(
   return false;
 }
 
+bool OpenSSLUtils::getTLSMasterKey(
+    const std::shared_ptr<SSLSession> session,
+    MutableByteRange keyOut) {
+  auto openSSLSession =
+      std::dynamic_pointer_cast<folly::ssl::detail::OpenSSLSession>(session);
+  if (openSSLSession) {
+    auto rawSessionPtr = openSSLSession->getActiveSession();
+    SSL_SESSION* rawSession = rawSessionPtr.get();
+    if (rawSession) {
+      return OpenSSLUtils::getTLSMasterKey(rawSession, keyOut);
+    }
+  }
+  return false;
+}
+
 bool OpenSSLUtils::getTLSClientRandom(
     const SSL* ssl,
     MutableByteRange randomOut) {
-#if FOLLY_OPENSSL_IS_101 || FOLLY_OPENSSL_IS_102
-  if ((SSL_version(ssl) >> 8) == TLS1_VERSION_MAJOR && ssl->s3 &&
-      randomOut.size() == SSL3_RANDOM_SIZE) {
-    auto clientRandom = ssl->s3->client_random;
-    std::copy(clientRandom, clientRandom + SSL3_RANDOM_SIZE, randomOut.begin());
-    return true;
+#if FOLLY_OPENSSL_IS_110
+  auto size = SSL_get_client_random(ssl, nullptr, 0);
+  if (size == randomOut.size()) {
+    return SSL_get_client_random(ssl, randomOut.begin(), randomOut.size());
   }
 #else
   (void)ssl;
@@ -129,7 +140,7 @@ bool OpenSSLUtils::validatePeerCertNames(
     if ((addr4 != nullptr || addr6 != nullptr) && name->type == GEN_IPADD) {
       // Extra const-ness for paranoia
       unsigned char const* const rawIpStr = name->d.iPAddress->data;
-      size_t const rawIpLen = size_t(name->d.iPAddress->length);
+      auto const rawIpLen = size_t(name->d.iPAddress->length);
 
       if (rawIpLen == 4 && addr4 != nullptr) {
         if (::memcmp(rawIpStr, &addr4->sin_addr, rawIpLen) == 0) {
@@ -163,16 +174,12 @@ static std::unordered_map<uint16_t, std::string> getOpenSSLCipherNames() {
   if ((ctx = SSL_CTX_new(meth)) == nullptr) {
     return ret;
   }
-  SCOPE_EXIT {
-    SSL_CTX_free(ctx);
-  };
+  SCOPE_EXIT { SSL_CTX_free(ctx); };
 
   if ((ssl = SSL_new(ctx)) == nullptr) {
     return ret;
   }
-  SCOPE_EXIT {
-    SSL_free(ssl);
-  };
+  SCOPE_EXIT { SSL_free(ssl); };
 
   STACK_OF(SSL_CIPHER)* sk = SSL_get_ciphers(ssl);
   for (int i = 0; i < sk_SSL_CIPHER_num(sk); i++) {
@@ -317,11 +324,15 @@ std::string OpenSSLUtils::getCommonName(X509* x509) {
     return "";
   }
   X509_NAME* subject = X509_get_subject_name(x509);
-  std::string cn;
-  cn.resize(ub_common_name);
-  X509_NAME_get_text_by_NID(
-      subject, NID_commonName, const_cast<char*>(cn.data()), ub_common_name);
-  return cn;
+  char buf[ub_common_name + 1];
+  int length =
+      X509_NAME_get_text_by_NID(subject, NID_commonName, buf, sizeof(buf));
+  if (length == -1) {
+    // no CN
+    return "";
+  }
+  // length tells us where the name ends
+  return std::string(buf, length);
 }
 
 } // namespace ssl

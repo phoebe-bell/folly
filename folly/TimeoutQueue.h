@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -84,12 +84,8 @@ class TimeoutQueue {
    * Return the time that the next event will be due (same as
    * nextExpiration(), below)
    */
-  int64_t runOnce(int64_t now) {
-    return runInternal(now, true);
-  }
-  int64_t runLoop(int64_t now) {
-    return runInternal(now, false);
-  }
+  int64_t runOnce(int64_t now) { return runInternal(now, true); }
+  int64_t runLoop(int64_t now) { return runInternal(now, false); }
 
   /**
    * Return the time that the next event will be due.
@@ -97,7 +93,7 @@ class TimeoutQueue {
   int64_t nextExpiration() const;
 
  private:
-  int64_t runInternal(int64_t now, bool runOnce);
+  int64_t runInternal(int64_t now, bool onceOnly);
   TimeoutQueue(const TimeoutQueue&) = delete;
   TimeoutQueue& operator=(const TimeoutQueue&) = delete;
 

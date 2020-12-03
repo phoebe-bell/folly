@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include <folly/portability/Config.h>
 
 // AtomicSharedPtr-detail.h only works with libstdc++, so skip these tests for
 // other vendors
@@ -39,6 +41,7 @@ using std::make_shared;
 using std::memory_order;
 using std::memory_order_acq_rel;
 using std::memory_order_acquire;
+using std::memory_order_consume;
 using std::memory_order_relaxed;
 using std::memory_order_release;
 using std::memory_order_seq_cst;
@@ -64,6 +67,8 @@ static const char* memoryOrder(memory_order order) {
       return "relaxed";
     case memory_order_acquire:
       return "acquire";
+    case memory_order_consume:
+      return "consume";
     case memory_order_release:
       return "release";
     case memory_order_acq_rel:

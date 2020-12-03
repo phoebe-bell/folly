@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <algorithm>
@@ -47,7 +48,7 @@ namespace folly {
  * callback and the hasher to hash the keys can all be supplied by the caller.
  *
  * If at a given state, N1 - N6 are the nodes in MRU to LRU order and hashing
- * to index keys as {(N1,N5)->H1, (N4,N5,N5)->H2, N3->Hi}, the datastructure
+ * to index keys as {(N1,N5)->H1, (N4,N2,N6)->H2, N3->Hi}, the datastructure
  * layout is as below. N1 .. N6 is a list threaded through the hash.
  * Assuming, each the number of nodes hashed to each index key is bounded, the
  * following operations run in constant time.
@@ -136,9 +137,7 @@ class EvictingCacheMap {
     /* implicit */ iterator_base(iterator_base<V, I> const& other)
         : iterator_base::iterator_adaptor_(other.base()) {}
 
-    Value& dereference() const {
-      return this->base_reference()->pr;
-    }
+    Value& dereference() const { return this->base_reference()->pr; }
   };
 
   // iterators
@@ -193,7 +192,7 @@ class EvictingCacheMap {
    * bad, e.g., the nIndexBuckets_ is still 100 after maxSize is updated to 1M.
    *
    * Calling this function with an arugment of 0 removes the limit on the cache
-   * size and elements are not evicted unless clients explictly call prune.
+   * size and elements are not evicted unless clients explicitly call prune.
    *
    * If you intend to resize dynamically using this, then picking an index size
    * that works well and initializing with corresponding maxSize is the only
@@ -210,13 +209,9 @@ class EvictingCacheMap {
     maxSize_ = maxSize;
   }
 
-  size_t getMaxSize() const {
-    return maxSize_;
-  }
+  size_t getMaxSize() const { return maxSize_; }
 
-  void setClearSize(size_t clearSize) {
-    clearSize_ = clearSize;
-  }
+  void setClearSize(size_t clearSize) { clearSize_ = clearSize; }
 
   /**
    * Check for existence of a specific key in the map.  This operation has
@@ -255,8 +250,7 @@ class EvictingCacheMap {
     if (it == index_.end()) {
       return end();
     }
-    lru_.erase(lru_.iterator_to(*it));
-    lru_.push_front(*it);
+    lru_.splice(lru_.begin(), lru_, lru_.iterator_to(*it));
     return iterator(lru_.iterator_to(*it));
   }
 
@@ -342,8 +336,7 @@ class EvictingCacheMap {
     if (it != index_.end()) {
       it->pr.second = std::move(value);
       if (promote) {
-        lru_.erase(lru_.iterator_to(*it));
-        lru_.push_front(*it);
+        lru_.splice(lru_.begin(), lru_, lru_.iterator_to(*it));
       }
     } else {
       auto node = new Node(key, std::move(value));
@@ -386,21 +379,15 @@ class EvictingCacheMap {
    * Get the number of elements in the dictionary
    * @return the size of the dictionary
    */
-  std::size_t size() const {
-    return index_.size();
-  }
+  std::size_t size() const { return index_.size(); }
 
   /**
    * Typical empty function
    * @return true if empty, false otherwise
    */
-  bool empty() const {
-    return index_.empty();
-  }
+  bool empty() const { return index_.empty(); }
 
-  void clear(PruneHookCall pruneHook = nullptr) {
-    prune(size(), pruneHook);
-  }
+  void clear(PruneHookCall pruneHook = nullptr) { prune(size(), pruneHook); }
 
   /**
    * Set the prune hook, which is the function invoked on the key and value
@@ -413,9 +400,7 @@ class EvictingCacheMap {
    * @return the iterator of the object (a std::pair of const TKey, TValue) or
    *     end() if it does not exist
    */
-  void setPruneHook(PruneHookCall pruneHook) {
-    pruneHook_ = pruneHook;
-  }
+  void setPruneHook(PruneHookCall pruneHook) { pruneHook_ = pruneHook; }
 
   /**
    * Prune the minimum of pruneSize and size() from the back of the LRU.
@@ -429,32 +414,16 @@ class EvictingCacheMap {
   }
 
   // Iterators and such
-  iterator begin() {
-    return iterator(lru_.begin());
-  }
-  iterator end() {
-    return iterator(lru_.end());
-  }
-  const_iterator begin() const {
-    return const_iterator(lru_.begin());
-  }
-  const_iterator end() const {
-    return const_iterator(lru_.end());
-  }
+  iterator begin() { return iterator(lru_.begin()); }
+  iterator end() { return iterator(lru_.end()); }
+  const_iterator begin() const { return const_iterator(lru_.begin()); }
+  const_iterator end() const { return const_iterator(lru_.end()); }
 
-  const_iterator cbegin() const {
-    return const_iterator(lru_.cbegin());
-  }
-  const_iterator cend() const {
-    return const_iterator(lru_.cend());
-  }
+  const_iterator cbegin() const { return const_iterator(lru_.cbegin()); }
+  const_iterator cend() const { return const_iterator(lru_.cend()); }
 
-  reverse_iterator rbegin() {
-    return reverse_iterator(lru_.rbegin());
-  }
-  reverse_iterator rend() {
-    return reverse_iterator(lru_.rend());
-  }
+  reverse_iterator rbegin() { return reverse_iterator(lru_.rbegin()); }
+  reverse_iterator rend() { return reverse_iterator(lru_.rend()); }
 
   const_reverse_iterator rbegin() const {
     return const_reverse_iterator(lru_.rbegin());
@@ -483,9 +452,7 @@ class EvictingCacheMap {
     std::size_t operator()(const Node& node) const {
       return hash(node.pr.first);
     }
-    std::size_t operator()(const TKey& key) const {
-      return hash(key);
-    }
+    std::size_t operator()(const TKey& key) const { return hash(key); }
     THash hash;
   };
 

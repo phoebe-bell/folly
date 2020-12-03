@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #ifndef __STDC_FORMAT_MACROS
 #define __STDC_FORMAT_MACROS
 #endif
@@ -25,39 +26,37 @@
 #include <mutex>
 #include <thread>
 
+#include <folly/ExceptionString.h>
 #include <folly/Memory.h>
 #include <folly/String.h>
-#include <folly/io/async/NotificationQueue.h>
+#include <folly/io/async/AtomicNotificationQueue.h>
+#include <folly/io/async/EventBaseBackendBase.h>
 #include <folly/io/async/VirtualEventBase.h>
 #include <folly/portability/Unistd.h>
 #include <folly/synchronization/Baton.h>
 #include <folly/system/ThreadName.h>
 
-namespace folly {
+namespace {
+constexpr folly::StringPiece executorName = "EventBase";
 
-/*
- * EventBase::FunctionRunner
- */
-
-class EventBase::FunctionRunner
-    : public NotificationQueue<EventBase::Func>::Consumer {
+class EventBaseBackend : public folly::EventBaseBackendBase {
  public:
-  void messageAvailable(Func&& msg) noexcept override {
-    // In libevent2, internal events do not break the loop.
-    // Most users would expect loop(), followed by runInEventBaseThread(),
-    // to break the loop and check if it should exit or not.
-    // To have similar bejaviour to libevent1.4, tell the loop to break here.
-    // Note that loop() may still continue to loop, but it will also check the
-    // stop_ flag as well as runInLoop callbacks, etc.
-    event_base_loopbreak(getEventBase()->evb_);
+  EventBaseBackend();
+  explicit EventBaseBackend(event_base* evb);
+  ~EventBaseBackend() override;
 
-    if (!msg) {
-      // terminateLoopSoon() sends a null message just to
-      // wake up the loop.  We can ignore these messages.
-      return;
-    }
-    msg();
-  }
+  event_base* getEventBase() override { return evb_; }
+
+  int eb_event_base_loop(int flags) override;
+  int eb_event_base_loopbreak() override;
+
+  int eb_event_add(Event& event, const struct timeval* timeout) override;
+  int eb_event_del(EventBaseBackendBase::Event& event) override;
+
+  bool eb_event_active(Event& event, int res) override;
+
+ private:
+  event_base* evb_;
 };
 
 // The interface used to libevent is not thread-safe.  Calls to
@@ -67,30 +66,9 @@ class EventBase::FunctionRunner
 // event_init() should only ever be called once.  Subsequent calls
 // should be made to event_base_new().  We can recognise that
 // event_init() has already been called by simply inspecting current_base.
-static std::mutex libevent_mutex_;
+std::mutex libevent_mutex_;
 
-/*
- * EventBase methods
- */
-
-EventBase::EventBase(bool enableTimeMeasurement)
-    : runOnceCallbacks_(nullptr),
-      stop_(false),
-      loopThread_(),
-      queue_(nullptr),
-      fnRunner_(nullptr),
-      maxLatency_(0),
-      avgLoopTime_(std::chrono::seconds(2)),
-      maxLatencyLoopTime_(avgLoopTime_),
-      enableTimeMeasurement_(enableTimeMeasurement),
-      nextLoopCnt_(
-          std::size_t(-40)) // Early wrap-around so bugs will manifest soon
-      ,
-      latestLoopCnt_(nextLoopCnt_),
-      startWork_(),
-      observer_(nullptr),
-      observerSampleCount_(0),
-      executionObserver_(nullptr) {
+EventBaseBackend::EventBaseBackend() {
   struct event ev;
   {
     std::lock_guard<std::mutex> lock(libevent_mutex_);
@@ -100,36 +78,97 @@ EventBase::EventBase(bool enableTimeMeasurement)
     // allowing examination of its value without an explicit reference here.
     // If ev.ev_base is nullptr, then event_init() must be called, otherwise
     // call event_base_new().
-    event_set(&ev, 0, 0, nullptr, nullptr);
+    ::event_set(&ev, 0, 0, nullptr, nullptr);
     if (!ev.ev_base) {
       evb_ = event_init();
     }
   }
 
   if (ev.ev_base) {
-    evb_ = event_base_new();
+    evb_ = ::event_base_new();
   }
 
   if (UNLIKELY(evb_ == nullptr)) {
     LOG(ERROR) << "EventBase(): Failed to init event base.";
-    folly::throwSystemError("error in EventBase::EventBase()");
+    folly::throwSystemError("error in EventBaseBackend::EventBaseBackend()");
   }
-  VLOG(5) << "EventBase(): Created.";
-  initNotificationQueue();
 }
+
+EventBaseBackend::EventBaseBackend(event_base* evb) : evb_(evb) {
+  if (UNLIKELY(evb_ == nullptr)) {
+    LOG(ERROR) << "EventBase(): Pass nullptr as event base.";
+    throw std::invalid_argument("EventBase(): event base cannot be nullptr");
+  }
+}
+
+int EventBaseBackend::eb_event_base_loop(int flags) {
+  return event_base_loop(evb_, flags);
+}
+
+int EventBaseBackend::eb_event_base_loopbreak() {
+  return event_base_loopbreak(evb_);
+}
+
+int EventBaseBackend::eb_event_add(
+    Event& event,
+    const struct timeval* timeout) {
+  return event_add(event.getEvent(), timeout);
+}
+
+int EventBaseBackend::eb_event_del(EventBaseBackendBase::Event& event) {
+  return event_del(event.getEvent());
+}
+
+bool EventBaseBackend::eb_event_active(Event& event, int res) {
+  event_active(event.getEvent(), res, 1);
+  return true;
+}
+
+EventBaseBackend::~EventBaseBackend() {
+  std::lock_guard<std::mutex> lock(libevent_mutex_);
+  event_base_free(evb_);
+}
+
+} // namespace
+
+namespace folly {
+
+class EventBase::FuncRunner {
+ public:
+  void operator()(Func&& func) noexcept {
+    func();
+    func = nullptr;
+  }
+};
+
+/*
+ * EventBase methods
+ */
+
+EventBase::EventBase(std::chrono::milliseconds tickInterval)
+    : EventBase(Options().setTimerTickInterval(tickInterval)) {}
+
+EventBase::EventBase(bool enableTimeMeasurement)
+    : EventBase(Options().setSkipTimeMeasurement(!enableTimeMeasurement)) {}
 
 // takes ownership of the event_base
 EventBase::EventBase(event_base* evb, bool enableTimeMeasurement)
-    : runOnceCallbacks_(nullptr),
+    : EventBase(Options()
+                    .setBackendFactory([evb] {
+                      return std::make_unique<EventBaseBackend>(evb);
+                    })
+                    .setSkipTimeMeasurement(!enableTimeMeasurement)) {}
+
+EventBase::EventBase(Options options)
+    : intervalDuration_(options.timerTickInterval),
+      runOnceCallbacks_(nullptr),
       stop_(false),
       loopThread_(),
-      evb_(evb),
       queue_(nullptr),
-      fnRunner_(nullptr),
       maxLatency_(0),
       avgLoopTime_(std::chrono::seconds(2)),
       maxLatencyLoopTime_(avgLoopTime_),
-      enableTimeMeasurement_(enableTimeMeasurement),
+      enableTimeMeasurement_(!options.skipTimeMeasurement),
       nextLoopCnt_(
           std::size_t(-40)) // Early wrap-around so bugs will manifest soon
       ,
@@ -138,10 +177,8 @@ EventBase::EventBase(event_base* evb, bool enableTimeMeasurement)
       observer_(nullptr),
       observerSampleCount_(0),
       executionObserver_(nullptr) {
-  if (UNLIKELY(evb_ == nullptr)) {
-    LOG(ERROR) << "EventBase(): Pass nullptr as event base.";
-    throw std::invalid_argument("EventBase(): event base cannot be nullptr");
-  }
+  evb_ =
+      options.backendFactory ? options.backendFactory() : getDefaultBackend();
   initNotificationQueue();
 }
 
@@ -180,16 +217,11 @@ EventBase::~EventBase() {
 
   (void)runLoopCallbacks();
 
-  if (!fnRunner_->consumeUntilDrained()) {
-    LOG(ERROR) << "~EventBase(): Unable to drain notification queue";
-  }
+  queue_->drain();
 
   // Stop consumer before deleting NotificationQueue
-  fnRunner_->stopConsuming();
-  {
-    std::lock_guard<std::mutex> lock(libevent_mutex_);
-    event_base_free(evb_);
-  }
+  queue_->stopConsuming();
+  evb_.reset();
 
   for (auto storage : localStorageToDtor_) {
     storage->onEventBaseDestruction(*this);
@@ -198,12 +230,16 @@ EventBase::~EventBase() {
   VLOG(5) << "EventBase(): Destroyed.";
 }
 
+std::unique_ptr<EventBaseBackendBase> EventBase::getDefaultBackend() {
+  return std::make_unique<EventBaseBackend>();
+}
+
 size_t EventBase::getNotificationQueueSize() const {
   return queue_->size();
 }
 
 void EventBase::setMaxReadAtOnce(uint32_t maxAtOnce) {
-  fnRunner_->setMaxReadAtOnce(maxAtOnce);
+  queue_->setMaxReadAtOnce(maxAtOnce);
 }
 
 void EventBase::checkIsInEventBaseThread() const {
@@ -215,7 +251,7 @@ void EventBase::checkIsInEventBaseThread() const {
   // Using getThreadName(evbTid) instead of name_ will work also if
   // the thread name is set outside of EventBase (and name_ is empty).
   auto curTid = std::this_thread::get_id();
-  CHECK(evbTid == curTid)
+  CHECK_EQ(evbTid, curTid)
       << "This logic must be executed in the event base thread. "
       << "Event base thread name: \""
       << folly::getThreadName(evbTid).value_or("")
@@ -258,6 +294,7 @@ void EventBase::waitUntilRunning() {
 
 // enters the event_base loop -- will only exit when forced to
 bool EventBase::loop() {
+  ExecutorBlockingGuard guard{ExecutorBlockingGuard::ForbidTag{}, executorName};
   return loopBody();
 }
 
@@ -265,8 +302,8 @@ bool EventBase::loopIgnoreKeepAlive() {
   if (loopKeepAliveActive_) {
     // Make sure NotificationQueue is not counted as one of the readers
     // (otherwise loopBody won't return until terminateLoopSoon is called).
-    fnRunner_->stopConsuming();
-    fnRunner_->startConsumingInternal(this, queue_.get());
+    queue_->stopConsuming();
+    queue_->startConsumingInternal(this);
     loopKeepAliveActive_ = false;
   }
   return loopBody(0, true);
@@ -279,17 +316,18 @@ bool EventBase::loopOnce(int flags) {
 bool EventBase::loopBody(int flags, bool ignoreKeepAlive) {
   VLOG(5) << "EventBase(): Starting loop.";
 
-  DCHECK(!invokingLoop_)
-      << "Your code just tried to loop over an event base from inside another "
-      << "event base loop. Since libevent is not reentrant, this leads to "
-      << "undefined behavior in opt builds. Please fix immediately. For the "
-      << "common case of an inner function that needs to do some synchronous "
-      << "computation on an event-base, replace getEventBase() by a new, "
-      << "stack-allocated EvenBase.";
+  const char* message =
+      "Your code just tried to loop over an event base from inside another "
+      "event base loop. Since libevent is not reentrant, this leads to "
+      "undefined behavior in opt builds. Please fix immediately. For the "
+      "common case of an inner function that needs to do some synchronous "
+      "computation on an event-base, replace getEventBase() by a new, "
+      "stack-allocated EventBase.";
+
+  LOG_IF(DFATAL, invokingLoop_) << message;
+
   invokingLoop_ = true;
-  SCOPE_EXIT {
-    invokingLoop_ = false;
-  };
+  SCOPE_EXIT { invokingLoop_ = false; };
 
   int res = 0;
   bool ranLoopCallbacks;
@@ -302,7 +340,12 @@ bool EventBase::loopBody(int flags, bool ignoreKeepAlive) {
   std::chrono::microseconds busy;
   std::chrono::microseconds idle;
 
-  loopThread_.store(std::this_thread::get_id(), std::memory_order_release);
+  auto const prevLoopThread = loopThread_.exchange(
+      std::this_thread::get_id(), std::memory_order_relaxed);
+  CHECK_EQ(std::thread::id(), prevLoopThread)
+      << "Driving an EventBase in one thread (" << std::this_thread::get_id()
+      << ") while it is already being driven in another thread ("
+      << prevLoopThread << ") is forbidden.";
 
   if (!name_.empty()) {
     setThreadName(name_);
@@ -332,9 +375,9 @@ bool EventBase::loopBody(int flags, bool ignoreKeepAlive) {
     // nobody can add loop callbacks from within this thread if
     // we don't have to handle anything to start with...
     if (blocking && loopCallbacks_.empty()) {
-      res = event_base_loop(evb_, EVLOOP_ONCE);
+      res = evb_->eb_event_base_loop(EVLOOP_ONCE);
     } else {
-      res = event_base_loop(evb_, EVLOOP_ONCE | EVLOOP_NONBLOCK);
+      res = evb_->eb_event_base_loop(EVLOOP_ONCE | EVLOOP_NONBLOCK);
     }
 
     ranLoopCallbacks = runLoopCallbacks();
@@ -389,8 +432,8 @@ bool EventBase::loopBody(int flags, bool ignoreKeepAlive) {
       // Since Notification Queue is marked 'internal' some events may not have
       // run.  Run them manually if so, and continue looping.
       //
-      if (getNotificationQueueSize() > 0) {
-        fnRunner_->handlerReady(0);
+      if (!queue_->empty()) {
+        queue_->execute();
       } else if (!ranLoopCallbacks) {
         // If there were no more events and we also didn't have any loop
         // callbacks to run, there is nothing left to do.
@@ -439,21 +482,23 @@ ssize_t EventBase::loopKeepAliveCount() {
 void EventBase::applyLoopKeepAlive() {
   auto keepAliveCount = loopKeepAliveCount();
   // Make sure default VirtualEventBase won't hold EventBase::loop() forever.
-  if (virtualEventBase_ && virtualEventBase_->keepAliveCount() == 1) {
-    --keepAliveCount;
+  if (auto virtualEventBase = tryGetVirtualEventBase()) {
+    if (virtualEventBase->keepAliveCount() == 1) {
+      --keepAliveCount;
+    }
   }
 
   if (loopKeepAliveActive_ && keepAliveCount == 0) {
     // Restore the notification queue internal flag
-    fnRunner_->stopConsuming();
-    fnRunner_->startConsumingInternal(this, queue_.get());
+    queue_->stopConsuming();
+    queue_->startConsumingInternal(this);
     loopKeepAliveActive_ = false;
   } else if (!loopKeepAliveActive_ && keepAliveCount > 0) {
     // Update the notification queue event to treat it as a normal
     // (non-internal) event.  The notification queue event always remains
     // installed, and the main loop won't exit with it installed.
-    fnRunner_->stopConsuming();
-    fnRunner_->startConsuming(this, queue_.get());
+    queue_->stopConsuming();
+    queue_->startConsuming(this);
     loopKeepAliveActive_ = true;
   }
 }
@@ -461,16 +506,12 @@ void EventBase::applyLoopKeepAlive() {
 void EventBase::loopForever() {
   bool ret;
   {
-    SCOPE_EXIT {
-      applyLoopKeepAlive();
-    };
+    SCOPE_EXIT { applyLoopKeepAlive(); };
     // Make sure notification queue events are treated as normal events.
     // We can't use loopKeepAlive() here since LoopKeepAlive token can only be
     // released inside a loop.
     ++loopKeepAliveCount_;
-    SCOPE_EXIT {
-      --loopKeepAliveCount_;
-    };
+    SCOPE_EXIT { --loopKeepAliveCount_; };
     ret = loop();
   }
 
@@ -502,31 +543,25 @@ void EventBase::terminateLoopSoon() {
   // Set stop to true, so the event loop will know to exit.
   stop_.store(true, std::memory_order_relaxed);
 
-  // Call event_base_loopbreak() so that libevent will exit the next time
-  // around the loop.
-  event_base_loopbreak(evb_);
-
   // If terminateLoopSoon() is called from another thread,
   // the EventBase thread might be stuck waiting for events.
   // In this case, it won't wake up and notice that stop_ is set until it
   // receives another event.  Send an empty frame to the notification queue
   // so that the event loop will wake up even if there are no other events.
-  //
-  // We don't care about the return value of trySendFrame().  If it fails
-  // this likely means the EventBase already has lots of events waiting
-  // anyway.
   try {
-    queue_->putMessage(nullptr);
+    queue_->putMessage([&] { evb_->eb_event_base_loopbreak(); });
   } catch (...) {
-    // We don't care if putMessage() fails.  This likely means
-    // the EventBase already has lots of events waiting anyway.
+    // putMessage() can only fail when the queue is draining in ~EventBase.
   }
 }
 
-void EventBase::runInLoop(LoopCallback* callback, bool thisIteration) {
+void EventBase::runInLoop(
+    LoopCallback* callback,
+    bool thisIteration,
+    std::shared_ptr<RequestContext> rctx) {
   dcheckIsInEventBaseThread();
   callback->cancelLoopCallback();
-  callback->context_ = RequestContext::saveContext();
+  callback->context_ = std::move(rctx);
   if (runOnceCallbacks_ != nullptr && thisIteration) {
     runOnceCallbacks_->push_back(*callback);
   } else {
@@ -608,14 +643,12 @@ void EventBase::runInEventBaseThreadAndWait(Func fn) noexcept {
 
   Baton<> ready;
   runInEventBaseThread([&ready, fn = std::move(fn)]() mutable {
-    SCOPE_EXIT {
-      ready.post();
-    };
+    SCOPE_EXIT { ready.post(); };
     // A trick to force the stored functor to be executed and then destructed
     // before posting the baton and waking the waiting thread.
     copy(std::move(fn))();
   });
-  ready.wait();
+  ready.wait(folly::Baton<>::wait_options().logging_enabled(false));
 }
 
 void EventBase::runImmediatelyOrRunInEventBaseThreadAndWait(Func fn) noexcept {
@@ -656,12 +689,7 @@ bool EventBase::runLoopCallbacks() {
 
 void EventBase::initNotificationQueue() {
   // Infinite size queue
-  queue_ = std::make_unique<NotificationQueue<Func>>();
-
-  // We allocate fnRunner_ separately, rather than declaring it directly
-  // as a member of EventBase solely so that we don't need to include
-  // NotificationQueue.h from EventBase.h
-  fnRunner_ = std::make_unique<FunctionRunner>();
+  queue_ = std::make_unique<AtomicNotificationQueue<Func, FuncRunner>>();
 
   // Mark this as an internal event, so event_base_loop() will return if
   // there are no other events besides this one installed.
@@ -672,7 +700,7 @@ void EventBase::initNotificationQueue() {
   // Users can use loopForever() if they do care about the notification queue.
   // (This is useful for EventBase threads that do nothing but process
   // runInEventBaseThread() notifications.)
-  fnRunner_->startConsumingInternal(this, queue_.get());
+  queue_->startConsumingInternal(this);
 }
 
 void EventBase::SmoothLoopTime::setTimeInterval(
@@ -709,20 +737,20 @@ bool EventBase::nothingHandledYet() const noexcept {
 }
 
 void EventBase::attachTimeoutManager(AsyncTimeout* obj, InternalEnum internal) {
-  struct event* ev = obj->getEvent();
-  assert(ev->ev_base == nullptr);
+  auto* ev = obj->getEvent();
+  assert(ev->eb_ev_base() == nullptr);
 
-  event_base_set(getLibeventBase(), ev);
+  ev->eb_event_base_set(this);
   if (internal == AsyncTimeout::InternalEnum::INTERNAL) {
     // Set the EVLIST_INTERNAL flag
-    event_ref_flags(ev) |= EVLIST_INTERNAL;
+    event_ref_flags(ev->getEvent()) |= EVLIST_INTERNAL;
   }
 }
 
 void EventBase::detachTimeoutManager(AsyncTimeout* obj) {
   cancelTimeout(obj);
-  struct event* ev = obj->getEvent();
-  ev->ev_base = nullptr;
+  auto* ev = obj->getEvent();
+  ev->eb_ev_base(nullptr);
 }
 
 bool EventBase::scheduleTimeout(
@@ -734,11 +762,11 @@ bool EventBase::scheduleTimeout(
   tv.tv_sec = long(timeout.count() / 1000LL);
   tv.tv_usec = long((timeout.count() % 1000LL) * 1000LL);
 
-  struct event* ev = obj->getEvent();
+  auto* ev = obj->getEvent();
 
-  DCHECK(ev->ev_base);
+  DCHECK(ev->eb_ev_base());
 
-  if (event_add(ev, &tv) < 0) {
+  if (ev->eb_event_add(&tv) < 0) {
     LOG(ERROR) << "EventBase: failed to schedule timeout: " << errnoStr(errno);
     return false;
   }
@@ -748,9 +776,9 @@ bool EventBase::scheduleTimeout(
 
 void EventBase::cancelTimeout(AsyncTimeout* obj) {
   dcheckIsInEventBaseThread();
-  struct event* ev = obj->getEvent();
-  if (EventUtil::isEventRegistered(ev)) {
-    event_del(ev);
+  auto* ev = obj->getEvent();
+  if (ev->isEventRegistered()) {
+    ev->eb_event_del();
   }
 }
 
@@ -775,6 +803,10 @@ void EventBase::scheduleAt(Func&& fn, TimePoint const& timeout) {
       std::chrono::duration_cast<std::chrono::milliseconds>(duration));
 }
 
+event_base* EventBase::getLibeventBase() const {
+  return evb_ ? (evb_->getEventBase()) : nullptr;
+}
+
 const char* EventBase::getLibeventVersion() {
   return event_get_version();
 }
@@ -788,6 +820,13 @@ VirtualEventBase& EventBase::getVirtualEventBase() {
   });
 
   return *virtualEventBase_;
+}
+
+VirtualEventBase* EventBase::tryGetVirtualEventBase() {
+  if (folly::test_once(virtualEventBaseInitFlag_)) {
+    return virtualEventBase_.get();
+  }
+  return nullptr;
 }
 
 EventBase* EventBase::getEventBase() {

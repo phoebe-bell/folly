@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -63,19 +63,13 @@ class HistogramBuckets {
       const BucketType& defaultBucket);
 
   /* Returns the bucket size of each bucket in the histogram. */
-  ValueType getBucketSize() const {
-    return bucketSize_;
-  }
+  ValueType getBucketSize() const { return bucketSize_; }
 
   /* Returns the min value at which bucketing begins. */
-  ValueType getMin() const {
-    return min_;
-  }
+  ValueType getMin() const { return min_; }
 
   /* Returns the max value at which bucketing ends. */
-  ValueType getMax() const {
-    return max_;
-  }
+  ValueType getMax() const { return max_; }
 
   /*
    * Returns the number of buckets.
@@ -84,9 +78,7 @@ class HistogramBuckets {
    * plus 2 extra buckets, one for handling values less than min, and one for
    * values greater than max.
    */
-  size_t getNumBuckets() const {
-    return buckets_.size();
-  }
+  size_t getNumBuckets() const { return buckets_.size(); }
 
   /* Returns the bucket index into which the given value would fall. */
   size_t getBucketIdx(ValueType value) const;
@@ -107,14 +99,10 @@ class HistogramBuckets {
    * Note that index 0 is the bucket for all values less than the specified
    * minimum.  Index 1 is the first bucket in the specified bucket range.
    */
-  BucketType& getByIndex(size_t idx) {
-    return buckets_[idx];
-  }
+  BucketType& getByIndex(size_t idx) { return buckets_[idx]; }
 
   /* Returns the bucket at the specified index. */
-  const BucketType& getByIndex(size_t idx) const {
-    return buckets_[idx];
-  }
+  const BucketType& getByIndex(size_t idx) const { return buckets_[idx]; }
 
   /*
    * Returns the minimum threshold for the bucket at the given index.
@@ -218,9 +206,7 @@ class HistogramBuckets {
   typename std::vector<BucketType>::const_iterator end() const {
     return buckets_.end();
   }
-  typename std::vector<BucketType>::iterator end() {
-    return buckets_.end();
-  }
+  typename std::vector<BucketType>::iterator end() { return buckets_.end(); }
 
  private:
   static constexpr bool kIsExact = std::numeric_limits<ValueType>::is_exact;
@@ -357,21 +343,13 @@ class Histogram {
   }
 
   /* Returns the bucket size of each bucket in the histogram. */
-  ValueType getBucketSize() const {
-    return buckets_.getBucketSize();
-  }
+  ValueType getBucketSize() const { return buckets_.getBucketSize(); }
   /* Returns the min value at which bucketing begins. */
-  ValueType getMin() const {
-    return buckets_.getMin();
-  }
+  ValueType getMin() const { return buckets_.getMin(); }
   /* Returns the max value at which bucketing ends. */
-  ValueType getMax() const {
-    return buckets_.getMax();
-  }
+  ValueType getMax() const { return buckets_.getMax(); }
   /* Returns the number of buckets */
-  size_t getNumBuckets() const {
-    return buckets_.getNumBuckets();
-  }
+  size_t getNumBuckets() const { return buckets_.getNumBuckets(); }
 
   /* Returns the specified bucket (for reading only!) */
   const Bucket& getBucketByIndex(size_t idx) const {
@@ -452,9 +430,7 @@ class Histogram {
   void toTSV(std::ostream& out, bool skipEmptyBuckets = true) const;
 
   struct CountFromBucket {
-    uint64_t operator()(const Bucket& bucket) const {
-      return bucket.count;
-    }
+    uint64_t operator()(const Bucket& bucket) const { return bucket.count; }
   };
   struct AvgFromBucket {
     ValueType operator()(const Bucket& bucket) const {
@@ -491,18 +467,4 @@ class Histogram {
 
 } // namespace folly
 
-// MSVC 2017 Update 3/4 has an issue with explicitly instantiating templated
-// functions with default arguments inside templated classes when compiled
-// with /permissive- (the default for the CMake build), so we directly include
-// the -defs as if it were -inl, and don't provide the explicit instantiations.
-// https://developercommunity.visualstudio.com/content/problem/81223/incorrect-error-c5037-with-permissive.html
-#if defined(_MSC_VER) && _MSC_FULL_VER >= 191125506 && \
-    _MSC_FULL_VER <= 191125547
-#define FOLLY_MSVC_USE_WORKAROUND_FOR_C5037 1
-#else
-#define FOLLY_MSVC_USE_WORKAROUND_FOR_C5037 0
-#endif
-
-#if FOLLY_MSVC_USE_WORKAROUND_FOR_C5037
-#include <folly/stats/Histogram-defs.h>
-#endif
+#include <folly/stats/Histogram-inl.h>

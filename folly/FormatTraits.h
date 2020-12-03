@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -39,9 +39,7 @@ struct IndexableTraitsSeq : public FormatTraitsBase {
   typedef C container_type;
   typedef typename C::value_type value_type;
 
-  static const value_type& at(const C& c, int idx) {
-    return c.at(idx);
-  }
+  static const value_type& at(const C& c, int idx) { return c.at(idx); }
 
   static const value_type& at(const C& c, int idx, const value_type& dflt) {
     return (idx >= 0 && size_t(idx) < c.size()) ? c.at(idx) : dflt;

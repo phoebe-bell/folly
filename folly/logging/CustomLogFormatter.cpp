@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/logging/CustomLogFormatter.h>
 
 #include <folly/Format.h>
@@ -82,7 +83,8 @@ struct FormatKeys {
  *
  * TODO: Support including thread names and thread context info.
  */
-constexpr std::array<FormatKeys, 11> formatKeys{{
+constexpr std::array<FormatKeys, 12> formatKeys{{
+    FormatKeys(/* key */ "CTX", /*    argIndex  */ 11),
     FormatKeys(/* key */ "D", /*      argIndex  */ 2, /* width */ 2),
     FormatKeys(/* key */ "FILE", /*   argIndex  */ 8),
     FormatKeys(/* key */ "FUN", /*    argIndex  */ 9),
@@ -95,7 +97,7 @@ constexpr std::array<FormatKeys, 11> formatKeys{{
     FormatKeys(/* key */ "USECS", /*  argIndex  */ 6, /* width */ 6),
     FormatKeys(/* key */ "m", /*      argIndex  */ 1, /* width */ 2),
 }};
-constexpr int messageIndex = formatKeys.size();
+constexpr size_t messageIndex = formatKeys.size();
 
 } // namespace
 
@@ -262,6 +264,7 @@ std::string CustomLogFormatter::formatMessage(
         basename,
         message.getFunctionName(),
         message.getLineNumber(),
+        message.getContextString(),
         // NOTE: THE FOLLOWING ARGUMENTS ALWAYS NEED TO BE THE LAST 3:
         message.getMessage(),
         // If colored logs are enabled, the singleLineLogFormat_ will contain
@@ -285,7 +288,8 @@ std::string CustomLogFormatter::formatMessage(
         message.getThreadID(),
         basename,
         message.getFunctionName(),
-        message.getLineNumber());
+        message.getLineNumber(),
+        message.getContextString());
 
     // Estimate header length. If this still isn't long enough the string will
     // grow as necessary, so the code will still be correct, but just slightly

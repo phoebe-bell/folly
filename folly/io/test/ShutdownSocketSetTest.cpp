@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/io/ShutdownSocketSet.h>
 
 #include <atomic>
@@ -24,13 +25,10 @@
 #include <folly/net/NetOps.h>
 #include <folly/net/NetworkSocket.h>
 #include <folly/portability/GTest.h>
-
-using folly::ShutdownSocketSet;
+#include <folly/synchronization/Baton.h>
 
 namespace folly {
 namespace test {
-
-ShutdownSocketSet shutdownSocketSet;
 
 class Server {
  public:
@@ -38,10 +36,10 @@ class Server {
 
   void stop(bool abortive);
   void join();
-  int port() const {
-    return port_;
-  }
+  int port() const { return port_; }
   int closeClients(bool abortive);
+
+  void shutdownAll(bool abortive);
 
  private:
   NetworkSocket acceptSocket_;
@@ -50,12 +48,14 @@ class Server {
   std::atomic<StopMode> stop_;
   std::thread serverThread_;
   std::vector<NetworkSocket> fds_;
+  folly::ShutdownSocketSet shutdownSocketSet_;
+  folly::Baton<> baton_;
 };
 
 Server::Server() : acceptSocket_(), port_(0), stop_(NO_STOP) {
   acceptSocket_ = netops::socket(PF_INET, SOCK_STREAM, 0);
   CHECK_NE(acceptSocket_, NetworkSocket());
-  shutdownSocketSet.add(acceptSocket_);
+  shutdownSocketSet_.add(acceptSocket_);
 
   sockaddr_in addr;
   addr.sin_family = AF_INET;
@@ -73,6 +73,7 @@ Server::Server() : acceptSocket_(), port_(0), stop_(NO_STOP) {
   port_ = ntohs(addr.sin_port);
 
   serverThread_ = std::thread([this] {
+    bool first = true;
     while (stop_ == NO_STOP) {
       sockaddr_in peer;
       socklen_t peerLen = sizeof(peer);
@@ -87,15 +88,18 @@ Server::Server() : acceptSocket_(), port_(0), stop_(NO_STOP) {
         }
       }
       CHECK_NE(fd, NetworkSocket());
-      shutdownSocketSet.add(fd);
+      shutdownSocketSet_.add(fd);
       fds_.push_back(fd);
+      CHECK(first);
+      first = false;
+      baton_.post();
     }
 
     if (stop_ != NO_STOP) {
       closeClients(stop_ == ABORTIVE);
     }
 
-    shutdownSocketSet.close(acceptSocket_);
+    shutdownSocketSet_.close(acceptSocket_);
     acceptSocket_ = NetworkSocket();
     port_ = 0;
   });
@@ -107,11 +111,16 @@ int Server::closeClients(bool abortive) {
       struct linger l = {1, 0};
       CHECK_ERR(netops::setsockopt(fd, SOL_SOCKET, SO_LINGER, &l, sizeof(l)));
     }
-    shutdownSocketSet.close(fd);
+    shutdownSocketSet_.close(fd);
   }
   int n = fds_.size();
   fds_.clear();
   return n;
+}
+
+void Server::shutdownAll(bool abortive) {
+  baton_.wait();
+  shutdownSocketSet_.shutdownAll(abortive);
 }
 
 void Server::stop(bool abortive) {
@@ -177,8 +186,7 @@ void runKillTest(bool abortive) {
   auto sock = createConnectedSocket(server.port());
 
   std::thread killer([&server, abortive] {
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    shutdownSocketSet.shutdownAll(abortive);
+    server.shutdownAll(abortive);
     server.join();
   });
 

@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -41,15 +41,9 @@ namespace folly {
 
 class SpinLock {
  public:
-  FOLLY_ALWAYS_INLINE SpinLock() noexcept {
-    lock_.init();
-  }
-  FOLLY_ALWAYS_INLINE void lock() const noexcept {
-    lock_.lock();
-  }
-  FOLLY_ALWAYS_INLINE void unlock() const noexcept {
-    lock_.unlock();
-  }
+  FOLLY_ALWAYS_INLINE SpinLock() noexcept { lock_.init(); }
+  FOLLY_ALWAYS_INLINE void lock() const noexcept { lock_.lock(); }
+  FOLLY_ALWAYS_INLINE void unlock() const noexcept { lock_.unlock(); }
   FOLLY_ALWAYS_INLINE bool try_lock() const noexcept {
     return lock_.try_lock();
   }
@@ -70,9 +64,7 @@ class SpinLockGuardImpl {
   SpinLockGuardImpl(const SpinLockGuardImpl&) = delete;
   SpinLockGuardImpl& operator=(const SpinLockGuardImpl&) = delete;
 
-  FOLLY_ALWAYS_INLINE ~SpinLockGuardImpl() {
-    lock_.unlock();
-  }
+  FOLLY_ALWAYS_INLINE ~SpinLockGuardImpl() { lock_.unlock(); }
 
  private:
   LOCK& lock_;

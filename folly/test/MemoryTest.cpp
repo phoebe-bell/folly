@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,7 +25,9 @@
 
 #include <folly/ConstexprMath.h>
 #include <folly/String.h>
+#include <folly/lang/Keep.h>
 #include <folly/memory/Arena.h>
+#include <folly/portability/Asm.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 
@@ -40,6 +42,26 @@ TEST(allocateBytes, simple) {
   EXPECT_TRUE(p != nullptr);
   deallocateBytes(p, 10);
 }
+
+TEST(allocateBytes, zero) {
+  auto p = allocateBytes(0);
+  deallocateBytes(p, 0);
+}
+
+TEST(operatorNewDelete, zero) {
+  auto p = ::operator new(0);
+  EXPECT_TRUE(p != nullptr);
+  ::operator delete(p);
+}
+
+#if __cpp_sized_deallocation
+TEST(operatorNewDelete, sized_zero) {
+  std::size_t n = 0;
+  auto p = ::operator new(n);
+  EXPECT_TRUE(p != nullptr);
+  ::operator delete(p, n);
+}
+#endif
 
 TEST(aligned_malloc, examples) {
   auto trial = [](size_t align) {
@@ -64,11 +86,94 @@ TEST(make_unique, compatible_with_std_make_unique) {
   make_unique<string>("hello, world");
 }
 
+TEST(to_shared_ptr_aliasing, example) {
+  auto sp = folly::copy_to_shared_ptr(std::tuple{3, 4});
+  auto a = folly::to_shared_ptr_aliasing(sp, &std::get<1>(*sp));
+  EXPECT_EQ(4, *a);
+}
+
 TEST(to_weak_ptr, example) {
   auto s = std::make_shared<int>(17);
   EXPECT_EQ(1, s.use_count());
   EXPECT_EQ(2, (to_weak_ptr(s).lock(), s.use_count())) << "lvalue";
   EXPECT_EQ(3, (to_weak_ptr(decltype(s)(s)).lock(), s.use_count())) << "rvalue";
+}
+
+// These are here to make it easy to double-check the assembly
+// for to_weak_ptr_aliasing
+extern "C" FOLLY_KEEP void check_to_weak_ptr_aliasing(
+    std::shared_ptr<void> const& s,
+    void* a) {
+  auto w = folly::to_weak_ptr_aliasing(s, a);
+  asm_volatile_memory();
+  asm_volatile_pause();
+}
+extern "C" FOLLY_KEEP void check_to_weak_ptr_aliasing_fallback(
+    std::shared_ptr<void> const& s,
+    void* a) {
+  auto w = folly::to_weak_ptr(std::shared_ptr<void>(s, a));
+  asm_volatile_memory();
+  asm_volatile_pause();
+}
+
+TEST(to_weak_ptr_aliasing, active) {
+  using S = std::pair<int, int>;
+
+  auto s = std::make_shared<S>();
+  s->first = 10;
+  s->second = 20;
+  EXPECT_EQ(s.use_count(), 1);
+  auto w = folly::to_weak_ptr_aliasing(s, &s->second);
+  EXPECT_EQ(s.use_count(), 1);
+  EXPECT_EQ(*w.lock(), s->second);
+  auto locked = w.lock();
+  EXPECT_EQ(s.use_count(), 2);
+  locked.reset();
+
+  auto w2 = w;
+  EXPECT_EQ(*w2.lock(), s->second);
+  w2.reset();
+
+  auto w3 = std::move(w);
+  EXPECT_EQ(*w3.lock(), s->second);
+
+  std::shared_ptr<int> s2(s, &s->second);
+  std::shared_ptr<int> s3 = w3.lock();
+  EXPECT_TRUE(s2 == s3);
+  EXPECT_FALSE(s2.owner_before(s));
+  EXPECT_FALSE(s.owner_before(s2));
+  EXPECT_FALSE(w3.owner_before(s));
+  EXPECT_FALSE(s.owner_before(w3));
+
+  s.reset();
+  s2.reset();
+  s3.reset();
+  EXPECT_TRUE(w3.expired());
+}
+
+TEST(to_weak_ptr_aliasing, inactive) {
+  using S = std::pair<int, int>;
+
+  std::shared_ptr<S> s;
+  EXPECT_EQ(s.use_count(), 0);
+  S tmp;
+  auto w = folly::to_weak_ptr_aliasing(s, &tmp.second);
+  EXPECT_EQ(s.use_count(), 0);
+  EXPECT_EQ(w.use_count(), 0);
+  EXPECT_TRUE(w.expired());
+  auto locked = w.lock();
+  EXPECT_EQ(locked.get(), nullptr);
+  EXPECT_EQ(locked.use_count(), 0);
+}
+
+TEST(copy_to_unique_ptr, example) {
+  std::unique_ptr<int> s = copy_to_unique_ptr(17);
+  EXPECT_EQ(17, *s);
+}
+
+TEST(copy_to_shared_ptr, example) {
+  std::shared_ptr<int> s = copy_to_shared_ptr(17);
+  EXPECT_EQ(17, *s);
 }
 
 TEST(SysAllocator, equality) {
@@ -118,6 +223,18 @@ TEST(AlignedSysAllocator, allocate_unique_fixed) {
   EXPECT_EQ(0, std::uintptr_t(ptr.get()) % 1024);
 }
 
+TEST(AlignedSysAllocator, undersized_fixed) {
+  constexpr auto align = has_extended_alignment ? 1024 : max_align_v;
+  struct alignas(align) Big {
+    float value;
+  };
+  using Alloc = AlignedSysAllocator<Big, FixedAlign<sizeof(void*)>>;
+  Alloc const alloc;
+  auto ptr = allocate_unique<Big>(alloc, Big{3.});
+  EXPECT_EQ(3., ptr->value);
+  EXPECT_EQ(0, std::uintptr_t(ptr.get()) % align);
+}
+
 TEST(AlignedSysAllocator, vector_fixed) {
   using Alloc = AlignedSysAllocator<float, FixedAlign<1024>>;
   Alloc const alloc;
@@ -152,6 +269,18 @@ TEST(AlignedSysAllocator, allocate_unique_default) {
   auto ptr = allocate_unique<float>(alloc, 3.);
   EXPECT_EQ(3., *ptr);
   EXPECT_EQ(0, std::uintptr_t(ptr.get()) % 1024);
+}
+
+TEST(AlignedSysAllocator, undersized_default) {
+  constexpr auto align = has_extended_alignment ? 1024 : max_align_v;
+  struct alignas(align) Big {
+    float value;
+  };
+  using Alloc = AlignedSysAllocator<Big, DefaultAlign>;
+  Alloc const alloc(sizeof(void*));
+  auto ptr = allocate_unique<Big>(alloc, Big{3.});
+  EXPECT_EQ(3., ptr->value);
+  EXPECT_EQ(0, std::uintptr_t(ptr.get()) % align);
 }
 
 TEST(AlignedSysAllocator, vector_default) {
@@ -356,9 +485,7 @@ struct ExpectingAlloc {
     return std::allocator<T>{}.allocate(n);
   }
 
-  void deallocate(T* p, std::size_t n) {
-    std::allocator<T>{}.deallocate(p, n);
-  }
+  void deallocate(T* p, std::size_t n) { std::allocator<T>{}.deallocate(p, n); }
 
   std::size_t expectedSize_;
   std::size_t expectedCount_;

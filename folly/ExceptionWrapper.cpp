@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/ExceptionWrapper.h>
 
 #include <iostream>
@@ -62,11 +63,16 @@ std::exception const* get_std_exception_(std::exception_ptr eptr) noexcept {
 
 exception_wrapper exception_wrapper::from_exception_ptr(
     std::exception_ptr const& ptr) noexcept {
+  return from_exception_ptr(folly::copy(ptr));
+}
+
+exception_wrapper exception_wrapper::from_exception_ptr(
+    std::exception_ptr&& ptr) noexcept {
   if (!ptr) {
     return exception_wrapper();
   }
   try {
-    std::rethrow_exception(ptr);
+    std::rethrow_exception(std::move(ptr));
   } catch (std::exception& e) {
     return exception_wrapper(std::current_exception(), e);
   } catch (...) {

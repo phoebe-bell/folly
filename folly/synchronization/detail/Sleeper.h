@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,10 +21,11 @@
  * @author Jordan DeLong <delong.j@fb.com>
  */
 
+#include <chrono>
 #include <cstdint>
+#include <thread>
 
 #include <folly/portability/Asm.h>
-#include <folly/portability/Time.h>
 
 namespace folly {
 
@@ -37,29 +38,27 @@ namespace detail {
  * spinning, and falls back to sleeping for small quantums.
  */
 class Sleeper {
-  static const uint32_t kMaxActiveSpin = 4000;
-
+  const std::chrono::nanoseconds delta;
   uint32_t spinCount;
 
- public:
-  Sleeper() noexcept : spinCount(0) {}
+  static constexpr uint32_t kMaxActiveSpin = 4000;
 
-  static void sleep() noexcept {
-    /*
-     * Always sleep 0.5ms, assuming this will make the kernel put
-     * us down for whatever its minimum timer resolution is (in
-     * linux this varies by kernel version from 1ms to 10ms).
-     */
-    struct timespec ts = {0, 500000};
-    nanosleep(&ts, nullptr);
-  }
+ public:
+  static constexpr std::chrono::nanoseconds kMinYieldingSleep =
+      std::chrono::microseconds(500);
+
+  constexpr Sleeper() noexcept : delta(kMinYieldingSleep), spinCount(0) {}
+
+  explicit Sleeper(std::chrono::nanoseconds d) noexcept
+      : delta(d), spinCount(0) {}
 
   void wait() noexcept {
     if (spinCount < kMaxActiveSpin) {
       ++spinCount;
       asm_volatile_pause();
     } else {
-      sleep();
+      /* sleep override */
+      std::this_thread::sleep_for(delta);
     }
   }
 };

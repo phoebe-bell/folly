@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -55,9 +55,7 @@ class ThreadCachedInt {
 
   // Quickly grabs the current value which may not include some cached
   // increments.
-  IntT readFast() const {
-    return target_.load(std::memory_order_relaxed);
-  }
+  IntT readFast() const { return target_.load(std::memory_order_relaxed); }
 
   // Reads the current value plus all the cached increments.  Requires grabbing
   // a lock, so this is significantly slower than readFast().
@@ -101,9 +99,7 @@ class ThreadCachedInt {
     cacheSize_.store(newSize, std::memory_order_release);
   }
 
-  uint32_t getCacheSize() const {
-    return cacheSize_.load();
-  }
+  uint32_t getCacheSize() const { return cacheSize_.load(); }
 
   ThreadCachedInt& operator+=(IntT inc) {
     increment(inc);
@@ -174,9 +170,7 @@ class ThreadCachedInt {
       numUpdates_ = 0;
     }
 
-    ~IntCache() {
-      flush();
-    }
+    ~IntCache() { flush(); }
   };
 };
 

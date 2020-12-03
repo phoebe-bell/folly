@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -86,9 +86,7 @@ class AtomicStruct {
 
   constexpr /* implicit */ AtomicStruct(T v) noexcept : data(encode(v)) {}
 
-  bool is_lock_free() const noexcept {
-    return data.is_lock_free();
-  }
+  bool is_lock_free() const noexcept { return data.is_lock_free(); }
 
   bool compare_exchange_strong(
       T& v0,
@@ -134,17 +132,13 @@ class AtomicStruct {
     return decode(data.exchange(encode(v), mo));
   }
 
-  /* implicit */ operator T() const noexcept {
-    return decode(data);
-  }
+  /* implicit */ operator T() const noexcept { return decode(data); }
 
   T load(std::memory_order mo = std::memory_order_seq_cst) const noexcept {
     return decode(data.load(mo));
   }
 
-  T operator=(T v) noexcept {
-    return decode(data = encode(v));
-  }
+  T operator=(T v) noexcept { return decode(data = encode(v)); }
 
   void store(T v, std::memory_order mo = std::memory_order_seq_cst) noexcept {
     data.store(encode(v), mo);

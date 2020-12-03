@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,11 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <thread>
 
 #include <folly/experimental/TLRefCount.h>
 #include <folly/portability/GTest.h>
 #include <folly/synchronization/Baton.h>
+#include <folly/synchronization/test/Barrier.h>
 
 namespace folly {
 
@@ -122,4 +124,45 @@ TEST(TLRefCount, Stress) {
   // do it that many times.
   stressTest<TLRefCount>(500);
 }
+
+TEST(TLRefCount, SafeToDeleteWhenReachingZero) {
+  // Tests that it is safe to delete a TLRefCount when it is already in global
+  // state and its ref count reaches zero. This is a reasonable assumption
+  // since data structures typically embed a TLRefCount object and delete
+  // themselves when the refcount reaches 0.
+  TLRefCount* count = new TLRefCount();
+
+  folly::test::Barrier done(2); // give time for TSAN to catch issues
+  folly::Baton<> batonUnref;
+  int times_deleted = 0;
+
+  std::thread t1([&] {
+    ++*count;
+    batonUnref.post();
+
+    if (--*count == 0) {
+      times_deleted++;
+      delete count;
+    }
+    done.wait();
+  });
+
+  std::thread t2([&] {
+    // Make sure thread 1 already grabbed a reference first, otherwise we might
+    // destroy it before thread 1 had a chance.
+    batonUnref.wait();
+
+    count->useGlobal();
+    if (--*count == 0) {
+      times_deleted++;
+      delete count;
+    }
+    done.wait();
+  });
+
+  t1.join();
+  t2.join();
+  EXPECT_EQ(times_deleted, 1);
+}
+
 } // namespace folly

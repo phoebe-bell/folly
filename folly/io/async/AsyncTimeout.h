@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <folly/io/async/EventBaseBackendBase.h>
+#include <folly/io/async/Request.h>
 #include <folly/io/async/TimeoutManager.h>
 
 #include <folly/portability/Event.h>
@@ -26,7 +28,6 @@
 namespace folly {
 
 class EventBase;
-class RequestContext;
 
 /**
  * AsyncTimeout is used to asynchronously wait for a timeout to occur.
@@ -90,15 +91,23 @@ class AsyncTimeout {
    * new timeout value.
    *
    * @param milliseconds  The timeout duration, in milliseconds.
+   * @param rctx request context to be captured by the callback
+   *             set to empty if current context should not be saved.
    *
    * @return Returns true if the timeout was successfully scheduled,
    *         and false if an error occurred.  After an error, the timeout is
    *         always unscheduled, even if scheduleTimeout() was just
    *         rescheduling an existing timeout.
    */
-  bool scheduleTimeout(uint32_t milliseconds);
-  bool scheduleTimeout(TimeoutManager::timeout_type timeout);
-  bool scheduleTimeoutHighRes(TimeoutManager::timeout_type_high_res timeout);
+  bool scheduleTimeout(
+      uint32_t milliseconds,
+      std::shared_ptr<RequestContext>&& rctx = RequestContext::saveContext());
+  bool scheduleTimeout(
+      TimeoutManager::timeout_type timeout,
+      std::shared_ptr<RequestContext>&& rctx = RequestContext::saveContext());
+  bool scheduleTimeoutHighRes(
+      TimeoutManager::timeout_type_high_res timeout,
+      std::shared_ptr<RequestContext>&& rctx = RequestContext::saveContext());
 
   /**
    * Cancel the timeout, if it is running.
@@ -142,16 +151,12 @@ class AsyncTimeout {
   void detachTimeoutManager();
   void detachEventBase();
 
-  const TimeoutManager* getTimeoutManager() {
-    return timeoutManager_;
-  }
+  const TimeoutManager* getTimeoutManager() { return timeoutManager_; }
 
   /**
    * Returns the internal handle to the event
    */
-  struct event* getEvent() {
-    return &event_;
-  }
+  EventBaseBackendBase::Event* getEvent() { return &event_; }
 
   /**
    * Convenience function that wraps a function object as
@@ -220,7 +225,7 @@ class AsyncTimeout {
  private:
   static void libeventCallback(libevent_fd_t fd, short events, void* arg);
 
-  struct event event_;
+  EventBaseBackendBase::Event event_;
 
   /*
    * Store a pointer to the TimeoutManager.  We only use this

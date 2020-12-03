@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -30,8 +30,8 @@ struct StringKeyedUnorderedMap
     : public F14NodeMap<std::string, Mapped, Hash, Eq, Alloc> {
   using Super = F14NodeMap<std::string, Mapped, Hash, Eq, Alloc>;
 
-  static_assert(is_transparent<Hash>::value, "not transparent");
-  static_assert(is_transparent<Eq>::value, "not transparent");
+  static_assert(is_transparent_v<Hash>, "not transparent");
+  static_assert(is_transparent_v<Eq>, "not transparent");
 
  public:
   using Super::Super;

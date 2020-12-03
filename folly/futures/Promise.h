@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -58,6 +58,8 @@ template <class T>
 class SemiFuture;
 template <class T>
 class Future;
+template <class T>
+class Promise;
 
 namespace futures {
 namespace detail {
@@ -66,6 +68,8 @@ class FutureBase;
 struct EmptyConstruct {};
 template <typename T, typename F>
 class CoreCallbackState;
+template <typename T>
+void setTry(Promise<T>& p, Executor::KeepAlive<>&& ka, Try<T>&& t);
 } // namespace detail
 } // namespace futures
 
@@ -387,9 +391,7 @@ class Promise {
 
   /// true if this has a shared state;
   ///   false if this has been consumed/moved-out.
-  bool valid() const noexcept {
-    return core_ != nullptr;
-  }
+  bool valid() const noexcept { return core_ != nullptr; }
 
   /// True if either this promise was fulfilled or is invalid.
   ///
@@ -407,6 +409,10 @@ class Promise {
   friend class Future;
   template <class, class>
   friend class futures::detail::CoreCallbackState;
+  friend void futures::detail::setTry<T>(
+      Promise<T>& p,
+      Executor::KeepAlive<>&& ka,
+      Try<T>&& t);
 
   // Whether the Future has been retrieved (a one-time operation).
   bool retrieved_;
@@ -418,12 +424,8 @@ class Promise {
   //
   // Implementation methods should usually use this instead of `this->core_`.
   // The latter should be used only when you need the possibly-null pointer.
-  Core& getCore() {
-    return getCoreImpl(core_);
-  }
-  Core const& getCore() const {
-    return getCoreImpl(core_);
-  }
+  Core& getCore() { return getCoreImpl(core_); }
+  Core const& getCore() const { return getCoreImpl(core_); }
 
   template <typename CoreT>
   static CoreT& getCoreImpl(CoreT* core) {

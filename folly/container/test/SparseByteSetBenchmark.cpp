@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -42,18 +42,14 @@ class BitSetWrapper {
     }
     return r;
   }
-  inline bool contains(uint8_t i) {
-    return rep_[i];
-  }
+  inline bool contains(uint8_t i) { return rep_[i]; }
 
  private:
   bitset<256> rep_;
 };
 class BoolArraySet {
  public:
-  BoolArraySet() {
-    memset(rep_, 0, sizeof(rep_));
-  }
+  BoolArraySet() { memset(rep_, 0, sizeof(rep_)); }
   inline bool add(uint8_t i) {
     auto r = !contains(i);
     if (r) {
@@ -61,9 +57,7 @@ class BoolArraySet {
     }
     return r;
   }
-  inline bool contains(uint8_t i) {
-    return rep_[i];
-  }
+  inline bool contains(uint8_t i) { return rep_[i]; }
 
  private:
   bool rep_[256];

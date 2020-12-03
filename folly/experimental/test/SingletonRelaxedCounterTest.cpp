@@ -1,11 +1,11 @@
 /*
- * Copyright 2019-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -44,9 +44,7 @@ TEST_F(SingletonRelaxedCounterTest, Basic) {
 
 TEST_F(SingletonRelaxedCounterTest, CompatibilityWithThreadLocal) {
   struct CounterNoOpInDtor {
-    ~CounterNoOpInDtor() {
-      Counter::add(0);
-    }
+    ~CounterNoOpInDtor() { Counter::add(0); }
   };
   ThreadLocal<CounterNoOpInDtor> tl;
   auto thread = std::thread([&] { //
@@ -58,9 +56,7 @@ TEST_F(SingletonRelaxedCounterTest, CompatibilityWithThreadLocal) {
 
 TEST_F(SingletonRelaxedCounterTest, CompatibilityWithThreadLocalMany) {
   struct CounterNoOpInDtor {
-    ~CounterNoOpInDtor() {
-      Counter::add(0);
-    }
+    ~CounterNoOpInDtor() { Counter::add(0); }
   };
   ThreadLocal<CounterNoOpInDtor> tl;
   std::vector<std::thread> threads(16);

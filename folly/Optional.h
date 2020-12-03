@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 /*
@@ -117,7 +118,7 @@ class Optional {
       std::is_nothrow_move_constructible<Value>::value) {
     if (src.hasValue()) {
       construct(std::move(src.value()));
-      src.clear();
+      src.reset();
     }
   }
 
@@ -155,17 +156,15 @@ class Optional {
     p.promise_->value_ = this;
   }
 
-  void assign(const None&) {
-    clear();
-  }
+  void assign(const None&) { reset(); }
 
   void assign(Optional&& src) {
     if (this != &src) {
       if (src.hasValue()) {
         assign(std::move(src.value()));
-        src.clear();
+        src.reset();
       } else {
-        clear();
+        reset();
       }
     }
   }
@@ -174,7 +173,7 @@ class Optional {
     if (src.hasValue()) {
       assign(src.value());
     } else {
-      clear();
+      reset();
     }
   }
 
@@ -219,7 +218,7 @@ class Optional {
 
   template <class... Args>
   Value& emplace(Args&&... args) {
-    clear();
+    reset();
     construct(std::forward<Args>(args)...);
     return value();
   }
@@ -229,18 +228,14 @@ class Optional {
       std::is_constructible<Value, std::initializer_list<U>&, Args&&...>::value,
       Value&>::type
   emplace(std::initializer_list<U> ilist, Args&&... args) {
-    clear();
+    reset();
     construct(ilist, std::forward<Args>(args)...);
     return value();
   }
 
-  void reset() noexcept {
-    storage_.clear();
-  }
+  void reset() noexcept { storage_.clear(); }
 
-  void clear() noexcept {
-    reset();
-  }
+  void clear() noexcept { reset(); }
 
   void swap(Optional& that) noexcept(IsNothrowSwappable<Value>::value) {
     if (hasValue() && that.hasValue()) {
@@ -283,37 +278,19 @@ class Optional {
   }
   Value* get_pointer() && = delete;
 
-  constexpr bool has_value() const noexcept {
-    return storage_.hasValue;
-  }
+  constexpr bool has_value() const noexcept { return storage_.hasValue; }
 
-  constexpr bool hasValue() const noexcept {
-    return has_value();
-  }
+  constexpr bool hasValue() const noexcept { return has_value(); }
 
-  constexpr explicit operator bool() const noexcept {
-    return has_value();
-  }
+  constexpr explicit operator bool() const noexcept { return has_value(); }
 
-  constexpr const Value& operator*() const& {
-    return value();
-  }
-  constexpr Value& operator*() & {
-    return value();
-  }
-  constexpr const Value&& operator*() const&& {
-    return std::move(value());
-  }
-  constexpr Value&& operator*() && {
-    return std::move(value());
-  }
+  constexpr const Value& operator*() const& { return value(); }
+  constexpr Value& operator*() & { return value(); }
+  constexpr const Value&& operator*() const&& { return std::move(value()); }
+  constexpr Value&& operator*() && { return std::move(value()); }
 
-  constexpr const Value* operator->() const {
-    return &value();
-  }
-  constexpr Value* operator->() {
-    return &value();
-  }
+  constexpr const Value* operator->() const { return &value(); }
+  constexpr Value* operator->() { return &value(); }
 
   // Return a copy of the value if set, or a given default if not.
   template <class U>
@@ -382,9 +359,7 @@ class Optional {
 
     constexpr StorageTriviallyDestructible()
         : emptyState('\0'), hasValue{false} {}
-    void clear() {
-      hasValue = false;
-    }
+    void clear() { hasValue = false; }
   };
 
   struct StorageNonTriviallyDestructible {
@@ -395,9 +370,7 @@ class Optional {
     bool hasValue;
 
     StorageNonTriviallyDestructible() : hasValue{false} {}
-    ~StorageNonTriviallyDestructible() {
-      clear();
-    }
+    ~StorageNonTriviallyDestructible() { clear(); }
 
     void clear() {
       if (hasValue) {
@@ -614,9 +587,7 @@ struct OptionalPromiseReturn {
   OptionalPromiseReturn(OptionalPromiseReturn&& that) noexcept
       : OptionalPromiseReturn{*that.promise_} {}
   ~OptionalPromiseReturn() {}
-  /* implicit */ operator Optional<Value>() & {
-    return std::move(storage_);
-  }
+  /* implicit */ operator Optional<Value>() & { return std::move(storage_); }
 };
 
 template <typename Value>
@@ -628,15 +599,11 @@ struct OptionalPromise {
   //    folly::Optional<Value> retobj{ p.get_return_object(); } // MSVC
   // or:
   //    auto retobj = p.get_return_object(); // clang
-  OptionalPromiseReturn<Value> get_return_object() noexcept {
-    return *this;
-  }
+  OptionalPromiseReturn<Value> get_return_object() noexcept { return *this; }
   std::experimental::suspend_never initial_suspend() const noexcept {
     return {};
   }
-  std::experimental::suspend_never final_suspend() const {
-    return {};
-  }
+  std::experimental::suspend_never final_suspend() const noexcept { return {}; }
   template <typename U>
   void return_value(U&& u) {
     *value_ = static_cast<U&&>(u);
@@ -644,19 +611,15 @@ struct OptionalPromise {
   void unhandled_exception() {
     // Technically, throwing from unhandled_exception is underspecified:
     // https://github.com/GorNishanov/CoroutineWording/issues/17
-    throw;
+    rethrow_current_exception();
   }
 };
 
 template <typename Value>
 struct OptionalAwaitable {
   Optional<Value> o_;
-  bool await_ready() const noexcept {
-    return o_.hasValue();
-  }
-  Value await_resume() {
-    return std::move(o_.value());
-  }
+  bool await_ready() const noexcept { return o_.hasValue(); }
+  Value await_resume() { return std::move(o_.value()); }
 
   // Explicitly only allow suspension into an OptionalPromise
   template <typename U>

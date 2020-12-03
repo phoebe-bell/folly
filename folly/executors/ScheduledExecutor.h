@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -37,9 +37,7 @@ class ScheduledExecutor : public virtual Executor {
   void add(Func) override = 0;
 
   /// Alias for add() (for Rx consistency)
-  void schedule(Func&& a) {
-    add(std::move(a));
-  }
+  void schedule(Func&& a) { add(std::move(a)); }
 
   /// Schedule a Func to be executed after dur time has elapsed
   /// Expect millisecond resolution at best.
@@ -54,8 +52,6 @@ class ScheduledExecutor : public virtual Executor {
   }
 
   /// Get this executor's notion of time. Must be threadsafe.
-  virtual TimePoint now() {
-    return std::chrono::steady_clock::now();
-  }
+  virtual TimePoint now() { return std::chrono::steady_clock::now(); }
 };
 } // namespace folly

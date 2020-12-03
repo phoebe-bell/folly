@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -29,9 +29,7 @@ using namespace folly;
 struct ManualWaiter : public DrivableExecutor {
   explicit ManualWaiter(std::shared_ptr<ManualExecutor> ex_) : ex(ex_) {}
 
-  void add(Func f) override {
-    ex->add(std::move(f));
-  }
+  void add(Func f) override { ex->add(std::move(f)); }
 
   void drive() override {
     ex->wait();
@@ -126,7 +124,7 @@ TEST_F(ViaFixture, threadHops) {
                  EXPECT_EQ(std::this_thread::get_id(), westThreadId);
                  return t.value();
                });
-  EXPECT_EQ(f.getVia(waiter.get()), 1);
+  EXPECT_EQ(std::move(f).getVia(waiter.get()), 1);
 }
 
 TEST_F(ViaFixture, chainVias) {
@@ -158,7 +156,7 @@ TEST_F(ViaFixture, chainVias) {
                  return val + 1;
                });
 
-  EXPECT_EQ(f.getVia(waiter.get()), 4);
+  EXPECT_EQ(std::move(f).getVia(waiter.get()), 4);
 }
 
 TEST_F(ViaFixture, bareViaAssignment) {
@@ -172,9 +170,7 @@ TEST_F(ViaFixture, viaAssignment) {
 }
 
 struct PriorityExecutor : public Executor {
-  void add(Func /* f */) override {
-    count1++;
-  }
+  void add(Func /* f */) override { count1++; }
 
   void addWithPriority(Func f, int8_t priority) override {
     int mid = getNumPriorities() / 2;
@@ -192,9 +188,7 @@ struct PriorityExecutor : public Executor {
     f();
   }
 
-  uint8_t getNumPriorities() const override {
-    return 3;
-  }
+  uint8_t getNumPriorities() const override { return 3; }
 
   int count0{0};
   int count1{0};
@@ -219,12 +213,11 @@ TEST(Via, priority) {
 
 TEST(Via, then2) {
   ManualExecutor x1, x2;
-  bool a = false, b = false, c = false, d = false;
+  bool a = false, b = false, c = false;
   via(&x1)
       .thenValue([&](auto&&) { a = true; })
-      .then(&x2, [&](auto&&) { b = true; })
-      .thenValue([&](auto&&) { c = true; })
-      .thenValueInline(folly::makeAsyncTask(&x2, [&](auto&&) { d = true; }));
+      .thenValue([&](auto&&) { b = true; })
+      .thenValueInline(folly::makeAsyncTask(&x2, [&](auto&&) { c = true; }));
 
   EXPECT_FALSE(a);
   EXPECT_FALSE(b);
@@ -234,22 +227,19 @@ TEST(Via, then2) {
   EXPECT_FALSE(b);
   EXPECT_FALSE(c);
 
-  x2.run();
+  x1.run();
   EXPECT_TRUE(b);
   EXPECT_FALSE(c);
 
-  x1.run();
-  EXPECT_TRUE(c);
-  EXPECT_FALSE(d);
-
   x2.run();
-  EXPECT_TRUE(d);
+  EXPECT_TRUE(c);
 }
 
 TEST(Via, allowInline) {
   ManualExecutor x1, x2;
   bool a = false, b = false, c = false, d = false, e = false, f = false,
-       g = false, h = false, i = false, j = false;
+       g = false, h = false, i = false, j = false, k = false, l = false,
+       m = false, n = false, o = false, p = false, q = false, r = false;
   via(&x1)
       .thenValue([&](auto&&) { a = true; })
       .thenTryInline([&](auto&&) { b = true; })
@@ -265,7 +255,23 @@ TEST(Via, allowInline) {
         h = true;
         return via(&x1).thenValue([&](auto&&) { i = true; });
       })
-      .thenValueInline([&](auto&&) { j = true; });
+      .thenValueInline([&](auto&&) { j = true; })
+      .semi()
+      .deferValue([&](auto&&) { k = true; })
+      .via(&x2)
+      .thenValueInline([&](auto&&) { l = true; })
+      .semi()
+      .deferValue([&](auto&&) { m = true; })
+      .via(&x1)
+      .thenValue([&](auto&&) { n = true; })
+      .semi()
+      .deferValue([&](auto&&) { o = true; })
+      .deferValue([&](auto&&) { p = true; })
+      .via(&x1)
+      .semi()
+      .deferValue([&](auto&&) { q = true; })
+      .deferValue([&](auto&&) { r = true; })
+      .via(&x2);
 
   EXPECT_FALSE(a);
   EXPECT_FALSE(b);
@@ -307,8 +313,31 @@ TEST(Via, allowInline) {
   EXPECT_TRUE(i);
   EXPECT_FALSE(j);
 
+  // Defer should run on x1 and therefore not inline
+  // Subsequent deferred work is run on x1 and hence not inlined.
   x2.run();
   EXPECT_TRUE(j);
+  EXPECT_TRUE(k);
+  EXPECT_TRUE(l);
+  EXPECT_FALSE(m);
+
+  // Complete the deferred task
+  x1.run();
+  EXPECT_TRUE(m);
+  EXPECT_FALSE(n);
+
+  // Here defer and the above thenValue are both on x1, defer should be
+  // inline
+  x1.run();
+  EXPECT_TRUE(n);
+  EXPECT_TRUE(o);
+  EXPECT_TRUE(p);
+  EXPECT_FALSE(q);
+
+  // Change of executor in deferred executor so now run x2 to complete
+  x2.run();
+  EXPECT_TRUE(q);
+  EXPECT_TRUE(r);
 }
 
 #ifndef __APPLE__ // TODO #7372389
@@ -341,13 +370,9 @@ class ThreadExecutor : public Executor {
     worker.join();
   }
 
-  void add(Func fn) override {
-    funcs.blockingWrite(std::move(fn));
-  }
+  void add(Func fn) override { funcs.blockingWrite(std::move(fn)); }
 
-  void waitForStartup() {
-    baton.wait();
-  }
+  void waitForStartup() { baton.wait(); }
 };
 
 TEST(Via, viaThenGetWasRacy) {
@@ -388,9 +413,7 @@ TEST(Via, callbackRace) {
 class DummyDrivableExecutor : public DrivableExecutor {
  public:
   void add(Func /* f */) override {}
-  void drive() override {
-    ran = true;
-  }
+  void drive() override { ran = true; }
   bool ran{false};
 };
 
@@ -399,20 +422,20 @@ TEST(Via, getVia) {
     // non-void
     ManualExecutor x;
     auto f = via(&x).thenValue([](auto&&) { return true; });
-    EXPECT_TRUE(f.getVia(&x));
+    EXPECT_TRUE(std::move(f).getVia(&x));
   }
 
   {
     // void
     ManualExecutor x;
     auto f = via(&x).then();
-    f.getVia(&x);
+    std::move(f).getVia(&x);
   }
 
   {
     DummyDrivableExecutor x;
     auto f = makeFuture(true);
-    EXPECT_TRUE(f.getVia(&x));
+    EXPECT_TRUE(std::move(f).getVia(&x));
     EXPECT_FALSE(x.ran);
   }
 }
@@ -421,7 +444,8 @@ TEST(Via, SimpleTimedGetVia) {
   TimedDrivableExecutor e2;
   Promise<folly::Unit> p;
   auto f = p.getFuture();
-  EXPECT_THROW(f.getVia(&e2, std::chrono::seconds(1)), FutureTimeout);
+  EXPECT_THROW(
+      std::move(f).getVia(&e2, std::chrono::seconds(1)), FutureTimeout);
 }
 
 TEST(Via, getTryVia) {
@@ -430,7 +454,7 @@ TEST(Via, getTryVia) {
     ManualExecutor x;
     auto f = via(&x).thenValue([](auto&&) { return 23; });
     EXPECT_FALSE(f.isReady());
-    EXPECT_EQ(23, f.getTryVia(&x).value());
+    EXPECT_EQ(23, std::move(f).getTryVia(&x).value());
   }
 
   {
@@ -438,14 +462,14 @@ TEST(Via, getTryVia) {
     ManualExecutor x;
     auto f = via(&x).then();
     EXPECT_FALSE(f.isReady());
-    auto t = f.getTryVia(&x);
+    auto t = std::move(f).getTryVia(&x);
     EXPECT_TRUE(t.hasValue());
   }
 
   {
     DummyDrivableExecutor x;
     auto f = makeFuture(23);
-    EXPECT_EQ(23, f.getTryVia(&x).value());
+    EXPECT_EQ(23, std::move(f).getTryVia(&x).value());
     EXPECT_FALSE(x.ran);
   }
 }
@@ -454,7 +478,8 @@ TEST(Via, SimpleTimedGetTryVia) {
   TimedDrivableExecutor e2;
   Promise<folly::Unit> p;
   auto f = p.getFuture();
-  EXPECT_THROW(f.getTryVia(&e2, std::chrono::seconds(1)), FutureTimeout);
+  EXPECT_THROW(
+      std::move(f).getTryVia(&e2, std::chrono::seconds(1)), FutureTimeout);
 }
 
 TEST(Via, waitVia) {

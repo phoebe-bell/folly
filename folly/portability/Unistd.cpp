@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -115,12 +115,8 @@ int getdtablesize() {
   return _getmaxstdio();
 }
 
-int getgid() {
+gid_t getgid() {
   return 1;
-}
-
-pid_t getpid() {
-  return (pid_t)uint64_t(GetCurrentProcessId());
 }
 
 // No major need to implement this, and getting a non-potentially
@@ -129,7 +125,7 @@ pid_t getppid() {
   return (pid_t)1;
 }
 
-int getuid() {
+uid_t getuid() {
   return 1;
 }
 

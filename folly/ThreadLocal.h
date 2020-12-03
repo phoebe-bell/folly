@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -41,6 +41,7 @@
 #pragma once
 
 #include <iterator>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -60,31 +61,26 @@ class ThreadLocal {
  public:
   constexpr ThreadLocal() : constructor_([]() { return new T(); }) {}
 
-  template <typename F, std::enable_if_t<is_invocable_r<T*, F>::value, int> = 0>
+  template <typename F, std::enable_if_t<is_invocable_r_v<T*, F>, int> = 0>
   explicit ThreadLocal(F&& constructor)
       : constructor_(std::forward<F>(constructor)) {}
 
-  FOLLY_ALWAYS_INLINE FOLLY_ATTR_VISIBILITY_HIDDEN T* get() const {
+  FOLLY_ERASE T* get() const {
     auto const ptr = tlp_.get();
     return FOLLY_LIKELY(!!ptr) ? ptr : makeTlp();
   }
 
-  T* operator->() const {
-    return get();
-  }
+  // may return null
+  FOLLY_ERASE T* getIfExist() const { return tlp_.get(); }
 
-  T& operator*() const {
-    return *get();
-  }
+  T* operator->() const { return get(); }
 
-  void reset(T* newPtr = nullptr) {
-    tlp_.reset(newPtr);
-  }
+  T& operator*() const { return *get(); }
+
+  void reset(T* newPtr = nullptr) { tlp_.reset(newPtr); }
 
   typedef typename ThreadLocalPtr<T, Tag, AccessMode>::Accessor Accessor;
-  Accessor accessAllThreads() const {
-    return tlp_.accessAllThreads();
-  }
+  Accessor accessAllThreads() const { return tlp_.accessAllThreads(); }
 
   // movable
   ThreadLocal(ThreadLocal&&) = default;
@@ -150,22 +146,16 @@ class ThreadLocalPtr {
     return *this;
   }
 
-  ~ThreadLocalPtr() {
-    destroy();
-  }
+  ~ThreadLocalPtr() { destroy(); }
 
   T* get() const {
     threadlocal_detail::ElementWrapper& w = StaticMeta::get(&id_);
     return static_cast<T*>(w.ptr);
   }
 
-  T* operator->() const {
-    return get();
-  }
+  T* operator->() const { return get(); }
 
-  T& operator*() const {
-    return *get();
-  }
+  T& operator*() const { return *get(); }
 
   T* release() {
     auto rlock = getAccessAllThreadsLockReadHolderIfEnabled();
@@ -190,9 +180,7 @@ class ThreadLocalPtr {
     w->set(newPtr);
   }
 
-  explicit operator bool() const {
-    return get() != nullptr;
-  }
+  explicit operator bool() const { return get() != nullptr; }
 
   /**
    * reset() that transfers ownership from a smart pointer
@@ -345,42 +333,30 @@ class ThreadLocalPtr {
         return copy;
       }
 
-      T& operator*() {
-        return dereference();
+      T& operator*() { return dereference(); }
+
+      T const& operator*() const { return dereference(); }
+
+      T* operator->() { return &dereference(); }
+
+      T const* operator->() const { return &dereference(); }
+
+      bool operator==(Iterator const& rhs) const { return equal(rhs); }
+
+      bool operator!=(Iterator const& rhs) const { return !equal(rhs); }
+
+      std::thread::id getThreadId() const {
+        return e_->getThreadEntry()->tid();
       }
 
-      T const& operator*() const {
-        return dereference();
-      }
-
-      T* operator->() {
-        return &dereference();
-      }
-
-      T const* operator->() const {
-        return &dereference();
-      }
-
-      bool operator==(Iterator const& rhs) const {
-        return equal(rhs);
-      }
-
-      bool operator!=(Iterator const& rhs) const {
-        return !equal(rhs);
-      }
+      uint64_t getOSThreadId() const { return e_->getThreadEntry()->tid_os; }
     };
 
-    ~Accessor() {
-      release();
-    }
+    ~Accessor() { release(); }
 
-    Iterator begin() const {
-      return ++Iterator(this);
-    }
+    Iterator begin() const { return ++Iterator(this); }
 
-    Iterator end() const {
-      return Iterator(this);
-    }
+    Iterator end() const { return Iterator(this); }
 
     Accessor(const Accessor&) = delete;
     Accessor& operator=(const Accessor&) = delete;
@@ -448,9 +424,7 @@ class ThreadLocalPtr {
   }
 
  private:
-  void destroy() {
-    StaticMeta::instance().destroy(&id_);
-  }
+  void destroy() { StaticMeta::instance().destroy(&id_); }
 
   // non-copyable
   ThreadLocalPtr(const ThreadLocalPtr&) = delete;

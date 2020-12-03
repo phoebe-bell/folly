@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -36,6 +36,12 @@
 #include <folly/lang/Align.h>
 #include <folly/lang/Exception.h>
 #include <folly/system/ThreadId.h>
+
+#if !FOLLY_MOBILE && defined(FOLLY_TLS)
+#define FOLLY_CL_USE_FOLLY_TLS 1
+#else
+#undef FOLLY_CL_USE_FOLLY_TLS
+#endif
 
 namespace folly {
 
@@ -141,7 +147,7 @@ struct Getcpu {
   static Func resolveVdsoFunc();
 };
 
-#ifdef FOLLY_TLS
+#ifdef FOLLY_CL_USE_FOLLY_TLS
 template <template <typename> class Atom>
 struct SequentialThreadId {
   /// Returns the thread id assigned to the current thread
@@ -171,9 +177,7 @@ extern template struct SequentialThreadId<std::atomic>;
 #endif
 
 struct HashingThreadId {
-  static unsigned get() {
-    return hash::twang_32from64(getCurrentThreadID());
-  }
+  static unsigned get() { return hash::twang_32from64(getCurrentThreadID()); }
 };
 
 /// A class that lazily binds a unique (for each implementation of Atom)
@@ -196,7 +200,7 @@ struct FallbackGetcpu {
   }
 };
 
-#ifdef FOLLY_TLS
+#ifdef FOLLY_CL_USE_FOLLY_TLS
 typedef FallbackGetcpu<SequentialThreadId<std::atomic>> FallbackGetcpuType;
 #else
 typedef FallbackGetcpu<HashingThreadId> FallbackGetcpuType;
@@ -251,7 +255,7 @@ struct AccessSpreader {
                               [cpu % kMaxCpus];
   }
 
-#ifdef FOLLY_TLS
+#ifdef FOLLY_CL_USE_FOLLY_TLS
   /// Returns the stripe associated with the current CPU.  The returned
   /// value will be < numStripes.
   /// This function caches the current cpu in a thread-local variable for a
@@ -264,15 +268,20 @@ struct AccessSpreader {
   }
 #else
   /// Fallback implementation when thread-local storage isn't available.
-  static size_t cachedCurrent(size_t numStripes) {
-    return current(numStripes);
-  }
+  static size_t cachedCurrent(size_t numStripes) { return current(numStripes); }
 #endif
+
+  /// Returns the maximum stripe value that can be returned under any
+  /// dynamic configuration, based on the current compile-time platform
+  static constexpr size_t maxStripeValue() { return kMaxCpus; }
 
  private:
   /// If there are more cpus than this nothing will crash, but there
   /// might be unnecessary sharing
-  enum { kMaxCpus = 128 };
+  enum {
+    // Android phones with 8 cores exist today; 16 for future-proofing.
+    kMaxCpus = kIsMobile ? 16 : 256,
+  };
 
   typedef uint8_t CompactStripe;
 
@@ -317,7 +326,7 @@ struct AccessSpreader {
     unsigned cachedCpuUses_{0};
   };
 
-#ifdef FOLLY_TLS
+#ifdef FOLLY_CL_USE_FOLLY_TLS
   static FOLLY_TLS CpuCache cpuCache;
 #endif
 
@@ -359,18 +368,24 @@ struct AccessSpreader {
     auto& cacheLocality = CacheLocality::system<Atom>();
     auto n = cacheLocality.numCpus;
     for (size_t width = 0; width <= kMaxCpus; ++width) {
+      auto& row = widthAndCpuToStripe[width];
       auto numStripes = std::max(size_t{1}, width);
       for (size_t cpu = 0; cpu < kMaxCpus && cpu < n; ++cpu) {
         auto index = cacheLocality.localityIndexByCpu[cpu];
         assert(index < n);
         // as index goes from 0..n, post-transform value goes from
         // 0..numStripes
-        widthAndCpuToStripe[width][cpu] =
-            CompactStripe((index * numStripes) / n);
-        assert(widthAndCpuToStripe[width][cpu] < numStripes);
+        row[cpu] = static_cast<CompactStripe>((index * numStripes) / n);
+        assert(row[cpu] < numStripes);
+      }
+      size_t filled = n;
+      while (filled < kMaxCpus) {
+        size_t len = std::min(filled, kMaxCpus - filled);
+        std::memcpy(&row[filled], &row[0], len);
+        filled += len;
       }
       for (size_t cpu = n; cpu < kMaxCpus; ++cpu) {
-        widthAndCpuToStripe[width][cpu] = widthAndCpuToStripe[width][cpu - n];
+        assert(row[cpu] == row[cpu - n]);
       }
     }
     return true;
@@ -385,7 +400,7 @@ template <template <typename> class Atom>
 typename AccessSpreader<Atom>::CompactStripe
     AccessSpreader<Atom>::widthAndCpuToStripe[kMaxCpus + 1][kMaxCpus] = {};
 
-#ifdef FOLLY_TLS
+#ifdef FOLLY_CL_USE_FOLLY_TLS
 template <template <typename> class Atom>
 FOLLY_TLS
     typename AccessSpreader<Atom>::CpuCache AccessSpreader<Atom>::cpuCache;

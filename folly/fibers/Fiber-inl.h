@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <cassert>
@@ -21,10 +22,11 @@ namespace folly {
 namespace fibers {
 
 template <typename F>
-void Fiber::setFunction(F&& func) {
+void Fiber::setFunction(F&& func, TaskOptions taskOptions) {
   assert(state_ == INVALID);
   func_ = std::forward<F>(func);
   state_ = NOT_STARTED;
+  taskOptions_ = std::move(taskOptions);
 }
 
 template <typename F, typename G>
@@ -33,6 +35,7 @@ void Fiber::setFunctionFinally(F&& resultFunc, G&& finallyFunc) {
   resultFunc_ = std::forward<F>(resultFunc);
   finallyFunc_ = std::forward<G>(finallyFunc);
   state_ = NOT_STARTED;
+  taskOptions_ = TaskOptions();
 }
 
 inline void* Fiber::getUserBuffer() {

@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/synchronization/Hazptr-fwd.h>
@@ -53,13 +54,9 @@ class hazptr_tc_entry {
     hprec_ = hprec;
   }
 
-  FOLLY_ALWAYS_INLINE hazptr_rec<Atom>* get() const noexcept {
-    return hprec_;
-  }
+  FOLLY_ALWAYS_INLINE hazptr_rec<Atom>* get() const noexcept { return hprec_; }
 
-  void evict() {
-    hprec_->release();
-  }
+  void evict() { hprec_->release(); }
 }; // hazptr_tc_entry
 
 /**
@@ -82,9 +79,7 @@ class hazptr_tc {
     }
   }
 
-  static constexpr uint8_t capacity() noexcept {
-    return kCapacity;
-  }
+  static constexpr uint8_t capacity() noexcept { return kCapacity; }
 
  private:
   template <uint8_t, template <typename> class>
@@ -112,16 +107,22 @@ class hazptr_tc {
       entry_[count_++].fill(hprec);
       return true;
     }
+    hazptr_warning_tc_overflow();
     return false;
   }
 
-  FOLLY_ALWAYS_INLINE uint8_t count() const noexcept {
-    return count_;
+  FOLLY_EXPORT FOLLY_NOINLINE void hazptr_warning_tc_overflow() {
+    static std::atomic<uint64_t> warning_count{0};
+    if ((warning_count++ % 10000) == 0) {
+      LOG(WARNING) << "Hazptr thread cache overflow "
+                   << std::this_thread::get_id();
+      ;
+    }
   }
 
-  FOLLY_ALWAYS_INLINE void set_count(uint8_t val) noexcept {
-    count_ = val;
-  }
+  FOLLY_ALWAYS_INLINE uint8_t count() const noexcept { return count_; }
+
+  FOLLY_ALWAYS_INLINE void set_count(uint8_t val) noexcept { count_ = val; }
 
   FOLLY_NOINLINE void fill(uint8_t num) {
     DCHECK_LE(count_ + num, capacity());
@@ -148,10 +149,11 @@ class hazptr_tc {
   }
 }; // hazptr_tc
 
+struct hazptr_tc_tls_tag {};
 /** hazptr_tc_tls */
 template <template <typename> class Atom>
 FOLLY_ALWAYS_INLINE hazptr_tc<Atom>& hazptr_tc_tls() {
-  return folly::SingletonThreadLocal<hazptr_tc<Atom>, void>::get();
+  return folly::SingletonThreadLocal<hazptr_tc<Atom>, hazptr_tc_tls_tag>::get();
 }
 
 /**
@@ -182,9 +184,7 @@ class hazptr_priv {
   friend class hazptr_domain<Atom>;
   friend class hazptr_obj<Atom>;
 
-  bool empty() const noexcept {
-    return head() == nullptr;
-  }
+  bool empty() const noexcept { return head() == nullptr; }
 
   void push(hazptr_obj<Atom>* obj) {
     DCHECK(!in_dtor_);

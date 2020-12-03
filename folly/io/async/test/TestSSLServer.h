@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/SocketAddress.h>
@@ -37,6 +38,7 @@ namespace folly {
 extern const char* kTestCert;
 extern const char* kTestKey;
 extern const char* kTestCA;
+extern const char* kTestCertCN;
 
 extern const char* kClientTestCert;
 extern const char* kClientTestKey;
@@ -51,9 +53,7 @@ class SSLServerAcceptCallbackBase : public AsyncServerSocket::AcceptCallback {
   explicit SSLServerAcceptCallbackBase(HandshakeCallback* hcb)
       : state(STATE_WAITING), hcb_(hcb) {}
 
-  ~SSLServerAcceptCallbackBase() override {
-    EXPECT_EQ(STATE_SUCCEEDED, state);
-  }
+  ~SSLServerAcceptCallbackBase() override { EXPECT_EQ(STATE_SUCCEEDED, state); }
 
   void acceptError(const std::exception& ex) noexcept override {
     LOG(WARNING) << "SSLServerAcceptCallbackBase::acceptError " << ex.what();
@@ -113,15 +113,11 @@ class TestSSLServer {
   // Kills the thread.
   virtual ~TestSSLServer();
 
-  EventBase& getEventBase() {
-    return evb_;
-  }
+  EventBase& getEventBase() { return evb_; }
 
   void loadTestCerts();
 
-  const SocketAddress& getAddress() const {
-    return address_;
-  }
+  const SocketAddress& getAddress() const { return address_; }
 
  protected:
   EventBase evb_;

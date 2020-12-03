@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -52,9 +52,7 @@ class TemporaryFile {
   ~TemporaryFile();
 
   // Movable, but not copyable
-  TemporaryFile(TemporaryFile&& other) noexcept {
-    assign(other);
-  }
+  TemporaryFile(TemporaryFile&& other) noexcept { assign(other); }
 
   TemporaryFile& operator=(TemporaryFile&& other) {
     if (this != &other) {
@@ -65,9 +63,7 @@ class TemporaryFile {
   }
 
   void close();
-  int fd() const {
-    return fd_;
-  }
+  int fd() const { return fd_; }
   const fs::path& path() const;
   void reset();
 
@@ -113,9 +109,7 @@ class TemporaryDirectory {
   TemporaryDirectory(TemporaryDirectory&&) = default;
   TemporaryDirectory& operator=(TemporaryDirectory&&) = default;
 
-  const fs::path& path() const {
-    return *path_;
-  }
+  const fs::path& path() const { return *path_; }
 
  private:
   Scope scope_;
@@ -135,9 +129,7 @@ class ChangeToTempDir {
   ChangeToTempDir(ChangeToTempDir&&) = default;
   ChangeToTempDir& operator=(ChangeToTempDir&&) = default;
 
-  const fs::path& path() const {
-    return dir_.path();
-  }
+  const fs::path& path() const { return dir_.path(); }
 
  private:
   TemporaryDirectory dir_;
@@ -165,9 +157,7 @@ void enableInvalidParameters(SavedState state);
 template <typename Func>
 auto msvcSuppressAbortOnInvalidParams(Func func) -> decltype(func()) {
   auto savedState = detail::disableInvalidParameters();
-  SCOPE_EXIT {
-    detail::enableInvalidParameters(savedState);
-  };
+  SCOPE_EXIT { detail::enableInvalidParameters(savedState); };
   return func();
 }
 

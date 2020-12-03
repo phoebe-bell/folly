@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -76,18 +76,12 @@ class IPAddress {
 
   class IPAddressNone {
    public:
-    bool isZero() const {
-      return true;
-    }
-    size_t bitCount() const {
-      return 0;
-    }
+    bool isZero() const { return true; }
+    size_t bitCount() const { return 0; }
     std::string toJson() const {
       return "{family:'AF_UNSPEC', addr:'', hash:0}";
     }
-    std::size_t hash() const {
-      return std::hash<uint64_t>{}(0);
-    }
+    std::size_t hash() const { return std::hash<uint64_t>{}(0); }
     bool isLoopback() const {
       throw_exception<InvalidAddressFamilyException>("empty address");
     }
@@ -110,22 +104,14 @@ class IPAddress {
       (void)numBits;
       return IPAddress();
     }
-    std::string str() const {
-      return "";
-    }
-    std::string toFullyQualified() const {
-      return "";
-    }
+    std::string str() const { return ""; }
+    std::string toFullyQualified() const { return ""; }
     void toFullyQualifiedAppend(std::string& out) const {
       (void)out;
       return;
     }
-    uint8_t version() const {
-      return 0;
-    }
-    const unsigned char* bytes() const {
-      return nullptr;
-    }
+    uint8_t version() const { return 0; }
+    const unsigned char* bytes() const { return nullptr; }
   };
 
   IPAddressNone const& asNone() const {
@@ -178,7 +164,7 @@ class IPAddress {
 
   /**
    * Return a string representation of a CIDR block created with createNetwork.
-   * @param [in] network, pair of address and cidr
+   * @param [in] network pair of address and cidr
    *
    * @return string representing the netblock
    */
@@ -234,7 +220,7 @@ class IPAddress {
    *
    * @throws IPAddressFormatException
    */
-  explicit IPAddress(StringPiece ip);
+  explicit IPAddress(StringPiece str);
 
   /**
    * Create an IPAddress from a sockaddr.
@@ -251,10 +237,10 @@ class IPAddress {
   /* implicit */ IPAddress(const in6_addr& addr) noexcept;
 
   // Assign from V4 address
-  IPAddress& operator=(const IPAddressV4& ipV4Addr) noexcept;
+  IPAddress& operator=(const IPAddressV4& ipv4_addr) noexcept;
 
   // Assign from V6 address
-  IPAddress& operator=(const IPAddressV6& ipV6Addr) noexcept;
+  IPAddress& operator=(const IPAddressV6& ipv6_addr) noexcept;
 
   /**
    * Converts an IPAddress to an IPAddressV4 instance.
@@ -282,14 +268,12 @@ class IPAddress {
   }
 
   // Return sa_family_t of IPAddress
-  sa_family_t family() const {
-    return family_;
-  }
+  sa_family_t family() const { return family_; }
 
   // Populate sockaddr_storage with an appropriate value
   int toSockaddrStorage(sockaddr_storage* dest, uint16_t port = 0) const {
     if (dest == nullptr) {
-      throw IPAddressFormatException("dest must not be null");
+      throw_exception<IPAddressFormatException>("dest must not be null");
     }
     memset(dest, 0, sizeof(sockaddr_storage));
     dest->ss_family = family();
@@ -312,7 +296,7 @@ class IPAddress {
 #endif
       return sizeof(*sin);
     } else {
-      throw InvalidAddressFamilyException(family());
+      throw_exception<InvalidAddressFamilyException>(family());
     }
   }
 
@@ -326,11 +310,11 @@ class IPAddress {
    *
    * @note This is slower than the below counterparts. If perf is important use
    *       one of the two argument variations below.
-   * @param [in] ipSlashCidr address in "192.168.1.0/24" format
+   * @param [in] cidrNetwork address in "192.168.1.0/24" format
    * @throws IPAddressFormatException if no /mask
    * @return true if address is part of specified subnet with cidr
    */
-  bool inSubnet(StringPiece ipSlashCidr) const;
+  bool inSubnet(StringPiece cidrNetwork) const;
 
   /**
    * Check if an IPAddress belongs to a subnet.
@@ -351,29 +335,19 @@ class IPAddress {
   bool inSubnetWithMask(const IPAddress& subnet, ByteRange mask) const;
 
   // @return true if address is a v4 mapped address
-  bool isIPv4Mapped() const {
-    return isV6() && asV6().isIPv4Mapped();
-  }
+  bool isIPv4Mapped() const { return isV6() && asV6().isIPv4Mapped(); }
 
   // @return true if address is uninitialized
-  bool empty() const {
-    return family_ == AF_UNSPEC;
-  }
+  bool empty() const { return family_ == AF_UNSPEC; }
 
   // @return true if address is initialized
-  explicit operator bool() const {
-    return !empty();
-  }
+  explicit operator bool() const { return !empty(); }
 
   // @return true if this is an IPAddressV4 instance
-  bool isV4() const {
-    return family_ == AF_INET;
-  }
+  bool isV4() const { return family_ == AF_INET; }
 
   // @return true if this is an IPAddressV6 instance
-  bool isV6() const {
-    return family_ == AF_INET6;
-  }
+  bool isV6() const { return family_ == AF_INET6; }
 
   // @return true if this address is all zeros
   bool isZero() const {
@@ -385,9 +359,7 @@ class IPAddress {
     return pick([&](auto& _) { return _.bitCount(); });
   }
   // Number of bytes in the address representation.
-  size_t byteCount() const {
-    return bitCount() / 8;
-  }
+  size_t byteCount() const { return bitCount() / 8; }
   // get nth most significant bit - 0 indexed
   bool getNthMSBit(size_t bitIndex) const {
     return detail::getNthMSBitImpl(*this, bitIndex, family());
@@ -555,8 +527,6 @@ inline bool operator>=(const IPAddress& a, const IPAddress& b) {
 namespace std {
 template <>
 struct hash<folly::IPAddress> {
-  size_t operator()(const folly::IPAddress& addr) const {
-    return addr.hash();
-  }
+  size_t operator()(const folly::IPAddress& addr) const { return addr.hash(); }
 };
 } // namespace std

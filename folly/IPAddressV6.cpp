@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,6 +16,7 @@
 
 #include <folly/IPAddressV6.h>
 
+#include <algorithm>
 #include <ostream>
 #include <string>
 
@@ -25,7 +26,7 @@
 #include <folly/MacAddress.h>
 #include <folly/detail/IPAddressSource.h>
 
-#if !_WIN32
+#ifndef _WIN32
 #include <net/if.h>
 #else
 // Because of the massive pain that is libnl, this can't go into the socket
@@ -67,7 +68,7 @@ bool IPAddressV6::validate(StringPiece ip) noexcept {
 }
 
 // public default constructor
-IPAddressV6::IPAddressV6() {}
+IPAddressV6::IPAddressV6() = default;
 
 // public string constructor
 IPAddressV6::IPAddressV6(StringPiece addr) {
@@ -76,20 +77,25 @@ IPAddressV6::IPAddressV6(StringPiece addr) {
     throw IPAddressFormatException(
         to<std::string>("Invalid IPv6 address '", addr, "'"));
   }
-  *this = std::move(maybeIp.value());
+  *this = maybeIp.value();
 }
 
 Expected<IPAddressV6, IPAddressFormatError> IPAddressV6::tryFromString(
     StringPiece str) noexcept {
-  auto ip = str.str();
+  constexpr size_t kMaxSize = 45;
 
   // Allow addresses surrounded in brackets
-  if (ip.size() < 2) {
+  if (str.size() < 2) {
     return makeUnexpected(IPAddressFormatError::INVALID_IP);
   }
-  if (ip.front() == '[' && ip.back() == ']') {
-    ip = ip.substr(1, ip.size() - 2);
-  }
+
+  auto ip = str.front() == '[' && str.back() == ']'
+      ? str.subpiece(1, std::min(str.size() - 2, kMaxSize))
+      : str.subpiece(0, std::min(str.size(), kMaxSize));
+
+  std::array<char, kMaxSize + 1> ipBuffer;
+  std::copy(ip.begin(), ip.end(), ipBuffer.begin());
+  ipBuffer[ip.size()] = '\0';
 
   struct addrinfo* result;
   struct addrinfo hints;
@@ -97,10 +103,8 @@ Expected<IPAddressV6, IPAddressFormatError> IPAddressV6::tryFromString(
   hints.ai_family = AF_INET6;
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_flags = AI_NUMERICHOST;
-  if (::getaddrinfo(ip.c_str(), nullptr, &hints, &result) == 0) {
-    SCOPE_EXIT {
-      ::freeaddrinfo(result);
-    };
+  if (::getaddrinfo(ipBuffer.data(), nullptr, &hints, &result) == 0) {
+    SCOPE_EXIT { ::freeaddrinfo(result); };
     const struct sockaddr_in6* sa =
         reinterpret_cast<struct sockaddr_in6*>(result->ai_addr);
     return IPAddressV6(*sa);
@@ -180,7 +184,7 @@ Expected<IPAddressV6, IPAddressFormatError> IPAddressV6::tryFromBinary(
   IPAddressV6 addr;
   auto setResult = addr.trySetFromBinary(bytes);
   if (setResult.hasError()) {
-    return makeUnexpected(std::move(setResult.error()));
+    return makeUnexpected(setResult.error());
   }
   return addr;
 }
@@ -282,10 +286,7 @@ bool IPAddressV6::isIPv4Mapped() const {
     }
   }
   // check if bytes 11 and 12 are 255
-  if (by[10] == 0xff && by[11] == 0xff) {
-    return true;
-  }
-  return false;
+  return by[10] == 0xff && by[11] == 0xff;
 }
 
 // public
@@ -498,7 +499,7 @@ uint8_t IPAddressV6::getNthMSByte(size_t byteIndex) const {
 }
 
 // protected
-const ByteArray16 IPAddressV6::fetchMask(size_t numBits) {
+ByteArray16 IPAddressV6::fetchMask(size_t numBits) {
   static const size_t bits = bitCount();
   if (numBits > bits) {
     throw IPAddressFormatException("IPv6 addresses are 128 bits.");

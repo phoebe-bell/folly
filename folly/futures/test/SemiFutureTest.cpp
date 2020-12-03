@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/Executor.h>
 #include <folly/Memory.h>
 #include <folly/Unit.h>
@@ -48,6 +49,12 @@ TEST(SemiFuture, makeEmpty) {
 
 TEST(SemiFuture, futureDefaultCtor) {
   SemiFuture<Unit>();
+}
+
+TEST(SemiFuture, semiFutureToUnit) {
+  SemiFuture<Unit> fu = makeSemiFuture(42).unit();
+  std::move(fu).get();
+  EXPECT_THROW(makeSemiFuture<int>(eggs).unit().get(), eggs_t);
 }
 
 TEST(SemiFuture, makeSemiFutureWithUnit) {
@@ -443,7 +450,6 @@ TEST(SemiFuture, MakeFutureFromSemiFutureReturnSemiFuture) {
   EXPECT_FALSE(future.isReady());
   p.setValue(42);
   e.loopOnce();
-  e.loopOnce();
   EXPECT_TRUE(future.isReady());
   ASSERT_EQ(future.value(), 42);
   ASSERT_EQ(result, 42);
@@ -611,7 +617,7 @@ TEST(SemiFuture, DeferWithVia) {
   // Run "F" here inline in the calling thread
   auto tf = std::move(sf).via(&e2);
   p.setValue();
-  tf.getVia(&e2);
+  std::move(tf).getVia(&e2);
   ASSERT_EQ(innerResult, 17);
 }
 
@@ -624,7 +630,7 @@ TEST(SemiFuture, ChainingDefertoThen) {
   // Run "F" here inline in a task running on the eventbase
   auto tf = std::move(sf).via(&e2).thenValue([&](auto&&) { result = 42; });
   p.setValue();
-  tf.getVia(&e2);
+  std::move(tf).getVia(&e2);
   ASSERT_EQ(innerResult, 17);
   ASSERT_EQ(result, 42);
 }
@@ -665,7 +671,7 @@ TEST(SemiFuture, ChainingDefertoThenWithValue) {
   // Run "F" here inline in a task running on the eventbase
   auto tf = std::move(sf).via(&e2).thenValue([&](int a) { result = a; });
   p.setValue(7);
-  tf.getVia(&e2);
+  std::move(tf).getVia(&e2);
   ASSERT_EQ(innerResult, 7);
   ASSERT_EQ(result, 7);
 }
@@ -708,7 +714,7 @@ TEST(SemiFuture, DeferWithinContinuation) {
             });
       });
   p.setValue(7);
-  auto r = resultF.getVia(&e2);
+  auto r = std::move(resultF).getVia(&e2);
   ASSERT_EQ(r, 7);
   ASSERT_EQ(innerResult, 7);
   ASSERT_EQ(result, 7);
@@ -915,15 +921,9 @@ TEST(SemiFuture, makePromiseContract) {
 
 TEST(SemiFuture, invokeCallbackWithOriginalCVRef) {
   struct Foo {
-    int operator()(int x) & {
-      return x + 1;
-    }
-    int operator()(int x) const& {
-      return x + 2;
-    }
-    int operator()(int x) && {
-      return x + 3;
-    }
+    int operator()(int x) & { return x + 1; }
+    int operator()(int x) const& { return x + 2; }
+    int operator()(int x) && { return x + 3; }
   };
 
   Foo foo;
@@ -970,12 +970,12 @@ TEST(SemiFuture, semiFutureWithinNoValueReferenceWhenTimeOut) {
   std::move(f).get();
 }
 
-TEST(SemiFuture, collectAllSemiFutureDeferredWork) {
+TEST(SemiFuture, collectAllDeferredWork) {
   {
     Promise<int> promise1;
     Promise<int> promise2;
 
-    auto future = collectAllSemiFuture(
+    auto future = collectAll(
         promise1.getSemiFuture().deferValue([](int x) { return x * 2; }),
         promise2.getSemiFuture().deferValue([](int x) { return x * 2; }));
 
@@ -994,7 +994,7 @@ TEST(SemiFuture, collectAllSemiFutureDeferredWork) {
     Promise<int> promise1;
     Promise<int> promise2;
 
-    auto future = collectAllSemiFuture(
+    auto future = collectAll(
         promise1.getSemiFuture().deferValue([](int x) { return x * 2; }),
         promise2.getSemiFuture().deferValue([](int x) { return x * 2; }));
 
@@ -1019,7 +1019,7 @@ TEST(SemiFuture, collectAllSemiFutureDeferredWork) {
     futures.push_back(
         promise2.getSemiFuture().deferValue([](int x) { return x * 2; }));
 
-    auto future = collectAllSemiFuture(futures);
+    auto future = collectAll(futures);
 
     promise1.setValue(1);
     promise2.setValue(2);
@@ -1037,7 +1037,7 @@ TEST(SemiFuture, collectAllSemiFutureDeferredWork) {
     {
       Promise<int> promise;
       auto guard = makeGuard([&] { deferredDestroyed = true; });
-      collectAllSemiFuture(promise.getSemiFuture().deferValue(
+      collectAll(promise.getSemiFuture().deferValue(
           [guard = std::move(guard)](int x) { return x; }));
     }
 
@@ -1045,12 +1045,12 @@ TEST(SemiFuture, collectAllSemiFutureDeferredWork) {
   }
 }
 
-TEST(SemiFuture, collectSemiFutureDeferredWork) {
+TEST(SemiFuture, collectDeferredWork) {
   {
     Promise<int> promise1;
     Promise<int> promise2;
 
-    auto future = collectSemiFuture(
+    auto future = collect(
         promise1.getSemiFuture().deferValue([](int x) { return x * 2; }),
         promise2.getSemiFuture().deferValue([](int x) { return x * 2; }));
 
@@ -1069,7 +1069,7 @@ TEST(SemiFuture, collectSemiFutureDeferredWork) {
     Promise<int> promise1;
     Promise<int> promise2;
 
-    auto future = collectSemiFuture(
+    auto future = collect(
         promise1.getSemiFuture().deferValue([](int x) { return x * 2; }),
         promise2.getSemiFuture().deferValue([](int x) { return x * 2; }));
 
@@ -1094,7 +1094,7 @@ TEST(SemiFuture, collectSemiFutureDeferredWork) {
     futures.push_back(
         promise2.getSemiFuture().deferValue([](int x) { return x * 2; }));
 
-    auto future = collectSemiFuture(futures);
+    auto future = collect(futures);
 
     promise1.setValue(1);
     promise2.setValue(2);
@@ -1112,7 +1112,7 @@ TEST(SemiFuture, collectSemiFutureDeferredWork) {
     {
       Promise<int> promise;
       auto guard = makeGuard([&] { deferredDestroyed = true; });
-      collectSemiFuture(promise.getSemiFuture().deferValue(
+      collect(promise.getSemiFuture().deferValue(
           [guard = std::move(guard)](int x) { return x; }));
     }
 
@@ -1239,4 +1239,25 @@ TEST(SemiFuture, ensure) {
     EXPECT_TRUE(fCalled);
     EXPECT_TRUE(ensureCalled);
   }
+}
+
+TEST(SemiFuture, deferredExecutorInlineTest) {
+  bool a = false, b = false, c = false;
+  auto manualExec1 = ManualExecutor{};
+  auto manualExec1KA = getKeepAliveToken(manualExec1);
+  auto manualExec2 = ManualExecutor{};
+  auto manualExec2KA = getKeepAliveToken(manualExec2);
+  auto dw = futures::detail::DeferredExecutor::create();
+  auto* de = dw.get();
+  de->setExecutor(manualExec1KA);
+  de->addFrom(Executor::KeepAlive<>{}, [&](auto&&) { a = true; });
+  EXPECT_FALSE(a);
+  manualExec1.run();
+  EXPECT_TRUE(a);
+  de->addFrom(manualExec2KA.copy(), [&](auto&&) { b = true; });
+  EXPECT_FALSE(b);
+  manualExec1.run();
+  EXPECT_TRUE(b);
+  de->addFrom(manualExec1KA.copy(), [&](auto&&) { c = true; });
+  EXPECT_TRUE(c);
 }

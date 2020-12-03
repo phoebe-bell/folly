@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,11 +17,13 @@
 #pragma once
 
 #include <folly/Range.h>
+#include <folly/io/async/EventBase.h>
 #include <memory>
 
 namespace folly {
 
 class EventBase;
+class EventBaseBackendBase;
 class EventBaseManager;
 class ScopedEventBaseThread;
 
@@ -30,6 +32,11 @@ class EventBaseThread {
   EventBaseThread();
   explicit EventBaseThread(
       bool autostart,
+      EventBaseManager* ebm = nullptr,
+      folly::StringPiece threadName = folly::StringPiece());
+  EventBaseThread(
+      bool autostart,
+      EventBase::Options eventBaseOptions,
       EventBaseManager* ebm = nullptr,
       folly::StringPiece threadName = folly::StringPiece());
   explicit EventBaseThread(EventBaseManager* ebm);
@@ -48,6 +55,7 @@ class EventBaseThread {
 
  private:
   EventBaseManager* ebm_;
+  EventBase::Options ebOpts_;
   std::unique_ptr<ScopedEventBaseThread> th_;
 };
 } // namespace folly

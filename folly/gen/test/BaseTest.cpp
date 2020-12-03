@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -29,6 +29,7 @@
 #include <folly/dynamic.h>
 #include <folly/experimental/TestUtil.h>
 #include <folly/gen/Base.h>
+#include <folly/portability/GFlags.h>
 #include <folly/portability/GTest.h>
 
 using namespace folly::gen;
@@ -110,19 +111,11 @@ TEST(Gen, Member) {
   struct Counter {
     Counter(int start = 0) : c(start) {}
 
-    int count() const {
-      return c;
-    }
-    int incr() {
-      return ++c;
-    }
+    int count() const { return c; }
+    int incr() { return ++c; }
 
-    int& ref() {
-      return c;
-    }
-    const int& ref() const {
-      return c;
-    }
+    int& ref() { return c; }
+    const int& ref() const { return c; }
 
    private:
     int c;
@@ -490,7 +483,7 @@ TEST(Gen, Composed) {
   // Operator, Operator
   // clang-format off
   auto valuesOf
-    = filter([](Optional<int>& o) { return o.hasValue(); })
+    = filter([](Optional<int>& o) { return o.has_value(); })
     | map([](Optional<int>& o) -> int& { return o.value(); });
   // clang-format on
   std::vector<Optional<int>> opts{none, 4, none, 6, none};
@@ -955,9 +948,7 @@ struct CopyCounter {
   int copies;
   int moves;
 
-  CopyCounter() : copies(0), moves(0) {
-    ++alive;
-  }
+  CopyCounter() : copies(0), moves(0) { ++alive; }
 
   CopyCounter(CopyCounter&& source) noexcept {
     *this = std::move(source);
@@ -969,9 +960,7 @@ struct CopyCounter {
     ++alive;
   }
 
-  ~CopyCounter() {
-    --alive;
-  }
+  ~CopyCounter() { --alive; }
 
   CopyCounter& operator=(const CopyCounter& source) {
     this->copies = source.copies + 1;
@@ -1122,15 +1111,9 @@ TEST(Gen, Dereference) {
 namespace {
 struct DereferenceWrapper {
   string data;
-  string& operator*() & {
-    return data;
-  }
-  string&& operator*() && {
-    return std::move(data);
-  }
-  explicit operator bool() {
-    return true;
-  }
+  string& operator*() & { return data; }
+  string&& operator*() && { return std::move(data); }
+  explicit operator bool() { return true; }
 };
 bool operator==(const DereferenceWrapper& a, const DereferenceWrapper& b) {
   return a.data == b.data;
@@ -1218,7 +1201,6 @@ TEST(Gen, DISABLED_GuardThroughBuffers) {
   // clang-format on
 }
 TEST(Gen, eachTryTo) {
-  using std::runtime_error;
   // clang-format off
   EXPECT_EQ(
       4,
@@ -1378,13 +1360,13 @@ TEST(Gen, Unwrap) {
   // optional has a value, and that value is non-null
   EXPECT_TRUE(bool(oup | unwrap));
   EXPECT_EQ(5, *(oup | unwrap));
-  EXPECT_TRUE(oup.hasValue()); // still has a pointer (null or not)
+  EXPECT_TRUE(oup.has_value()); // still has a pointer (null or not)
   EXPECT_TRUE(bool(oup.value())); // that value isn't null
 
   auto moved1 = std::move(oup) | unwrapOr(std::make_unique<int>(6));
   // oup still has a value, but now it's now nullptr since the pointer was moved
   // into moved1
-  EXPECT_TRUE(oup.hasValue());
+  EXPECT_TRUE(oup.has_value());
   EXPECT_FALSE(oup.value());
   EXPECT_TRUE(bool(moved1));
   EXPECT_EQ(5, *moved1);
@@ -1393,7 +1375,7 @@ TEST(Gen, Unwrap) {
   // oup's still-valid nullptr value wins here, the pointer to 7 doesn't apply
   EXPECT_FALSE(moved2);
 
-  oup.clear();
+  oup.reset();
   auto moved3 = std::move(oup) | unwrapOr(std::make_unique<int>(8));
   // oup is empty now, so the unwrapOr comes into play.
   EXPECT_TRUE(bool(moved3));
@@ -1444,7 +1426,7 @@ TEST(Gen, Unwrap) {
     EXPECT_TRUE(bool(opt)); // gutted value still present
     EXPECT_TRUE(bool(fallback.value())); // fallback value not needed
 
-    opt.clear();
+    opt.reset();
 
     EXPECT_FALSE(opt); // opt is empty now
     EXPECT_EQ(9, *(std::move(opt) | std::move(fallback)));
@@ -1465,10 +1447,4 @@ TEST(Gen, Unwrap) {
     int x = 3;
     EXPECT_EQ(&x, empty | unwrapOr(&x));
   }
-}
-
-int main(int argc, char* argv[]) {
-  testing::InitGoogleTest(&argc, argv);
-  gflags::ParseCommandLineFlags(&argc, &argv, true);
-  return RUN_ALL_TESTS();
 }

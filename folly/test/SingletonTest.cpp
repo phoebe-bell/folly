@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -33,6 +33,7 @@
 FOLLY_GNU_DISABLE_WARNING("-Wdeprecated-declarations")
 
 using namespace folly;
+using namespace std::chrono_literals;
 
 TEST(Singleton, MissingSingleton) {
   EXPECT_DEATH(
@@ -450,9 +451,7 @@ TEST(Singleton, SingletonDependencies) {
 // dependency.
 class Slowpoke : public Watchdog {
  public:
-  Slowpoke() {
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
+  Slowpoke() { std::this_thread::sleep_for(std::chrono::milliseconds(10)); }
 };
 
 struct ConcurrencyTag {};
@@ -855,13 +854,9 @@ using SingletonMainThreadDestructor =
     Singleton<T, Tag, MainThreadDestructorTag>;
 
 struct ThreadLoggingSingleton {
-  ThreadLoggingSingleton() {
-    initThread = std::this_thread::get_id();
-  }
+  ThreadLoggingSingleton() { initThread = std::this_thread::get_id(); }
 
-  ~ThreadLoggingSingleton() {
-    destroyThread = std::this_thread::get_id();
-  }
+  ~ThreadLoggingSingleton() { destroyThread = std::this_thread::get_id(); }
 
   static std::thread::id initThread;
   static std::thread::id destroyThread;
@@ -926,12 +921,8 @@ TEST(Singleton, DoubleMakeMockAfterTryGet) {
   struct VaultTag {};
   struct PrivateTag {};
   struct Object {
-    explicit Object(Counts& counts) : counts_(counts) {
-      ++counts_.ctor;
-    }
-    ~Object() {
-      ++counts_.dtor;
-    }
+    explicit Object(Counts& counts) : counts_(counts) { ++counts_.ctor; }
+    ~Object() { ++counts_.dtor; }
     Counts& counts_;
   };
   using SingletonObject = Singleton<Object, PrivateTag, VaultTag>;
@@ -974,12 +965,8 @@ TEST(Singleton, DoubleMakeMockAfterTryGetWithApply) {
   struct VaultTag {};
   struct PrivateTag {};
   struct Object {
-    explicit Object(Counts& counts) : counts_(counts) {
-      ++counts_.ctor;
-    }
-    ~Object() {
-      ++counts_.dtor;
-    }
+    explicit Object(Counts& counts) : counts_(counts) { ++counts_.ctor; }
+    ~Object() { ++counts_.dtor; }
     Counts& counts_;
   };
   using SingletonObject = Singleton<Object, PrivateTag, VaultTag>;
@@ -1020,4 +1007,57 @@ TEST(Singleton, LeakySingletonLSAN) {
   auto* ptr1 = &gPtr.get();
   EXPECT_NE(ptr0, ptr1);
   EXPECT_EQ(*ptr1, 1);
+}
+
+TEST(Singleton, ShutdownTimer) {
+  struct VaultTag {};
+  struct PrivateTag {};
+  struct Object {
+    ~Object() {
+      /* sleep override */ std::this_thread::sleep_for(shutdownDuration);
+    }
+
+    std::chrono::milliseconds shutdownDuration;
+  };
+  using SingletonObject = Singleton<Object, PrivateTag, VaultTag>;
+
+  auto& vault = *SingletonVault::singleton<VaultTag>();
+  SingletonObject object;
+  vault.registrationComplete();
+
+  vault.setShutdownTimeout(10ms);
+  SingletonObject::try_get()->shutdownDuration = 10s;
+  EXPECT_DEATH(
+      [&]() {
+        vault.startShutdownTimer();
+        vault.destroyInstances();
+      }(),
+      "Failed to complete shutdown within 10ms.");
+
+  vault.setShutdownTimeout(10s);
+  SingletonObject::try_get()->shutdownDuration = 10ms;
+  vault.startShutdownTimer();
+  vault.destroyInstances();
+}
+
+TEST(Singleton, ShutdownTimerDisable) {
+  struct VaultTag {};
+  struct PrivateTag {};
+  struct Object {
+    ~Object() {
+      /* sleep override */ std::this_thread::sleep_for(shutdownDuration);
+    }
+
+    std::chrono::milliseconds shutdownDuration;
+  };
+  using SingletonObject = Singleton<Object, PrivateTag, VaultTag>;
+
+  auto& vault = *SingletonVault::singleton<VaultTag>();
+  SingletonObject object;
+  vault.registrationComplete();
+
+  vault.disableShutdownTimeout();
+  SingletonObject::try_get()->shutdownDuration = 100ms;
+  vault.startShutdownTimer();
+  vault.destroyInstances();
 }

@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,16 +21,17 @@
 #include <folly/io/ShutdownSocketSet.h>
 #include <folly/io/async/AsyncSocketBase.h>
 #include <folly/io/async/AsyncTimeout.h>
+#include <folly/io/async/AtomicNotificationQueue.h>
 #include <folly/io/async/DelayedDestruction.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/EventHandler.h>
-#include <folly/io/async/NotificationQueue.h>
 #include <folly/net/NetOps.h>
 #include <folly/net/NetworkSocket.h>
 #include <folly/portability/Sockets.h>
 
 #include <limits.h>
 #include <stddef.h>
+#include <chrono>
 #include <exception>
 #include <memory>
 #include <vector>
@@ -272,9 +273,7 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
   /**
    * Get the EventBase used by this socket.
    */
-  EventBase* getEventBase() const override {
-    return eventBase_;
-  }
+  EventBase* getEventBase() const override { return eventBase_; }
 
   /**
    * Create a AsyncServerSocket from an existing socket file descriptor.
@@ -524,9 +523,7 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
    * Get the maximum number of connections that will be accepted each time
    * around the event loop.
    */
-  uint32_t getMaxAcceptAtOnce() const {
-    return maxAcceptAtOnce_;
-  }
+  uint32_t getMaxAcceptAtOnce() const { return maxAcceptAtOnce_; }
 
   /**
    * Set the maximum number of connections that will be accepted each time
@@ -542,35 +539,45 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
    * pauseAccepting() to temporarily pause accepting when your server is
    * overloaded, and then use startAccepting() later to resume accepting.
    */
-  void setMaxAcceptAtOnce(uint32_t numConns) {
-    maxAcceptAtOnce_ = numConns;
+  void setMaxAcceptAtOnce(uint32_t numConns) { maxAcceptAtOnce_ = numConns; }
+
+  /**
+   * Get the duration after which new connection messages will be dropped from
+   * the NotificationQueue if it has not started processing yet.
+   */
+  std::chrono::nanoseconds getQueueTimeout() const { return queueTimeout_; }
+
+  /**
+   * Set the duration after which new connection messages will be dropped from
+   * the NotificationQueue if it has not started processing yet.
+   *
+   * This avoids the NotificationQueue from processing messages where the client
+   * socket has probably timed out already, or will time out before a response
+   * can be sent.
+   *
+   * The default value (of 0) means that messages will never expire.
+   */
+  void setQueueTimeout(std::chrono::nanoseconds duration) {
+    queueTimeout_ = duration;
   }
 
   /**
    * Get the maximum number of unprocessed messages which a NotificationQueue
    * can hold.
    */
-  uint32_t getMaxNumMessagesInQueue() const {
-    return maxNumMsgsInQueue_;
-  }
+  uint32_t getMaxNumMessagesInQueue() const { return maxNumMsgsInQueue_; }
 
   /**
    * Set the maximum number of unprocessed messages in NotificationQueue.
    * No new message will be sent to that NotificationQueue if there are more
    * than such number of unprocessed messages in that queue.
-   *
-   * Only works if called before addAcceptCallback.
    */
-  void setMaxNumMessagesInQueue(uint32_t num) {
-    maxNumMsgsInQueue_ = num;
-  }
+  void setMaxNumMessagesInQueue(uint32_t num) { maxNumMsgsInQueue_ = num; }
 
   /**
    * Get the speed of adjusting connection accept rate.
    */
-  double getAcceptRateAdjustSpeed() const {
-    return acceptRateAdjustSpeed_;
-  }
+  double getAcceptRateAdjustSpeed() const { return acceptRateAdjustSpeed_; }
 
   /**
    * Set the speed of adjusting connection accept rate.
@@ -584,9 +591,7 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
    */
   void setTosReflect(bool enable);
 
-  bool getTosReflect() {
-    return tosReflect_;
-  }
+  bool getTosReflect() { return tosReflect_; }
 
   /**
    * Get the number of connections dropped by the AsyncServerSocket
@@ -610,7 +615,7 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
     int64_t numMsgs = 0;
     for (const auto& callback : callbacks_) {
       if (callback.consumer) {
-        numMsgs += callback.consumer->getQueue()->size();
+        numMsgs += callback.consumer->getQueue().size();
       }
     }
     return numMsgs;
@@ -646,9 +651,7 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
   /**
    * Get whether or not SO_KEEPALIVE is enabled on the server socket.
    */
-  bool getKeepAliveEnabled() const {
-    return keepAliveEnabled_;
-  }
+  bool getKeepAliveEnabled() const { return keepAliveEnabled_; }
 
   /**
    * Set whether or not SO_REUSEPORT should be enabled on the server socket,
@@ -666,9 +669,11 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
       if (netops::setsockopt(
               handler.socket_, SOL_SOCKET, SO_REUSEPORT, &val, sizeof(val)) !=
           0) {
+        auto errnoCopy = errno;
         LOG(ERROR) << "failed to set SO_REUSEPORT on async server socket "
-                   << errno;
-        folly::throwSystemError(errno, "failed to bind to async server socket");
+                   << errnoCopy;
+        folly::throwSystemErrorExplicit(
+            errnoCopy, "failed to set SO_REUSEPORT on async server socket");
       }
     }
   }
@@ -676,24 +681,18 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
   /**
    * Get whether or not SO_REUSEPORT is enabled on the server socket.
    */
-  bool getReusePortEnabled_() const {
-    return reusePortEnabled_;
-  }
+  bool getReusePortEnabled_() const { return reusePortEnabled_; }
 
   /**
    * Set whether or not the socket should close during exec() (FD_CLOEXEC). By
    * default, this is enabled
    */
-  void setCloseOnExec(bool closeOnExec) {
-    closeOnExec_ = closeOnExec;
-  }
+  void setCloseOnExec(bool closeOnExec) { closeOnExec_ = closeOnExec; }
 
   /**
    * Get whether or not FD_CLOEXEC is enabled on the server socket.
    */
-  bool getCloseOnExec() const {
-    return closeOnExec_;
-  }
+  bool getCloseOnExec() const { return closeOnExec_; }
 
   /**
    * Tries to enable TFO if the machine supports it.
@@ -706,16 +705,12 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
   /**
    * Do not attempt the transparent TLS handshake
    */
-  void disableTransparentTls() {
-    noTransparentTls_ = true;
-  }
+  void disableTransparentTls() { noTransparentTls_ = true; }
 
   /**
    * Get whether or not the socket is accepting new connections
    */
-  bool getAccepting() const {
-    return accepting_;
-  }
+  bool getAccepting() const { return accepting_; }
 
   /**
    * Set the ConnectionEventCallback
@@ -749,6 +744,12 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
     int err;
     SocketAddress address;
     std::string msg;
+    std::chrono::steady_clock::time_point deadline;
+
+    bool isExpired() const {
+      return deadline.time_since_epoch().count() != 0 &&
+          std::chrono::steady_clock::now() > deadline;
+    }
   };
 
   /**
@@ -760,30 +761,33 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
    * receives notification of new sockets via a NotificationQueue,
    * and then invokes the AcceptCallback.
    */
-  class RemoteAcceptor : private NotificationQueue<QueueMessage>::Consumer {
+  class RemoteAcceptor {
+    struct Consumer {
+      AtomicNotificationQueueTaskStatus operator()(QueueMessage&& msg) noexcept;
+
+      explicit Consumer(RemoteAcceptor& acceptor) : acceptor_(acceptor) {}
+      RemoteAcceptor& acceptor_;
+    };
+
    public:
+    using Queue = AtomicNotificationQueue<QueueMessage, Consumer>;
+
     explicit RemoteAcceptor(
         AcceptCallback* callback,
         ConnectionEventCallback* connectionEventCallback)
         : callback_(callback),
-          connectionEventCallback_(connectionEventCallback) {}
+          connectionEventCallback_(connectionEventCallback),
+          queue_(Consumer(*this)) {}
 
-    ~RemoteAcceptor() override = default;
-
-    void start(EventBase* eventBase, uint32_t maxAtOnce, uint32_t maxInQueue);
+    void start(EventBase* eventBase, uint32_t maxAtOnce);
     void stop(EventBase* eventBase, AcceptCallback* callback);
 
-    void messageAvailable(QueueMessage&& message) noexcept override;
-
-    NotificationQueue<QueueMessage>* getQueue() {
-      return &queue_;
-    }
+    Queue& getQueue() { return queue_; }
 
    private:
     AcceptCallback* callback_;
     ConnectionEventCallback* connectionEventCallback_;
-
-    NotificationQueue<QueueMessage> queue_;
+    Queue queue_;
   };
 
   /**
@@ -802,10 +806,8 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
 
   class BackoffTimeout;
 
-  virtual void handlerReady(
-      uint16_t events,
-      NetworkSocket socket,
-      sa_family_t family) noexcept;
+  virtual void
+  handlerReady(uint16_t events, NetworkSocket fd, sa_family_t family) noexcept;
 
   NetworkSocket createSocket(int family);
   void setupSocket(NetworkSocket fd, int family);
@@ -895,6 +897,8 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
   std::weak_ptr<ShutdownSocketSet> wShutdownSocketSet_;
   ConnectionEventCallback* connectionEventCallback_{nullptr};
   bool tosReflect_{false};
+  bool zeroCopyVal_{false};
+  std::chrono::nanoseconds queueTimeout_{0};
 };
 
 } // namespace folly

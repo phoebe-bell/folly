@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/Optional.h>
 
 #include <folly/fibers/FiberManagerInternal.h>
@@ -51,7 +52,7 @@ collectN(InputIterator first, InputIterator last, size_t n) {
   };
   auto context = std::make_shared<Context>(n);
 
-  await([first, last, context](Promise<void> promise) mutable {
+  await_async([first, last, context](Promise<void> promise) mutable {
     context->promise = std::move(promise);
     for (size_t i = 0; first != last; ++i, ++first) {
       addTask([i, context, f = std::move(*first)]() {
@@ -105,7 +106,7 @@ collectN(InputIterator first, InputIterator last, size_t n) {
   };
   auto context = std::make_shared<Context>(n);
 
-  await([first, last, context](Promise<void> promise) mutable {
+  await_async([first, last, context](Promise<void> promise) mutable {
     context->promise = std::move(promise);
     for (size_t i = 0; first != last; ++i, ++first) {
       addTask([i, context, f = std::move(*first)]() {

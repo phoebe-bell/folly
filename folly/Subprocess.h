@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 /**
  * Subprocess library, modeled after Python's subprocess module
  * (http://docs.python.org/2/library/subprocess.html)
@@ -96,6 +97,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
+#include <chrono>
 #include <exception>
 #include <string>
 #include <vector>
@@ -166,18 +168,10 @@ class ProcessReturnCode {
   /**
    * Helper wrappers around state().
    */
-  bool notStarted() const {
-    return state() == NOT_STARTED;
-  }
-  bool running() const {
-    return state() == RUNNING;
-  }
-  bool exited() const {
-    return state() == EXITED;
-  }
-  bool killed() const {
-    return state() == KILLED;
-  }
+  bool notStarted() const { return state() == NOT_STARTED; }
+  bool running() const { return state() == RUNNING; }
+  bool exited() const { return state() == EXITED; }
+  bool killed() const { return state() == KILLED; }
 
   /**
    * Exit status.  Only valid if state() == EXITED; throws otherwise.
@@ -210,7 +204,7 @@ class ProcessReturnCode {
    * Helper function to enforce a precondition based on this.
    * Throws std::logic_error if in an unexpected state.
    */
-  void enforce(State state) const;
+  void enforce(State expected) const;
 
  private:
   explicit ProcessReturnCode(int rv) : rawStatus_(rv) {}
@@ -235,9 +229,7 @@ class FOLLY_EXPORT CalledProcessError : public SubprocessError {
  public:
   explicit CalledProcessError(ProcessReturnCode rc);
   ~CalledProcessError() throw() override = default;
-  ProcessReturnCode returnCode() const {
-    return returnCode_;
-  }
+  ProcessReturnCode returnCode() const { return returnCode_; }
 
  private:
   ProcessReturnCode returnCode_;
@@ -250,9 +242,7 @@ class FOLLY_EXPORT SubprocessSpawnError : public SubprocessError {
  public:
   SubprocessSpawnError(const char* executable, int errCode, int errnoValue);
   ~SubprocessSpawnError() throw() override = default;
-  int errnoValue() const {
-    return errnoValue_;
-  }
+  int errnoValue() const { return errnoValue_; }
 
  private:
   int errnoValue_;
@@ -318,35 +308,23 @@ class Subprocess {
     /**
      * Shortcut to change the action for standard input.
      */
-    Options& stdinFd(int action) {
-      return fd(STDIN_FILENO, action);
-    }
+    Options& stdinFd(int action) { return fd(STDIN_FILENO, action); }
 
     /**
      * Shortcut to change the action for standard output.
      */
-    Options& stdoutFd(int action) {
-      return fd(STDOUT_FILENO, action);
-    }
+    Options& stdoutFd(int action) { return fd(STDOUT_FILENO, action); }
 
     /**
      * Shortcut to change the action for standard error.
      * Note that stderr(1) will redirect the standard error to the same
      * file descriptor as standard output; the equivalent of bash's "2>&1"
      */
-    Options& stderrFd(int action) {
-      return fd(STDERR_FILENO, action);
-    }
+    Options& stderrFd(int action) { return fd(STDERR_FILENO, action); }
 
-    Options& pipeStdin() {
-      return fd(STDIN_FILENO, PIPE_IN);
-    }
-    Options& pipeStdout() {
-      return fd(STDOUT_FILENO, PIPE_OUT);
-    }
-    Options& pipeStderr() {
-      return fd(STDERR_FILENO, PIPE_OUT);
-    }
+    Options& pipeStdin() { return fd(STDIN_FILENO, PIPE_IN); }
+    Options& pipeStdout() { return fd(STDOUT_FILENO, PIPE_OUT); }
+    Options& pipeStderr() { return fd(STDERR_FILENO, PIPE_OUT); }
 
     /**
      * Close all other fds (other than standard input, output, error,
@@ -381,7 +359,7 @@ class Subprocess {
       return *this;
     }
 
-#if __linux__
+#if defined(__linux__)
     /**
      * Child will receive a signal when the parent *thread* exits.
      *
@@ -425,6 +403,19 @@ class Subprocess {
     }
 
     /**
+     * By default, if Subprocess is destroyed while the child process is
+     * still RUNNING, the destructor will log a fatal.  You can skip this
+     * behavior by setting it to true here.
+     *
+     * Note that detach()ed processes are never in RUNNING state, so this
+     * setting does not impact such processes.
+     */
+    Options& allowDestructionWhileProcessRunning(bool val) {
+      allowDestructionWhileProcessRunning_ = val;
+      return *this;
+    }
+
+    /**
      * *** READ THIS WHOLE DOCBLOCK BEFORE USING ***
      *
      * Run this callback in the child after the fork, just before the
@@ -461,7 +452,7 @@ class Subprocess {
       return *this;
     }
 
-#if __linux__
+#if defined(__linux__)
     /**
      * This is an experimental feature, it is best you don't use it at this
      * point of time.
@@ -491,13 +482,14 @@ class Subprocess {
     bool usePath_{false};
     bool processGroupLeader_{false};
     bool detach_{false};
+    bool allowDestructionWhileProcessRunning_{false};
     std::string childDir_; // "" keeps the parent's working directory
-#if __linux__
+#if defined(__linux__)
     int parentDeathSignal_{0};
 #endif
     DangerousPostForkPreExecCallback* dangerousPostForkPreExecCallback_{
         nullptr};
-#if __linux__
+#if defined(__linux__)
     // none means `vfork()` instead of a custom `clone()`
     // Optional<> is used because value of '0' means do clone without any flags.
     Optional<clone_flags_t> cloneFlags_;
@@ -535,6 +527,15 @@ class Subprocess {
   ~Subprocess();
 
   /**
+   * Create a Subprocess object for an existing child process ID.
+   *
+   * The process ID must refer to an immediate child process of the current
+   * process.  This allows using the poll() and wait() APIs on a process ID
+   * that was not originally spawned by Subprocess.
+   */
+  static Subprocess fromExistingProcess(pid_t pid);
+
+  /**
    * Create a subprocess run as a shell command (as shell -c 'command')
    *
    * The shell to use is taken from the environment variable $SHELL,
@@ -567,9 +568,7 @@ class Subprocess {
    * waitpid() or Subprocess::poll(), but simply returns the status stored
    * in the Subprocess object.
    */
-  ProcessReturnCode returnCode() const {
-    return returnCode_;
-  }
+  ProcessReturnCode returnCode() const { return returnCode_; }
 
   /**
    * Poll the child's status and return it. Return the exit status if the
@@ -591,7 +590,7 @@ class Subprocess {
   /**
    * Wait for the process to terminate and return its status.  Like poll(),
    * the only exception this can throw is std::logic_error if you call this
-   * on a Subprocess whose status is RUNNING.  Aborts on egregious
+   * on a Subprocess whose status is not RUNNING.  Aborts on egregious
    * violations of contract, like an out-of-band waitpid(p.pid(), 0, 0).
    */
   ProcessReturnCode wait();
@@ -601,17 +600,40 @@ class Subprocess {
    */
   void waitChecked();
 
+  using TimeoutDuration = std::chrono::milliseconds;
+
+  /**
+   * Call `waitpid` non-blockingly up to `timeout`. Throws std::logic_error if
+   * called on a Subprocess whose status is not RUNNING.
+   *
+   * The return code will be running() if waiting timed out.
+   */
+  ProcessReturnCode waitTimeout(TimeoutDuration timeout);
+
   /**
    * Send a signal to the child.  Shortcuts for the commonly used Unix
    * signals are below.
    */
   void sendSignal(int signal);
-  void terminate() {
-    sendSignal(SIGTERM);
-  }
-  void kill() {
-    sendSignal(SIGKILL);
-  }
+  void terminate() { sendSignal(SIGTERM); }
+  void kill() { sendSignal(SIGKILL); }
+
+  /**
+   * Call `waitpid` non-blockingly up to `waitTimeout`. If the process hasn't
+   * terminated after that, fall back on `terminateOrKill` with
+   * `sigtermTimeoutSeconds`.
+   */
+  ProcessReturnCode waitOrTerminateOrKill(
+      TimeoutDuration waitTimeout,
+      TimeoutDuration sigtermTimeout);
+
+  /**
+   * Send the SIGTERM to terminate the process, poll `waitpid` non-blockingly
+   * several times up to `sigtermTimeout`. If the process hasn't terminated
+   * after that, send SIGKILL to kill the process and call `waitpid` blockingly.
+   * Return the exit code of process.
+   */
+  ProcessReturnCode terminateOrKill(TimeoutDuration sigtermTimeout);
 
   ////
   //// The methods below only affect the process's communication pipes, but
@@ -753,9 +775,7 @@ class Subprocess {
     struct StreamSplitterCallback {
       StreamSplitterCallback(Callback& cb, int fd) : cb_(cb), fd_(fd) {}
       // The return value semantics are inverted vs StreamSplitter
-      bool operator()(StringPiece s) {
-        return !cb_(fd_, s);
-      }
+      bool operator()(StringPiece s) { return !cb_(fd_, s); }
       Callback& cb_;
       int fd_;
     };
@@ -870,15 +890,9 @@ class Subprocess {
   int parentFd(int childFd) const {
     return pipes_[findByChildFd(childFd)].pipe.fd();
   }
-  int stdinFd() const {
-    return parentFd(0);
-  }
-  int stdoutFd() const {
-    return parentFd(1);
-  }
-  int stderrFd() const {
-    return parentFd(2);
-  }
+  int stdinFd() const { return parentFd(0); }
+  int stdoutFd() const { return parentFd(1); }
+  int stderrFd() const { return parentFd(2); }
 
   /**
    * The child's pipes are logically separate from the process metadata
@@ -941,6 +955,7 @@ class Subprocess {
 
   pid_t pid_{-1};
   ProcessReturnCode returnCode_;
+  bool destroyOkWhileRunning_{false};
 
   /**
    * Represents a pipe between this process, and the child process (or its
@@ -954,9 +969,7 @@ class Subprocess {
     int direction = PIPE_IN; // one of PIPE_IN / PIPE_OUT
     bool enabled = true; // Are notifications enabled in communicate()?
 
-    bool operator<(const Pipe& other) const {
-      return childFd < other.childFd;
-    }
+    bool operator<(const Pipe& other) const { return childFd < other.childFd; }
     bool operator==(const Pipe& other) const {
       return childFd == other.childFd;
     }

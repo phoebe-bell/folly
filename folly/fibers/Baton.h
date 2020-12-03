@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <atomic>
@@ -125,7 +126,7 @@ class Baton {
    * Puts active fiber to sleep. Returns when post is called or the deadline
    * expires.
    *
-   * @param timeout Baton will be automatically awaken if deadline expires
+   * @param deadline Baton will be automatically awaken if deadline expires
    *
    * @return true if was posted, false if timeout expired
    */
@@ -139,7 +140,7 @@ class Baton {
    * Puts active fiber to sleep. Returns when post is called or the deadline
    * expires.
    *
-   * @param timeout Baton will be automatically awaken if deadline expires
+   * @param deadline Baton will be automatically awaken if deadline expires
    * @param mainContextFunc this function is immediately executed on the main
    *        context.
    *
@@ -154,7 +155,7 @@ class Baton {
    * Puts active fiber to sleep. Returns when post is called or the deadline
    * expires.
    *
-   * @param timeout Baton will be automatically awaken if deadline expires
+   * @param deadline Baton will be automatically awaken if deadline expires
    * @param mainContextFunc this function is immediately executed on the main
    *        context.
    *
@@ -215,7 +216,7 @@ class Baton {
    * scheduleTimeout() may only be called once prior to the end of the
    * associated Baton's life.
    */
-  class TimeoutHandler final : private HHWheelTimer::Callback {
+  class TimeoutHandler final : public HHWheelTimer::Callback {
    public:
     void scheduleTimeout(std::chrono::milliseconds timeout);
 
@@ -274,9 +275,7 @@ class BatonAwaitableWaiter : public Baton::Waiter {
     h_();
   }
 
-  bool await_ready() const {
-    return baton_.ready();
-  }
+  bool await_ready() const { return baton_.ready(); }
 
   void await_resume() {}
 

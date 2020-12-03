@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -65,19 +65,11 @@ class Group : public GenImpl<Value&&, Group<Key, Value>> {
   Group(Key key, VectorType values)
       : key_(std::move(key)), values_(std::move(values)) {}
 
-  const Key& key() const {
-    return key_;
-  }
+  const Key& key() const { return key_; }
 
-  size_t size() const {
-    return values_.size();
-  }
-  const VectorType& values() const {
-    return values_;
-  }
-  VectorType& values() {
-    return values_;
-  }
+  size_t size() const { return values_.size(); }
+  const VectorType& values() const { return values_; }
+  VectorType& values() { return values_; }
 
   VectorType operator|(const detail::Collect<VectorType>&) const {
     return values();
@@ -324,12 +316,8 @@ class RangeImpl {
 
  public:
   explicit RangeImpl(Value end) : end_(std::move(end)) {}
-  bool test(const Value& current) const {
-    return current < end_;
-  }
-  void step(Value& current) const {
-    ++current;
-  }
+  bool test(const Value& current) const { return current < end_; }
+  void step(Value& current) const { ++current; }
   static constexpr bool infinite = false;
 };
 
@@ -341,12 +329,8 @@ class RangeWithStepImpl {
  public:
   explicit RangeWithStepImpl(Value end, Distance step)
       : end_(std::move(end)), step_(std::move(step)) {}
-  bool test(const Value& current) const {
-    return current < end_;
-  }
-  void step(Value& current) const {
-    current += step_;
-  }
+  bool test(const Value& current) const { return current < end_; }
+  void step(Value& current) const { current += step_; }
   static constexpr bool infinite = false;
 };
 
@@ -356,12 +340,8 @@ class SeqImpl {
 
  public:
   explicit SeqImpl(Value end) : end_(std::move(end)) {}
-  bool test(const Value& current) const {
-    return current <= end_;
-  }
-  void step(Value& current) const {
-    ++current;
-  }
+  bool test(const Value& current) const { return current <= end_; }
+  void step(Value& current) const { ++current; }
   static constexpr bool infinite = false;
 };
 
@@ -373,24 +353,16 @@ class SeqWithStepImpl {
  public:
   explicit SeqWithStepImpl(Value end, Distance step)
       : end_(std::move(end)), step_(std::move(step)) {}
-  bool test(const Value& current) const {
-    return current <= end_;
-  }
-  void step(Value& current) const {
-    current += step_;
-  }
+  bool test(const Value& current) const { return current <= end_; }
+  void step(Value& current) const { current += step_; }
   static constexpr bool infinite = false;
 };
 
 template <class Value>
 class InfiniteImpl {
  public:
-  bool test(const Value& /* current */) const {
-    return true;
-  }
-  void step(Value& current) const {
-    ++current;
-  }
+  bool test(const Value& /* current */) const { return true; }
+  void step(Value& current) const { ++current; }
   static constexpr bool infinite = true;
 };
 
@@ -1076,7 +1048,7 @@ class Order : public Operator<Order<Selector, Comparer>> {
       };
       auto vals = source_ | as<VectorType>();
       std::sort(vals.begin(), vals.end(), comparer);
-      return std::move(vals);
+      return vals;
     }
 
    public:
@@ -1268,7 +1240,7 @@ class GroupByAdjacent : public Operator<GroupByAdjacent<Selector>> {
 
         if (key == newKey) {
           // grow the current group
-          values.push_back(value);
+          values.push_back(std::forward<Value>(value));
         } else {
           // flush the current group
           GroupType group(key.value(), std::move(values));
@@ -1279,7 +1251,7 @@ class GroupByAdjacent : public Operator<GroupByAdjacent<Selector>> {
           // start a new group
           key.emplace(newKey);
           values.clear();
-          values.push_back(value);
+          values.push_back(std::forward<Value>(value));
         }
         return true;
       });
@@ -1988,9 +1960,7 @@ class Cycle : public Operator<Cycle<forever>> {
    *
    *  auto tripled = gen | cycle(3);
    */
-  Cycle<false> operator()(off_t limit) const {
-    return Cycle<false>(limit);
-  }
+  Cycle<false> operator()(off_t limit) const { return Cycle<false>(limit); }
 };
 
 /*
@@ -2374,12 +2344,8 @@ class UnwrapOr {
   explicit UnwrapOr(T&& value) : value_(std::move(value)) {}
   explicit UnwrapOr(const T& value) : value_(value) {}
 
-  T& value() {
-    return value_;
-  }
-  const T& value() const {
-    return value_;
-  }
+  T& value() { return value_; }
+  const T& value() const { return value_; }
 
  private:
   T value_;
@@ -2574,7 +2540,7 @@ struct from_rangev3_copy_fn {
  ******************************************************************************
  * Pipe fittings between a container/range-v3 and a folly::gen.
  * Example: vec | gen::from_container | folly::gen::filter(...);
- * Example: vec | ranges::view::filter(...) | gen::from_rangev3 | gen::xxx;
+ * Example: vec | ranges::views::filter(...) | gen::from_rangev3 | gen::xxx;
  ******************************************************************************
  */
 constexpr detail::from_container_fn from_container;
@@ -2594,7 +2560,7 @@ template <typename Range>
 auto rangev3_will_be_consumed(Range&& r) {
   // intentionally use `r` instead of `std::forward<Range>(r)`; see above.
   // range-v3 ranges copy in O(1) so it is appropriate.
-  return ranges::view::all(r);
+  return ranges::views::all(r);
 }
 #endif // FOLLY_USE_RANGEV3
 

@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -215,9 +215,6 @@ void test128Bit2String() {
   svalue = (Uint(1) << 127) - 1;
   EXPECT_EQ(to<String>(svalue), "170141183460469231731687303715884105727");
 
-  // TODO: the following do not compile to<__int128> ...
-
-#if 0
   value = numeric_limits<Uint>::min();
   EXPECT_EQ(to<Uint>(to<String>(value)), value);
   value = numeric_limits<Uint>::max();
@@ -227,7 +224,6 @@ void test128Bit2String() {
   EXPECT_EQ(to<Sint>(to<String>(svalue)), svalue);
   value = numeric_limits<Sint>::max();
   EXPECT_EQ(to<Sint>(to<String>(svalue)), svalue);
-#endif
 }
 
 #endif
@@ -322,7 +318,7 @@ void testString2Integral() {
         (Uint)4147483648U,
         (Uint)4000000000U,
     };
-    FOR_EACH_RANGE (i, 0, sizeof(uStrings2) / sizeof(uStrings2)) {
+    FOR_EACH_RANGE (i, 0, sizeof(uStrings2) / sizeof(*uStrings2)) {
       EXPECT_EQ(to<Uint>(uStrings2[i]), uValues2[i]);
       if (sizeof(Int) == 4) {
         EXPECT_THROW(to<Sint>(uStrings2[i]), std::range_error);
@@ -679,8 +675,8 @@ TEST(Conv, IntToDouble) {
   try {
     (void)to<float>(957837589847);
     ADD_FAILURE();
-  } catch (std::range_error& e) {
-    //LOG(INFO) << e.what();
+  } catch (std::range_error&) {
+    // LOG(INFO) << e.what();
   }
 }
 
@@ -973,6 +969,7 @@ TEST(Conv, ConversionErrorStrToFloat) {
   EXPECT_CONV_ERROR_STR_NOVAL(float, StringPiece(), EMPTY_INPUT_STRING);
   EXPECT_CONV_ERROR_STR_NOVAL(float, "", EMPTY_INPUT_STRING);
   EXPECT_CONV_ERROR_STR(float, "  ", EMPTY_INPUT_STRING);
+  EXPECT_CONV_ERROR_STR(float, "\t", EMPTY_INPUT_STRING);
   EXPECT_CONV_ERROR_STR(float, "  junk", STRING_TO_FLOAT_ERROR);
   EXPECT_CONV_ERROR(to<float>("  1bla"), NON_WHITESPACE_AFTER_END, "bla");
 }
@@ -1041,9 +1038,59 @@ std::string prefixWithType(V value) {
   EXPECT_CONV_ERROR_QUOTE(                       \
       to<type>(val), code, prefixWithType<type>(val).c_str(), false)
 
+template <typename TUnsigned>
+void unsignedUnderflow() {
+  EXPECT_CONV_ERROR_ARITH(
+      TUnsigned, std::numeric_limits<int8_t>::min(), ARITH_NEGATIVE_OVERFLOW);
+  EXPECT_CONV_ERROR_ARITH(
+      TUnsigned, std::numeric_limits<int16_t>::min(), ARITH_NEGATIVE_OVERFLOW);
+  EXPECT_CONV_ERROR_ARITH(
+      TUnsigned, std::numeric_limits<int32_t>::min(), ARITH_NEGATIVE_OVERFLOW);
+  EXPECT_CONV_ERROR_ARITH(
+      TUnsigned, std::numeric_limits<int64_t>::min(), ARITH_NEGATIVE_OVERFLOW);
+}
+
 TEST(Conv, ConversionErrorIntToInt) {
-  EXPECT_CONV_ERROR_ARITH(signed char, 128, ARITH_POSITIVE_OVERFLOW);
-  EXPECT_CONV_ERROR_ARITH(unsigned char, -1, ARITH_NEGATIVE_OVERFLOW);
+  // Test overflow upper bound. First unsigned to signed.
+  EXPECT_CONV_ERROR_ARITH(
+      int8_t, std::numeric_limits<uint8_t>::max(), ARITH_POSITIVE_OVERFLOW);
+  EXPECT_CONV_ERROR_ARITH(
+      int16_t, std::numeric_limits<uint16_t>::max(), ARITH_POSITIVE_OVERFLOW);
+  EXPECT_CONV_ERROR_ARITH(
+      int32_t, std::numeric_limits<uint32_t>::max(), ARITH_POSITIVE_OVERFLOW);
+  EXPECT_CONV_ERROR_ARITH(
+      int64_t, std::numeric_limits<uint64_t>::max(), ARITH_POSITIVE_OVERFLOW);
+
+  // Signed to signed.
+  EXPECT_CONV_ERROR_ARITH(
+      int8_t, std::numeric_limits<int16_t>::max(), ARITH_POSITIVE_OVERFLOW);
+  EXPECT_CONV_ERROR_ARITH(
+      int16_t, std::numeric_limits<int32_t>::max(), ARITH_POSITIVE_OVERFLOW);
+  EXPECT_CONV_ERROR_ARITH(
+      int32_t, std::numeric_limits<int64_t>::max(), ARITH_POSITIVE_OVERFLOW);
+
+  // Unsigned to unsigned.
+  EXPECT_CONV_ERROR_ARITH(
+      uint8_t, std::numeric_limits<uint16_t>::max(), ARITH_POSITIVE_OVERFLOW);
+  EXPECT_CONV_ERROR_ARITH(
+      uint16_t, std::numeric_limits<uint32_t>::max(), ARITH_POSITIVE_OVERFLOW);
+  EXPECT_CONV_ERROR_ARITH(
+      uint32_t, std::numeric_limits<uint64_t>::max(), ARITH_POSITIVE_OVERFLOW);
+
+  // Test underflows from signed to unsigned data types. Make sure we test all
+  // combinations.
+  unsignedUnderflow<uint8_t>();
+  unsignedUnderflow<uint16_t>();
+  unsignedUnderflow<uint32_t>();
+  unsignedUnderflow<uint64_t>();
+
+  // Signed to signed.
+  EXPECT_CONV_ERROR_ARITH(
+      int8_t, std::numeric_limits<int16_t>::min(), ARITH_NEGATIVE_OVERFLOW);
+  EXPECT_CONV_ERROR_ARITH(
+      int16_t, std::numeric_limits<int32_t>::min(), ARITH_NEGATIVE_OVERFLOW);
+  EXPECT_CONV_ERROR_ARITH(
+      int32_t, std::numeric_limits<int64_t>::min(), ARITH_NEGATIVE_OVERFLOW);
 }
 
 TEST(Conv, ConversionErrorFloatToFloat) {
@@ -1155,6 +1202,10 @@ TEST(Conv, TryStringToFloat) {
   auto rv2 = folly::tryTo<float>("3.14");
   EXPECT_TRUE(rv2.hasValue());
   EXPECT_NEAR(rv2.value(), 3.14, 1e-5);
+  // No trailing '\0' to expose 1-byte buffer over-read
+  char x = '-';
+  auto rv3 = folly::tryTo<float>(folly::StringPiece(&x, 1));
+  EXPECT_FALSE(rv3.hasValue());
 }
 
 TEST(Conv, TryStringToDouble) {
@@ -1163,6 +1214,10 @@ TEST(Conv, TryStringToDouble) {
   auto rv2 = folly::tryTo<double>("3.14");
   EXPECT_TRUE(rv2.hasValue());
   EXPECT_NEAR(rv2.value(), 3.14, 1e-10);
+  // No trailing '\0' to expose 1-byte buffer over-read
+  char y = '\t';
+  auto rv4 = folly::tryTo<double>(folly::StringPiece(&y, 1));
+  EXPECT_FALSE(rv4.hasValue());
 }
 
 TEST(Conv, TryIntToInt) {
@@ -1272,9 +1327,7 @@ TEST(Conv, allocate_size) {
 namespace my {
 struct Dimensions {
   int w, h;
-  std::tuple<const int&, const int&> tuple_view() const {
-    return tie(w, h);
-  }
+  std::tuple<const int&, const int&> tuple_view() const { return tie(w, h); }
   bool operator==(const Dimensions& other) const {
     return this->tuple_view() == other.tuple_view();
   }

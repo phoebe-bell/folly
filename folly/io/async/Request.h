@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,12 +16,14 @@
 
 #pragma once
 
-#include <memory>
-#include <string>
-
 #include <folly/Synchronized.h>
 #include <folly/container/F14Map.h>
-#include <folly/sorted_vector_types.h>
+#include <folly/synchronization/Hazptr.h>
+
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <string>
 
 namespace folly {
 
@@ -32,6 +34,7 @@ namespace folly {
  */
 class RequestToken {
  public:
+  RequestToken() = default;
   explicit RequestToken(const std::string& str);
 
   bool operator==(const RequestToken& other) const {
@@ -48,6 +51,9 @@ class RequestToken {
 
   uint32_t token_;
 };
+static_assert(
+    std::is_trivially_destructible<RequestToken>::value,
+    "must be trivially destructible");
 
 } // namespace folly
 
@@ -74,6 +80,8 @@ class RequestData {
   // could fix these deadlocks, but only at significant performance penalty, so
   // just don't do it!
 
+  // hasCallback() applies only to onSet() and onUnset().
+  // onClear() is always executed exactly once.
   virtual bool hasCallback() = 0;
   // Callback executed when setting RequestContext. Make sure your RequestData
   // instance overrides the hasCallback method to return true otherwise
@@ -83,9 +91,17 @@ class RequestData {
   // instance overrides the hasCallback method to return true otherwise
   // the callback will not be executed
   virtual void onUnset() {}
+  // Callback executed exactly once upon the release of the last
+  // reference to the request data (as a result of either a call to
+  // clearContextData or the destruction of a request context that
+  // contains a reference to the data). It can be overridden in
+  // derived classes. There may be concurrent executions of onSet()
+  // and onUnset() with that of onClear().
+  virtual void onClear() {}
+  // For debugging
+  int refCount() { return keepAliveCounter_.load(std::memory_order_acquire); }
 
  private:
-  // Start shallow copy implementation details:
   // For efficiency, RequestContext provides a raw ptr interface.
   // To support shallow copy, we need a shared ptr.
   // To keep it as safe as possible (even if a raw ptr is passed back),
@@ -93,27 +109,21 @@ class RequestData {
 
   friend class RequestContext;
 
-  // Unique ptr with custom destructor, decrement the counter
-  // and only free if 0
-  struct DestructPtr {
-    void operator()(RequestData* ptr);
-  };
-  struct SharedPtr : public std::unique_ptr<RequestData, DestructPtr> {
-    SharedPtr() = default;
-    using std::unique_ptr<RequestData, DestructPtr>::unique_ptr;
-    SharedPtr(const SharedPtr& other) : SharedPtr(constructPtr(other.get())) {}
-    SharedPtr& operator=(const SharedPtr& other) {
-      return operator=(constructPtr(other.get()));
-    }
-    SharedPtr(SharedPtr&&) = default;
-    SharedPtr& operator=(SharedPtr&&) = default;
-  };
+  static constexpr int kDeleteCount = 0x1;
+  static constexpr int kClearCount = 0x1000;
 
-  // Initialize the pseudo-shared ptr, increment the counter
-  static SharedPtr constructPtr(RequestData* ptr);
+  // Reference-counting functions.
+  // Increment the reference count.
+  void acquireRef();
+  // Decrement the reference count. Clear only if last.
+  void releaseRefClearOnly();
+  // Decrement the reference count. Delete only if last.
+  void releaseRefDeleteOnly();
+  // Decrement the reference count. Clear and delete if last.
+  void releaseRefClearDelete();
+  void releaseRefClearDeleteSlow();
 
   std::atomic<int> keepAliveCounter_{0};
-  // End shallow copy
 };
 
 // If you do not call create() to create a unique request context,
@@ -121,15 +131,33 @@ class RequestData {
 // copied between threads.
 class RequestContext {
  public:
+  RequestContext();
+  RequestContext(RequestContext&& ctx) = delete;
+  RequestContext& operator=(const RequestContext&) = delete;
+  RequestContext& operator=(RequestContext&&) = delete;
+
+  // copy ctor is disabled, use copyAsRoot/copyAsChild instead.
+  static std::shared_ptr<RequestContext> copyAsRoot(
+      const RequestContext& ctx,
+      intptr_t rootid);
+  static std::shared_ptr<RequestContext> copyAsChild(const RequestContext& ctx);
+
   // Create a unique request context for this request.
   // It will be passed between queues / threads (where implemented),
   // so it should be valid for the lifetime of the request.
-  static void create() {
-    setContext(std::make_shared<RequestContext>());
-  }
+  static void create() { setContext(std::make_shared<RequestContext>()); }
 
   // Get the current context.
   static RequestContext* get();
+
+  intptr_t getRootId() const { return rootId_; }
+
+  struct RootIdInfo {
+    intptr_t id;
+    std::thread::id tid;
+    uint64_t tidOS;
+  };
+  static std::vector<RootIdInfo> getRootIdsFromAllThreads();
 
   // The following APIs are used to add, remove and access RequestData instance
   // in the RequestContext instance, normally used for per-RequestContext
@@ -142,7 +170,7 @@ class RequestContext {
   // used, will print a warning message for the first time, clear the existing
   // RequestData instance for "val", and **not** add "data".
   void setContextData(
-      const RequestToken& val,
+      const RequestToken& token,
       std::unique_ptr<RequestData> data);
   void setContextData(
       const std::string& val,
@@ -154,7 +182,7 @@ class RequestContext {
   // string identifier "val". If the same string identifier has already been
   // used, return false and do nothing. Otherwise add "data" and return true.
   bool setContextDataIfAbsent(
-      const RequestToken& val,
+      const RequestToken& token,
       std::unique_ptr<RequestData> data);
   bool setContextDataIfAbsent(
       const std::string& val,
@@ -202,14 +230,28 @@ class RequestContext {
   static std::shared_ptr<RequestContext> setContext(
       std::shared_ptr<RequestContext> const& ctx);
   static std::shared_ptr<RequestContext> setContext(
-      std::shared_ptr<RequestContext>&& ctx);
+      std::shared_ptr<RequestContext>&& newCtx_);
 
   static std::shared_ptr<RequestContext> saveContext() {
-    return getStaticContext();
+    return getStaticContext().first;
   }
 
  private:
-  static std::shared_ptr<RequestContext>& getStaticContext();
+  struct Tag {};
+  RequestContext(const RequestContext& ctx) = default;
+
+ public:
+  RequestContext(const RequestContext& ctx, intptr_t rootid, Tag tag);
+  RequestContext(const RequestContext& ctx, Tag tag);
+  explicit RequestContext(intptr_t rootId);
+  using StaticContext =
+      std::pair<std::shared_ptr<RequestContext>, std::atomic<intptr_t>>;
+
+ private:
+  static StaticContext& getStaticContext();
+  static std::shared_ptr<RequestContext> setContextHelper(
+      std::shared_ptr<RequestContext>& newCtx,
+      StaticContext& staticCtx);
 
   // Start shallow copy guard implementation details:
   // All methods are private to encourage proper use
@@ -219,17 +261,19 @@ class RequestContext {
   // then return the previous context (so it can be reset later).
   static std::shared_ptr<RequestContext> setShallowCopyContext();
 
-  // Similar to setContextData, except it overwrites the data
-  // if already set (instead of warn + reset ptr).
+  // For functions with a parameter safe, if safe is true then the
+  // caller guarantees that there are no concurrent readers or writers
+  // accessing the structure.
   void overwriteContextData(
-      const RequestToken& val,
-      std::unique_ptr<RequestData> data);
+      const RequestToken& token,
+      std::unique_ptr<RequestData> data,
+      bool safe = false);
   void overwriteContextData(
       const std::string& val,
-      std::unique_ptr<RequestData> data) {
-    overwriteContextData(RequestToken(val), std::move(data));
+      std::unique_ptr<RequestData> data,
+      bool safe = false) {
+    overwriteContextData(RequestToken(val), std::move(data), safe);
   }
-  // End shallow copy guard
 
   enum class DoSetBehaviour {
     SET,
@@ -237,27 +281,80 @@ class RequestContext {
     OVERWRITE,
   };
 
-  bool doSetContextData(
-      const RequestToken& val,
+  bool doSetContextDataHelper(
+      const RequestToken& token,
       std::unique_ptr<RequestData>& data,
-      DoSetBehaviour behaviour);
-  bool doSetContextData(
+      DoSetBehaviour behaviour,
+      bool safe = false);
+  bool doSetContextDataHelper(
       const std::string& val,
       std::unique_ptr<RequestData>& data,
-      DoSetBehaviour behaviour) {
-    return doSetContextData(RequestToken(val), data, behaviour);
+      DoSetBehaviour behaviour,
+      bool safe = false) {
+    return doSetContextDataHelper(RequestToken(val), data, behaviour, safe);
   }
 
+  // State implementation with single-writer multi-reader data
+  // structures protected by hazard pointers for readers and a lock
+  // for writers.
   struct State {
-    // This must be optimized for lookup, its hot path is getContextData
-    // Efficiency of copying the container also matters in setShallowCopyContext
-    F14FastMap<RequestToken, RequestData::SharedPtr> requestData_;
-    // This must be optimized for iteration, its hot path is setContext
-    // We also use the fact that it's ordered to efficiently compute
-    // the difference with previous context
-    sorted_vector_set<RequestData*> callbackData_;
-  };
-  folly::Synchronized<State> state_;
+    // Hazard pointer-protected combined structure for request data
+    // and callbacks.
+    struct Combined;
+    hazptr_obj_cohort<> cohort_; // For destruction order
+    std::atomic<Combined*> combined_{nullptr};
+    std::mutex mutex_;
+
+    State();
+    State(const State& o);
+    State(State&&) = delete;
+    State& operator=(const State&) = delete;
+    State& operator=(State&&) = delete;
+    ~State();
+
+   private:
+    friend class RequestContext;
+
+    struct SetContextDataResult {
+      bool changed; // Changes were made
+      bool unexpected; // Update was unexpected
+      Combined* replaced; // The combined structure was replaced
+    };
+
+    Combined* combined() const;
+    Combined* ensureCombined(); // Lazy allocation if needed
+    void setCombined(Combined* p);
+    Combined* expand(Combined* combined);
+    bool doSetContextData(
+        const RequestToken& token,
+        std::unique_ptr<RequestData>& data,
+        DoSetBehaviour behaviour,
+        bool safe);
+    bool hasContextData(const RequestToken& token) const;
+    RequestData* getContextData(const RequestToken& token);
+    const RequestData* getContextData(const RequestToken& token) const;
+    void onSet();
+    void onUnset();
+    void clearContextData(const RequestToken& token);
+    SetContextDataResult doSetContextDataHelper(
+        const RequestToken& token,
+        std::unique_ptr<RequestData>& data,
+        DoSetBehaviour behaviour,
+        bool safe);
+    Combined* eraseOldData(
+        Combined* cur,
+        const RequestToken& token,
+        RequestData* oldData,
+        bool safe);
+    Combined* insertNewData(
+        Combined* cur,
+        const RequestToken& token,
+        std::unique_ptr<RequestData>& data,
+        bool found);
+  }; // State
+  State state_;
+  // Shallow copies keep a note of the root context
+  intptr_t rootId_;
 };
 
 /**
@@ -287,9 +384,7 @@ class RequestContextScopeGuard {
   explicit RequestContextScopeGuard(std::shared_ptr<RequestContext>&& ctx)
       : prev_(RequestContext::setContext(std::move(ctx))) {}
 
-  ~RequestContextScopeGuard() {
-    RequestContext::setContext(std::move(prev_));
-  }
+  ~RequestContextScopeGuard() { RequestContext::setContext(std::move(prev_)); }
 };
 
 /**
@@ -310,16 +405,16 @@ struct ShallowCopyRequestContextScopeGuard {
    * "clearRequestData" then "setRequestData" after the guard.
    */
   ShallowCopyRequestContextScopeGuard(
-      const RequestToken& val,
+      const RequestToken& token,
       std::unique_ptr<RequestData> data)
       : ShallowCopyRequestContextScopeGuard() {
-    RequestContext::get()->overwriteContextData(val, std::move(data));
+    RequestContext::get()->overwriteContextData(token, std::move(data), true);
   }
   ShallowCopyRequestContextScopeGuard(
       const std::string& val,
       std::unique_ptr<RequestData> data)
       : ShallowCopyRequestContextScopeGuard() {
-    RequestContext::get()->overwriteContextData(val, std::move(data));
+    RequestContext::get()->overwriteContextData(val, std::move(data), true);
   }
 
   ~ShallowCopyRequestContextScopeGuard() {

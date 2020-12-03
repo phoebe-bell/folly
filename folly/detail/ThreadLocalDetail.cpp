@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/detail/ThreadLocalDetail.h>
 #include <folly/synchronization/CallOnce.h>
 
@@ -26,7 +27,7 @@ namespace folly {
 namespace threadlocal_detail {
 
 void ThreadEntryNode::initIfZero(bool locked) {
-  if (UNLIKELY(!next)) {
+  if (UNLIKELY(isZero)) {
     if (LIKELY(locked)) {
       parent->meta->pushBackLocked(parent, id);
     } else {
@@ -42,6 +43,7 @@ void ThreadEntryNode::push_back(ThreadEntry* head) {
   // update current
   next = head;
   prev = hnode->prev;
+  isZero = false;
 
   // hprev
   ThreadEntryNode* hprev = &hnode->prev->elements[id].node;
@@ -61,12 +63,12 @@ void ThreadEntryNode::eraseZero() {
 
     // set the prev and next to nullptr
     next = prev = nullptr;
+    isZero = true;
   }
 }
 
 StaticMetaBase::StaticMetaBase(ThreadEntry* (*threadEntry)(), bool strict)
     : nextId_(1), threadEntry_(threadEntry), strict_(strict) {
-  head_.next = head_.prev = &head_;
   int ret = pthread_key_create(&pthreadKey_, &onThreadExit);
   checkPosixError(ret, "pthread_key_create failed");
   PthreadKeyUnregister::registerKey(pthreadKey_);
@@ -85,9 +87,7 @@ ThreadEntryList* StaticMetaBase::getThreadEntryList() {
       PthreadKeyUnregister::registerKey(pthreadKey_);
     }
 
-    FOLLY_ALWAYS_INLINE pthread_key_t get() const {
-      return pthreadKey_;
-    }
+    FOLLY_ALWAYS_INLINE pthread_key_t get() const { return pthreadKey_; }
 
    private:
     pthread_key_t pthreadKey_;
@@ -134,7 +134,6 @@ void StaticMetaBase::onThreadExit(void* ptr) {
       std::lock_guard<std::mutex> g(meta.lock_);
       // mark it as removed
       threadEntry->removed_ = true;
-      meta.erase(&(*threadEntry));
       auto elementsCapacity = threadEntry->getElementsCapacity();
       for (size_t i = 0u; i < elementsCapacity; ++i) {
         threadEntry->elements[i].node.eraseZero();
@@ -228,7 +227,7 @@ uint32_t StaticMetaBase::allocate(EntryID* ent) {
   auto& meta = *this;
   std::lock_guard<std::mutex> g(meta.lock_);
 
-  id = ent->value.load();
+  id = ent->value.load(std::memory_order_relaxed);
   if (id != kEntryIDInvalid) {
     return id;
   }
@@ -240,7 +239,7 @@ uint32_t StaticMetaBase::allocate(EntryID* ent) {
     id = meta.nextId_++;
   }
 
-  uint32_t old_id = ent->value.exchange(id);
+  uint32_t old_id = ent->value.exchange(id, std::memory_order_release);
   DCHECK_EQ(old_id, kEntryIDInvalid);
 
   reserveHeadUnlocked(id);
@@ -270,7 +269,8 @@ void StaticMetaBase::destroy(EntryID* ent) {
 
       {
         std::lock_guard<std::mutex> g(meta.lock_);
-        uint32_t id = ent->value.exchange(kEntryIDInvalid);
+        uint32_t id =
+            ent->value.exchange(kEntryIDInvalid, std::memory_order_relaxed);
         if (id == kEntryIDInvalid) {
           return;
         }
@@ -367,7 +367,7 @@ ElementWrapper* StaticMetaBase::reallocate(
       assert(newByteSize / sizeof(ElementWrapper) >= newCapacity);
       newCapacity = newByteSize / sizeof(ElementWrapper);
     } else {
-      throw std::bad_alloc();
+      throw_exception<std::bad_alloc>();
     }
   } else { // no jemalloc
     // calloc() is simpler than malloc() followed by memset(), and
@@ -376,7 +376,7 @@ ElementWrapper* StaticMetaBase::reallocate(
     reallocated = static_cast<ElementWrapper*>(
         calloc(newCapacity, sizeof(ElementWrapper)));
     if (!reallocated) {
-      throw std::bad_alloc();
+      throw_exception<std::bad_alloc>();
     }
   }
 
@@ -404,10 +404,6 @@ void StaticMetaBase::reserve(EntryID* id) {
   // Success, update the entry
   {
     std::lock_guard<std::mutex> g(meta.lock_);
-
-    if (prevCapacity == 0) {
-      meta.push_back(threadEntry);
-    }
 
     if (reallocated) {
       /*

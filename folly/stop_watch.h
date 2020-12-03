@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -148,9 +148,7 @@ struct custom_stop_watch {
    *
    * @author: Marcelo Juchem <marcelo@fb.com>
    */
-  void reset() {
-    checkpoint_ = clock_type::now();
-  }
+  void reset() { checkpoint_ = clock_type::now(); }
 
   /**
    * Tells the elapsed time since the last update.
@@ -181,7 +179,7 @@ struct custom_stop_watch {
    *
    *  do_something();
    *
-   *  std::cout << "has the TTL expired? " std::boolalpha<< watch.elapsed(ttl);
+   *  std::cout << "ttl expired? " << std::boolalpha << watch.elapsed(ttl);
    *
    * @author: Marcelo Juchem <marcelo@fb.com>
    */
@@ -254,9 +252,7 @@ struct custom_stop_watch {
   /**
    * Returns the current checkpoint
    */
-  typename clock_type::time_point getCheckpoint() const {
-    return checkpoint_;
-  }
+  typename clock_type::time_point getCheckpoint() const { return checkpoint_; }
 
  private:
   typename clock_type::time_point checkpoint_;

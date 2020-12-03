@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -40,9 +40,7 @@ namespace instructions {
 // use explicitly.
 
 struct Default {
-  static bool supported(const folly::CpuId& /* cpuId */ = {}) {
-    return true;
-  }
+  static bool supported(const folly::CpuId& /* cpuId */ = {}) { return true; }
   static FOLLY_ALWAYS_INLINE uint64_t popcount(uint64_t value) {
     return uint64_t(__builtin_popcountll(value));
   }

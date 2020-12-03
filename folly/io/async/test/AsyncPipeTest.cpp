@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -27,12 +27,8 @@ namespace {
 
 class TestReadCallback : public folly::AsyncReader::ReadCallback {
  public:
-  bool isBufferMovable() noexcept override {
-    return movable_;
-  }
-  void setMovable(bool movable) {
-    movable_ = movable;
-  }
+  bool isBufferMovable() noexcept override { return movable_; }
+  void setMovable(bool movable) { movable_ = movable; }
 
   void readBufferAvailable(
       std::unique_ptr<folly::IOBuf> readBuf) noexcept override {
@@ -74,9 +70,7 @@ class TestReadCallback : public folly::AsyncReader::ReadCallback {
 
 class TestWriteCallback : public folly::AsyncWriter::WriteCallback {
  public:
-  void writeSuccess() noexcept override {
-    writes_++;
-  }
+  void writeSuccess() noexcept override { writes_++; }
 
   void writeErr(size_t, const folly::AsyncSocketException&) noexcept override {
     error_ = true;

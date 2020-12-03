@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -27,9 +27,7 @@ extern "C" {
 int dprintf(int fd, const char* fmt, ...) {
   va_list args;
   va_start(args, fmt);
-  SCOPE_EXIT {
-    va_end(args);
-  };
+  SCOPE_EXIT { va_end(args); };
 
   int ret = vsnprintf(nullptr, 0, fmt, args);
   if (ret <= 0) {
@@ -37,9 +35,7 @@ int dprintf(int fd, const char* fmt, ...) {
   }
   size_t len = size_t(ret);
   char* buf = new char[len + 1];
-  SCOPE_EXIT {
-    delete[] buf;
-  };
+  SCOPE_EXIT { delete[] buf; };
   if (size_t(vsnprintf(buf, len + 1, fmt, args)) == len &&
       write(fd, buf, len) == ssize_t(len)) {
     return ret;

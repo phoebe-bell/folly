@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -475,9 +475,7 @@ struct StringIdenticalToBM {
   StringIdenticalToBM() {}
   void operator()(unsigned int n, size_t len) const {
     String s;
-    BENCHMARK_SUSPEND {
-      s.append(len, '0');
-    }
+    BENCHMARK_SUSPEND { s.append(len, '0'); }
     FOR_EACH_RANGE (i, 0, n) {
       String result = to<String>(s);
       doNotOptimizeAway(result.size());
@@ -490,9 +488,7 @@ struct StringVariadicToBM {
   StringVariadicToBM() {}
   void operator()(unsigned int n, size_t len) const {
     String s;
-    BENCHMARK_SUSPEND {
-      s.append(len, '0');
-    }
+    BENCHMARK_SUSPEND { s.append(len, '0'); }
     FOR_EACH_RANGE (i, 0, n) {
       String result = to<String>(s, nullptr);
       doNotOptimizeAway(result.size());

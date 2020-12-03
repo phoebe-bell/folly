@@ -1,15 +1,43 @@
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 include(CheckCXXSourceCompiles)
+include(CheckCXXSymbolExists)
 include(CheckIncludeFileCXX)
 include(CheckFunctionExists)
+include(CMakePushCheckState)
 
-if(MSVC)
-  set(Boost_USE_STATIC_LIBS ON) #Force static lib in msvc
-endif(MSVC)
-find_package(Boost 1.69.0 MODULE
+set(
+  BOOST_LINK_STATIC "auto"
+  CACHE STRING
+  "Whether to link against boost statically or dynamically."
+)
+if("${BOOST_LINK_STATIC}" STREQUAL "auto")
+  # Default to linking boost statically on Windows with MSVC
+  if(MSVC)
+    set(FOLLY_BOOST_LINK_STATIC ON)
+  else()
+    set(FOLLY_BOOST_LINK_STATIC OFF)
+  endif()
+else()
+  set(FOLLY_BOOST_LINK_STATIC "${BOOST_LINK_STATIC}")
+endif()
+set(Boost_USE_STATIC_LIBS "${FOLLY_BOOST_LINK_STATIC}")
+
+find_package(Boost 1.74.0 MODULE
   COMPONENTS
     context
-    chrono
-    date_time
     filesystem
     program_options
     regex
@@ -26,10 +54,12 @@ list(APPEND FOLLY_INCLUDE_DIRECTORIES ${DOUBLE_CONVERSION_INCLUDE_DIR})
 
 find_package(Gflags MODULE)
 set(FOLLY_HAVE_LIBGFLAGS ${LIBGFLAGS_FOUND})
-list(APPEND FOLLY_LINK_LIBRARIES ${LIBGFLAGS_LIBRARY})
-list(APPEND FOLLY_INCLUDE_DIRECTORIES ${LIBGFLAGS_INCLUDE_DIR})
-list(APPEND CMAKE_REQUIRED_LIBRARIES ${LIBGFLAGS_LIBRARY})
-list(APPEND CMAKE_REQUIRED_INCLUDES ${LIBGFLAGS_INCLUDE_DIR})
+if(LIBGFLAGS_FOUND)
+  list(APPEND FOLLY_LINK_LIBRARIES ${LIBGFLAGS_LIBRARY})
+  list(APPEND FOLLY_INCLUDE_DIRECTORIES ${LIBGFLAGS_INCLUDE_DIR})
+  set(FOLLY_LIBGFLAGS_LIBRARY ${LIBGFLAGS_LIBRARY})
+  set(FOLLY_LIBGFLAGS_INCLUDE ${LIBGFLAGS_INCLUDE_DIR})
+endif()
 
 find_package(Glog MODULE)
 set(FOLLY_HAVE_LIBGLOG ${GLOG_FOUND})
@@ -40,18 +70,24 @@ find_package(LibEvent MODULE REQUIRED)
 list(APPEND FOLLY_LINK_LIBRARIES ${LIBEVENT_LIB})
 list(APPEND FOLLY_INCLUDE_DIRECTORIES ${LIBEVENT_INCLUDE_DIR})
 
+find_package(ZLIB MODULE)
+set(FOLLY_HAVE_LIBZ ${ZLIB_FOUND})
+if (ZLIB_FOUND)
+  list(APPEND FOLLY_INCLUDE_DIRECTORIES ${ZLIB_INCLUDE_DIRS})
+  list(APPEND FOLLY_LINK_LIBRARIES ${ZLIB_LIBRARIES})
+  list(APPEND CMAKE_REQUIRED_LIBRARIES ${ZLIB_LIBRARIES})
+endif()
+
 find_package(OpenSSL MODULE REQUIRED)
 list(APPEND FOLLY_LINK_LIBRARIES ${OPENSSL_LIBRARIES})
 list(APPEND FOLLY_INCLUDE_DIRECTORIES ${OPENSSL_INCLUDE_DIR})
 list(APPEND CMAKE_REQUIRED_LIBRARIES ${OPENSSL_LIBRARIES})
 list(APPEND CMAKE_REQUIRED_INCLUDES ${OPENSSL_INCLUDE_DIR})
 check_function_exists(ASN1_TIME_diff FOLLY_HAVE_OPENSSL_ASN1_TIME_DIFF)
-
-find_package(ZLIB MODULE)
-set(FOLLY_HAVE_LIBZ ${ZLIB_FOUND})
+list(REMOVE_ITEM CMAKE_REQUIRED_LIBRARIES ${OPENSSL_LIBRARIES})
+list(REMOVE_ITEM CMAKE_REQUIRED_INCLUDES ${OPENSSL_INCLUDE_DIR})
 if (ZLIB_FOUND)
-  list(APPEND FOLLY_INCLUDE_DIRECTORIES ${ZLIB_INCLUDE_DIRS})
-  list(APPEND FOLLY_LINK_LIBRARIES ${ZLIB_LIBRARIES})
+    list(REMOVE_ITEM CMAKE_REQUIRED_LIBRARIES ${ZLIB_LIBRARIES})
 endif()
 
 #find_package(BZip2 MODULE)
@@ -101,6 +137,10 @@ find_package(LibAIO)
 list(APPEND FOLLY_LINK_LIBRARIES ${LIBAIO_LIBRARIES})
 list(APPEND FOLLY_INCLUDE_DIRECTORIES ${LIBAIO_INCLUDE_DIRS})
 
+find_package(LibUring)
+list(APPEND FOLLY_LINK_LIBRARIES ${LIBURING_LIBRARIES})
+list(APPEND FOLLY_INCLUDE_DIRECTORIES ${LIBURING_INCLUDE_DIRS})
+
 find_package(Libsodium)
 list(APPEND FOLLY_LINK_LIBRARIES ${LIBSODIUM_LIBRARIES})
 list(APPEND FOLLY_INCLUDE_DIRECTORIES ${LIBSODIUM_INCLUDE_DIRS})
@@ -113,18 +153,27 @@ if (PYTHON_EXTENSIONS)
   find_package(Cython 0.26 REQUIRED)
 endif ()
 
+find_package(LibUnwind)
+list(APPEND FOLLY_LINK_LIBRARIES ${LIBUNWIND_LIBRARIES})
+list(APPEND FOLLY_INCLUDE_DIRECTORIES ${LIBUNWIND_INCLUDE_DIRS})
+
+cmake_push_check_state()
+set(CMAKE_REQUIRED_DEFINITIONS -D_XOPEN_SOURCE)
+check_cxx_symbol_exists(swapcontext ucontext.h FOLLY_HAVE_SWAPCONTEXT)
+cmake_pop_check_state()
+
 set(FOLLY_USE_SYMBOLIZER OFF)
-CHECK_INCLUDE_FILE_CXX(elf.h FOLLY_HAVE_ELF_H)
-find_library(UNWIND_LIBRARIES NAMES unwind)
-if (UNWIND_LIBRARIES)
-  list(APPEND FOLLY_LINK_LIBRARIES ${UNWIND_LIBRARIES})
-  list(APPEND CMAKE_REQUIRED_LIBRARIES ${UNWIND_LIBRARIES})
-endif()
-check_function_exists(backtrace FOLLY_HAVE_BACKTRACE)
-if (FOLLY_HAVE_ELF_H AND FOLLY_HAVE_BACKTRACE AND LIBDWARF_FOUND)
+CHECK_INCLUDE_FILE_CXX(elf.h FOLLY_HAVE_ELF)
+find_package(Backtrace)
+
+set(FOLLY_HAVE_BACKTRACE ${Backtrace_FOUND})
+set(FOLLY_HAVE_DWARF ${LIBDWARF_FOUND})
+if (NOT WIN32)
   set(FOLLY_USE_SYMBOLIZER ON)
 endif()
 message(STATUS "Setting FOLLY_USE_SYMBOLIZER: ${FOLLY_USE_SYMBOLIZER}")
+message(STATUS "Setting FOLLY_HAVE_ELF: ${FOLLY_HAVE_ELF}")
+message(STATUS "Setting FOLLY_HAVE_DWARF: ${FOLLY_HAVE_DWARF}")
 
 # Using clang with libstdc++ requires explicitly linking against libatomic
 check_cxx_source_compiles("
@@ -161,6 +210,12 @@ option(
   "Build folly with Address Sanitizer enabled."
   OFF
 )
+
+if ($ENV{WITH_ASAN})
+  message(STATUS "ENV WITH_ASAN is set")
+  set (FOLLY_LIBRARY_SANITIZE_ADDRESS ON)
+endif()
+
 if (FOLLY_LIBRARY_SANITIZE_ADDRESS)
   if ("${CMAKE_CXX_COMPILER_ID}" MATCHES GNU)
     set(FOLLY_LIBRARY_SANITIZE_ADDRESS ON)
@@ -187,6 +242,14 @@ if (FOLLY_LIBRARY_SANITIZE_ADDRESS)
 endif()
 
 add_library(folly_deps INTERFACE)
+
+find_package(fmt CONFIG)
+if (NOT DEFINED fmt_CONFIG)
+    # Fallback on a normal search on the current system
+    find_package(Fmt MODULE REQUIRED)
+endif()
+target_link_libraries(folly_deps INTERFACE fmt::fmt)
+
 list(REMOVE_DUPLICATES FOLLY_INCLUDE_DIRECTORIES)
 target_include_directories(folly_deps INTERFACE ${FOLLY_INCLUDE_DIRECTORIES})
 target_link_libraries(folly_deps INTERFACE

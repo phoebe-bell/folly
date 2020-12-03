@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -103,36 +103,22 @@ class PackedSyncPtr {
   T* get() const {
     return reinterpret_cast<T*>(data_.getData() & (-1ull >> 16));
   }
-  T* operator->() const {
-    return get();
-  }
-  reference operator*() const {
-    return *get();
-  }
-  reference operator[](std::ptrdiff_t i) const {
-    return get()[i];
-  }
+  T* operator->() const { return get(); }
+  reference operator*() const { return *get(); }
+  reference operator[](std::ptrdiff_t i) const { return get()[i]; }
 
   // Synchronization (logically const, even though this mutates our
   // locked state: you can lock a const PackedSyncPtr<T> to read it).
-  void lock() const {
-    data_.lock();
-  }
-  void unlock() const {
-    data_.unlock();
-  }
-  bool try_lock() const {
-    return data_.try_lock();
-  }
+  void lock() const { data_.lock(); }
+  void unlock() const { data_.unlock(); }
+  bool try_lock() const { return data_.try_lock(); }
 
   /*
    * Access extra data stored in unused bytes of the pointer.
    *
    * It is ok to call this without holding the lock.
    */
-  uint16_t extra() const {
-    return data_.getData() >> 48;
-  }
+  uint16_t extra() const { return data_.getData() >> 48; }
 
   /*
    * Don't try to put anything into this that has the high bit set:

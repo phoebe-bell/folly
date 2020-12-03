@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -89,9 +89,7 @@ class MultiLevelTimeSeries {
   /*
    * Return the number of levels tracked by MultiLevelTimeSeries.
    */
-  size_t numLevels() const {
-    return levels_.size();
-  }
+  size_t numLevels() const { return levels_.size(); }
 
   /*
    * Get the BucketedTimeSeries backing the specified level.
@@ -159,9 +157,7 @@ class MultiLevelTimeSeries {
    * data. Otherwise you may be reading stale data if update() or flush() has
    * not been called recently.
    */
-  ValueType sum(size_t level) const {
-    return getLevel(level).sum();
-  }
+  ValueType sum(size_t level) const { return getLevel(level).sum(); }
 
   /*
    * Return the average (sum / count) of all the data points currently tracked
@@ -199,9 +195,7 @@ class MultiLevelTimeSeries {
    * data. Otherwise you may be reading stale data if update() or flush() has
    * not been called recently.
    */
-  uint64_t count(size_t level) const {
-    return getLevel(level).count();
-  }
+  uint64_t count(size_t level) const { return getLevel(level).count(); }
 
   /*
    * Return the count divided by the elapsed time tracked at this level.
@@ -412,9 +406,7 @@ class MultiLevelTimeSeries {
    * Prefer using the correct TimePoint-based APIs instead.  These APIs will
    * eventually be deprecated and removed.
    */
-  void update(Duration now) {
-    update(TimePoint(now));
-  }
+  void update(Duration now) { update(TimePoint(now)); }
   void addValue(Duration now, const ValueType& value) {
     addValue(TimePoint(now), value);
   }
@@ -438,3 +430,5 @@ class MultiLevelTimeSeries {
 };
 
 } // namespace folly
+
+#include <folly/stats/MultiLevelTimeSeries-inl.h>

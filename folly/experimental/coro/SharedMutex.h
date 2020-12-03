@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <atomic>
@@ -79,7 +80,7 @@ namespace coro {
 ///    }
 ///
 ///    folly::coro::Task<bool> contains(std::string value) const {
-///      auto lock = co_await mutex_.co_scoped_shared_lock();
+///      auto lock = co_await mutex_.co_scoped_lock_shared();
 ///      co_return values_.count(value) > 0;
 ///    }
 ///  };
@@ -162,7 +163,7 @@ class SharedMutexFair {
   /// .unlock_shared() to release the lock.
   [[nodiscard]] LockOperation<LockSharedAwaiter> co_lock_shared() noexcept;
 
-  /// Asynchronously acquire an exclusive lock on the mutex and return an object
+  /// Asynchronously acquire a shared lock on the mutex and return an object
   /// that will release the lock when it goes out of scope.
   ///
   /// Returns a SemiAwaitable<std::shared_lock<SharedMutexFair>> that, once
@@ -198,9 +199,7 @@ class SharedMutexFair {
     explicit LockAwaiterBase(SharedMutexFair& mutex, LockType lockType) noexcept
         : mutex_(&mutex), nextAwaiter_(nullptr), lockType_(lockType) {}
 
-    void resume() noexcept {
-      continuation_.resume();
-    }
+    void resume() noexcept { continuation_.resume(); }
 
     SharedMutexFair* mutex_;
     LockAwaiterBase* nextAwaiter_;
@@ -214,9 +213,7 @@ class SharedMutexFair {
     explicit LockAwaiter(SharedMutexFair& mutex) noexcept
         : LockAwaiterBase(mutex, LockType::EXCLUSIVE) {}
 
-    bool await_ready() noexcept {
-      return mutex_->try_lock();
-    }
+    bool await_ready() noexcept { return mutex_->try_lock(); }
 
     FOLLY_CORO_AWAIT_SUSPEND_NONTRIVIAL_ATTRIBUTES bool await_suspend(
         std::experimental::coroutine_handle<> continuation) noexcept {
@@ -243,9 +240,7 @@ class SharedMutexFair {
     explicit LockSharedAwaiter(SharedMutexFair& mutex) noexcept
         : LockAwaiterBase(mutex, LockType::SHARED) {}
 
-    bool await_ready() noexcept {
-      return mutex_->try_lock_shared();
-    }
+    bool await_ready() noexcept { return mutex_->try_lock_shared(); }
 
     FOLLY_CORO_AWAIT_SUSPEND_NONTRIVIAL_ATTRIBUTES bool await_suspend(
         std::experimental::coroutine_handle<> continuation) noexcept {

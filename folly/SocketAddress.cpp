@@ -1,11 +1,11 @@
 /*
- * Copyright 2014-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -44,9 +44,7 @@ namespace {
  */
 struct ScopedAddrInfo {
   explicit ScopedAddrInfo(struct addrinfo* addrinfo) : info(addrinfo) {}
-  ~ScopedAddrInfo() {
-    freeaddrinfo(info);
-  }
+  ~ScopedAddrInfo() { freeaddrinfo(info); }
 
   struct addrinfo* info;
 };
@@ -98,9 +96,7 @@ struct HostAndPort {
     }
   }
 
-  ~HostAndPort() {
-    free(allocated);
-  }
+  ~HostAndPort() { free(allocated); }
 
   const char* host;
   const char* port;
@@ -339,7 +335,7 @@ void SocketAddress::setFromSockaddr(
 
   // Fill the rest with 0s, just for safety
   if (addrlen < sizeof(struct sockaddr_un)) {
-    char* p = reinterpret_cast<char*>(storage_.un.addr);
+    auto p = reinterpret_cast<char*>(storage_.un.addr);
     memset(p + addrlen, 0, sizeof(struct sockaddr_un) - addrlen);
   }
 }

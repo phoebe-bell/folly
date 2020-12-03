@@ -1,11 +1,11 @@
 /*
- * Copyright 2019-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,12 +13,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <utility>
 
 #include <folly/Executor.h>
 #include <folly/experimental/coro/ViaIfAsync.h>
+#include <folly/experimental/coro/WithAsyncStack.h>
 #include <folly/io/async/Request.h>
 
 namespace folly {
@@ -46,22 +48,57 @@ using co_current_executor_t = detail::co_current_executor_;
 //     Executor* e = co_await folly::coro::co_current_executor;
 //     e->add([] { do_something(); });
 //   }
-constexpr co_current_executor_t co_current_executor{
+inline constexpr co_current_executor_t co_current_executor{
     co_current_executor_t::secret_::token_};
 
 namespace detail {
 
 class co_reschedule_on_current_executor_ {
-  class Awaiter {
-    folly::Executor::KeepAlive<> executor_;
-
+  class AwaiterBase {
    public:
-    explicit Awaiter(folly::Executor::KeepAlive<> executor) noexcept
+    explicit AwaiterBase(folly::Executor::KeepAlive<> executor) noexcept
         : executor_(std::move(executor)) {}
 
-    bool await_ready() {
-      return false;
+    bool await_ready() noexcept { return false; }
+
+    void await_resume() noexcept {}
+
+   protected:
+    folly::Executor::KeepAlive<> executor_;
+  };
+
+  class StackAwareAwaiter : public AwaiterBase {
+   public:
+    using AwaiterBase::AwaiterBase;
+
+    template <typename Promise>
+    void await_suspend(
+        std::experimental::coroutine_handle<Promise> coro) noexcept {
+      await_suspend_impl(coro, coro.promise().getAsyncFrame());
     }
+
+   private:
+    FOLLY_CORO_AWAIT_SUSPEND_NONTRIVIAL_ATTRIBUTES void await_suspend_impl(
+        std::experimental::coroutine_handle<> coro,
+        AsyncStackFrame& frame) {
+      auto& stackRoot = *frame.getStackRoot();
+      folly::deactivateAsyncStackFrame(frame);
+      try {
+        executor_->add(
+            [coro, &frame, ctx = RequestContext::saveContext()]() mutable {
+              RequestContextScopeGuard contextScope{std::move(ctx)};
+              folly::resumeCoroutineWithNewAsyncStackRoot(coro, frame);
+            });
+      } catch (...) {
+        folly::activateAsyncStackFrame(stackRoot, frame);
+        throw;
+      }
+    }
+  };
+
+  class Awaiter : public AwaiterBase {
+   public:
+    using AwaiterBase::AwaiterBase;
 
     FOLLY_CORO_AWAIT_SUSPEND_NONTRIVIAL_ATTRIBUTES void await_suspend(
         std::experimental::coroutine_handle<> coro) {
@@ -71,7 +108,11 @@ class co_reschedule_on_current_executor_ {
       });
     }
 
-    void await_resume() {}
+    friend StackAwareAwaiter tag_invoke(
+        cpo_t<co_withAsyncStack>,
+        Awaiter awaiter) {
+      return StackAwareAwaiter{std::move(awaiter.executor_)};
+    }
   };
 
   friend Awaiter co_viaIfAsync(
@@ -105,6 +146,18 @@ using co_reschedule_on_current_executor_t =
 //   }
 inline constexpr co_reschedule_on_current_executor_t
     co_reschedule_on_current_executor;
+
+namespace detail {
+struct co_current_cancellation_token_ {
+  enum class secret_ { token_ };
+  explicit constexpr co_current_cancellation_token_(secret_) {}
+};
+} // namespace detail
+
+using co_current_cancellation_token_t = detail::co_current_cancellation_token_;
+
+inline constexpr co_current_cancellation_token_t co_current_cancellation_token{
+    co_current_cancellation_token_t::secret_::token_};
 
 } // namespace coro
 } // namespace folly

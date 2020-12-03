@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -21,9 +21,9 @@
 
 #include <folly/Portability.h>
 #include <folly/hash/SpookyHashV2.h>
+#include <folly/lang/CString.h>
 #include <folly/lang/Exception.h>
 #include <folly/portability/Constexpr.h>
-#include <folly/portability/String.h>
 
 #include <algorithm>
 #include <array>
@@ -40,6 +40,8 @@
 #if FOLLY_HAS_STRING_VIEW
 #include <string_view> // @manual
 #endif
+
+#include <fmt/format.h>
 
 #include <folly/CpuId.h>
 #include <folly/Likely.h>
@@ -188,9 +190,7 @@ class Range {
   // Works only for random-access iterators
   constexpr Range(Iter start, size_t size) : b_(start), e_(start + size) {}
 
-#if !__clang__ || __CLANG_PREREQ(3, 7) // Clang 3.6 crashes on this line
   /* implicit */ Range(std::nullptr_t) = delete;
-#endif
 
   constexpr /* implicit */ Range(Iter str)
       : b_(str), e_(str + constexpr_strlen(str)) {
@@ -421,38 +421,21 @@ class Range {
   }
 
   constexpr size_type size() const {
-    // It would be nice to assert(b_ <= e_) here.  This can be achieved even
-    // in a C++11 compatible constexpr function:
-    // http://ericniebler.com/2014/09/27/assert-and-constexpr-in-cxx11/
-    // Unfortunately current gcc versions have a bug causing it to reject
-    // this check in a constexpr function:
-    // https://gcc.gnu.org/bugzilla/show_bug.cgi?id=71448
+#if __clang__ || !__GNUC__ || __GNUC__ >= 7
+    assert(b_ <= e_);
+#endif
     return size_type(e_ - b_);
   }
   constexpr size_type walk_size() const {
     return size_type(std::distance(b_, e_));
   }
-  constexpr bool empty() const {
-    return b_ == e_;
-  }
-  constexpr Iter data() const {
-    return b_;
-  }
-  constexpr Iter start() const {
-    return b_;
-  }
-  constexpr Iter begin() const {
-    return b_;
-  }
-  constexpr Iter end() const {
-    return e_;
-  }
-  constexpr Iter cbegin() const {
-    return b_;
-  }
-  constexpr Iter cend() const {
-    return e_;
-  }
+  constexpr bool empty() const { return b_ == e_; }
+  constexpr Iter data() const { return b_; }
+  constexpr Iter start() const { return b_; }
+  constexpr Iter begin() const { return b_; }
+  constexpr Iter end() const { return e_; }
+  constexpr Iter cbegin() const { return b_; }
+  constexpr Iter cend() const { return e_; }
   value_type& front() {
     assert(b_ < e_);
     return *b_;
@@ -592,16 +575,10 @@ class Range {
   }
 
   // Works only for Range<const char*> and Range<char*>
-  std::string str() const {
-    return to<std::string>();
-  }
-  std::string toString() const {
-    return to<std::string>();
-  }
+  std::string str() const { return to<std::string>(); }
+  std::string toString() const { return to<std::string>(); }
 
-  const_range_type castToConst() const {
-    return const_range_type(*this);
-  }
+  const_range_type castToConst() const { return const_range_type(*this); }
 
   int compare(const const_range_type& o) const {
     const size_type tsize = this->size();
@@ -758,13 +735,9 @@ class Range {
     return ret == npos ? ret : ret + pos;
   }
 
-  size_type find(value_type c) const {
-    return qfind(castToConst(), c);
-  }
+  size_type find(value_type c) const { return qfind(castToConst(), c); }
 
-  size_type rfind(value_type c) const {
-    return folly::rfind(castToConst(), c);
-  }
+  size_type rfind(value_type c) const { return folly::rfind(castToConst(), c); }
 
   size_type find(value_type c, size_t pos) const {
     if (pos > size()) {
@@ -800,9 +773,7 @@ class Range {
     return find_first_of(const_range_type(needles, n), pos);
   }
 
-  size_type find_first_of(value_type c) const {
-    return find(c);
-  }
+  size_type find_first_of(value_type c) const { return find(c); }
 
   size_type find_first_of(value_type c, size_t pos) const {
     return find(c, pos);
@@ -833,9 +804,7 @@ class Range {
     return size() >= other.size() &&
         castToConst().subpiece(0, other.size()) == other;
   }
-  bool startsWith(value_type c) const {
-    return !empty() && front() == c;
-  }
+  bool startsWith(value_type c) const { return !empty() && front() == c; }
 
   template <class Comp>
   bool startsWith(const const_range_type& other, Comp&& eq) const {
@@ -854,9 +823,7 @@ class Range {
     return size() >= other.size() &&
         castToConst().subpiece(size() - other.size()) == other;
   }
-  bool endsWith(value_type c) const {
-    return !empty() && back() == c;
-  }
+  bool endsWith(value_type c) const { return !empty() && back() == c; }
 
   template <class Comp>
   bool endsWith(const const_range_type& other, Comp&& eq) const {
@@ -1100,7 +1067,8 @@ class Range {
   }
 
  private:
-  Iter b_, e_;
+  Iter b_;
+  Iter e_;
 };
 
 template <class Iter>
@@ -1378,9 +1346,7 @@ size_t qfind_first_of(
 }
 
 struct AsciiCaseSensitive {
-  bool operator()(char lhs, char rhs) const {
-    return lhs == rhs;
-  }
+  bool operator()(char lhs, char rhs) const { return lhs == rhs; }
 };
 
 /**
@@ -1441,7 +1407,7 @@ inline size_t rfind(const Range<const char*>& haystack, const char& needle) {
     return std::string::npos;
   }
   auto pos = static_cast<const char*>(
-      ::memrchr(haystack.data(), needle, haystack.size()));
+      memrchr(haystack.data(), needle, haystack.size()));
   return pos == nullptr ? std::string::npos : pos - haystack.data();
 }
 
@@ -1468,7 +1434,7 @@ inline size_t rfind(
     return std::string::npos;
   }
   auto pos = static_cast<const unsigned char*>(
-      ::memrchr(haystack.data(), needle, haystack.size()));
+      memrchr(haystack.data(), needle, haystack.size()));
   return pos == nullptr ? std::string::npos : pos - haystack.data();
 }
 
@@ -1509,8 +1475,10 @@ struct hasher<
     // suitable hash of T.  Something like absl::is_uniquely_represented<T>
     // would be better.  std::is_pod is not enough, because POD types
     // can contain pointers and padding.  Also, floating point numbers
-    // may be == without being bit-identical.
-    return hash::SpookyHashV2::Hash64(r.begin(), r.size() * sizeof(T), 0);
+    // may be == without being bit-identical.  size_t is less than 64
+    // bits on some platforms.
+    return static_cast<size_t>(
+        hash::SpookyHashV2::Hash64(r.begin(), r.size() * sizeof(T), 0));
   }
 };
 
@@ -1527,6 +1495,14 @@ constexpr Range<char const*> operator"" _sp(
     size_t len) noexcept {
   return Range<char const*>(str, len);
 }
+
+#if __cpp_char8_t >= 201811L
+constexpr Range<char8_t const*> operator"" _sp(
+    char8_t const* str,
+    size_t len) noexcept {
+  return Range<char8_t const*>(str, len);
+}
+#endif
 
 constexpr Range<char16_t const*> operator"" _sp(
     char16_t const* str,
@@ -1550,6 +1526,31 @@ constexpr Range<wchar_t const*> operator"" _sp(
 
 } // namespace folly
 
+// Avoid ambiguity in older fmt versions due to StringPiece's conversions.
+#if FMT_VERSION >= 70000
+namespace fmt {
+template <>
+struct formatter<folly::StringPiece> : private formatter<string_view> {
+  using formatter<string_view>::parse;
+
+  template <typename Context>
+  auto format(folly::StringPiece s, Context& ctx) {
+    return formatter<string_view>::format({s.data(), s.size()}, ctx);
+  }
+};
+} // namespace fmt
+#endif
+
 FOLLY_POP_WARNING
 
 FOLLY_ASSUME_FBVECTOR_COMPATIBLE_1(folly::Range)
+
+// Tell the range-v3 library that this type should satisfy
+// the view concept (a lightweight, non-owning range).
+namespace ranges {
+template <class T>
+extern const bool enable_view;
+
+template <class Iter>
+FOLLY_INLINE_VARIABLE constexpr bool enable_view<::folly::Range<Iter>> = true;
+} // namespace ranges

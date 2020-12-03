@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -29,9 +29,7 @@ template <typename T>
 struct DefaultMake {
   struct Heap {
     std::unique_ptr<T> ptr{std::make_unique<T>()};
-    /* implicit */ operator T&() {
-      return *ptr;
-    }
+    /* implicit */ operator T&() { return *ptr; }
   };
 
   using is_returnable = StrictDisjunction<
@@ -40,9 +38,7 @@ struct DefaultMake {
       std::is_move_constructible<T>>;
   using type = std::conditional_t<is_returnable::value, T, Heap>;
 
-  type operator()() const {
-    return type();
-  }
+  type operator()() const { return type(); }
 };
 
 } // namespace detail

@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -531,12 +531,8 @@ class ContainsExpected {
  public:
   ContainsExpected() {}
   explicit ContainsExpected(int x) : ex_(x) {}
-  bool hasValue() const {
-    return ex_.hasValue();
-  }
-  int value() const {
-    return ex_.value();
-  }
+  bool hasValue() const { return ex_.hasValue(); }
+  int value() const { return ex_.value(); }
 
   ContainsExpected(const ContainsExpected& other) = default;
   ContainsExpected& operator=(const ContainsExpected& other) = default;
@@ -549,8 +545,6 @@ class ContainsExpected {
 
 /**
  * Test that a class containing an Expected can be copy and move assigned.
- * This was broken under gcc 4.7 until assignment operators were explicitly
- * defined.
  */
 TEST(Expected, AssignmentContained) {
   {
@@ -637,7 +631,7 @@ struct NoSelfAssign {
 TEST(Expected, NoSelfAssign) {
   folly::Expected<NoSelfAssign, int> e{NoSelfAssign{}};
   e = static_cast<decltype(e)&>(e); // suppress self-assign warning
-  e = static_cast<decltype(e)&&>(e); // @nolint suppress self-move warning
+  e = static_cast<decltype(e)&&>(e); // suppress self-move warning
 }
 
 #ifdef __GNUC__
@@ -842,7 +836,8 @@ static_assert(constructibleNotConvertible<SmallPODConstructTo>(), "");
 static_assert(constructibleNotConvertible<LargePODConstructTo>(), "");
 static_assert(constructibleNotConvertible<NonPODConstructTo>(), "");
 
-static_assert(expected_detail::IsConvertible<Source, ConvertTo>(),
+static_assert(
+    expected_detail::IsConvertible<Source, ConvertTo>(),
     "convertible");
 } // namespace
 

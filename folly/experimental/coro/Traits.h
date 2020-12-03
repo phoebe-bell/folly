@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/Traits.h>
@@ -23,14 +24,25 @@
 namespace folly {
 namespace coro {
 
+/**
+ * A type trait to unwrap a std::reference_wrapper<T> to a type T
+ */
+template <typename T>
+struct remove_reference_wrapper {
+  using type = T;
+};
+template <typename T>
+struct remove_reference_wrapper<std::reference_wrapper<T>> {
+  using type = T;
+};
+template <typename T>
+using remove_reference_wrapper_t = typename remove_reference_wrapper<T>::type;
+
 namespace detail {
 
 template <typename T>
-struct _is_coroutine_handle : std::false_type {};
-
-template <typename T>
-struct _is_coroutine_handle<std::experimental::coroutine_handle<T>>
-    : std::true_type {};
+using _is_coroutine_handle =
+    folly::detail::is_instantiation_of<std::experimental::coroutine_handle, T>;
 
 template <typename T>
 struct _is_valid_await_suspend_return_type : folly::Disjunction<
@@ -53,10 +65,10 @@ struct _is_valid_await_suspend_return_type : folly::Disjunction<
 ///     std::experimental::coroutine_handle<T> for some T
 /// - awaiter.await_resume()
 ///
-/// Note that the requirement to accept coroutine_handle<void> rather than
-/// just some coroutine_handle<P> is to ensure that the awaitable can be
-/// awaited in any coroutine context where the promise_type does not modify
-/// what is normally awaitable through use of await_transform().
+/// Note that we don't check for a valid await_suspend() method here since
+/// we don't yet know the promise type to use and some await_suspend()
+/// implementations have particular requirements on the promise (eg. the
+/// stack-aware awaiters may require the .getAsyncFrame() method)
 template <typename T, typename = void>
 struct is_awaiter : std::false_type {};
 
@@ -65,15 +77,8 @@ struct is_awaiter<
     T,
     folly::void_t<
         decltype(std::declval<T&>().await_ready()),
-        decltype(std::declval<T&>().await_suspend(
-            std::declval<std::experimental::coroutine_handle<void>>())),
         decltype(std::declval<T&>().await_resume())>>
-    : folly::Conjunction<
-          std::is_same<bool, decltype(std::declval<T&>().await_ready())>,
-          detail::_is_valid_await_suspend_return_type<decltype(
-              std::declval<T&>().await_suspend(
-                  std::declval<
-                      std::experimental::coroutine_handle<void>>()))>> {};
+    : std::is_same<bool, decltype(std::declval<T&>().await_ready())> {};
 
 template <typename T>
 constexpr bool is_awaiter_v = is_awaiter<T>::value;
@@ -192,6 +197,18 @@ struct await_result<Awaitable, std::enable_if_t<is_awaitable_v<Awaitable>>> {
 
 template <typename Awaitable>
 using await_result_t = typename await_result<Awaitable>::type;
+
+namespace detail {
+
+template <typename Promise, typename = void>
+constexpr bool promiseHasAsyncFrame_v = false;
+
+template <typename Promise>
+constexpr bool promiseHasAsyncFrame_v<
+    Promise,
+    std::void_t<decltype(std::declval<Promise&>().getAsyncFrame())>> = true;
+
+} // namespace detail
 
 } // namespace coro
 } // namespace folly

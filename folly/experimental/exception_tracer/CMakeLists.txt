@@ -1,9 +1,24 @@
-if (FOLLY_USE_SYMBOLIZER)
+# Copyright (c) Facebook, Inc. and its affiliates.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+if (FOLLY_HAVE_ELF AND FOLLY_HAVE_DWARF)
   add_library(
     folly_exception_tracer_base
     ExceptionTracer.cpp
     StackTrace.cpp
   )
+  set_property(TARGET folly_exception_tracer_base PROPERTY VERSION ${PACKAGE_VERSION})
   apply_folly_compile_options_to_target(folly_exception_tracer_base)
   target_link_libraries(
     folly_exception_tracer_base
@@ -15,6 +30,7 @@ if (FOLLY_USE_SYMBOLIZER)
     ExceptionStackTraceLib.cpp
     ExceptionTracerLib.cpp
   )
+  set_property(TARGET folly_exception_tracer PROPERTY VERSION ${PACKAGE_VERSION})
   apply_folly_compile_options_to_target(folly_exception_tracer)
   target_link_libraries(
     folly_exception_tracer
@@ -25,6 +41,7 @@ if (FOLLY_USE_SYMBOLIZER)
     folly_exception_counter
     ExceptionCounterLib.cpp
   )
+  set_property(TARGET folly_exception_counter PROPERTY VERSION ${PACKAGE_VERSION})
   apply_folly_compile_options_to_target(folly_exception_counter)
   target_link_libraries(
     folly_exception_counter

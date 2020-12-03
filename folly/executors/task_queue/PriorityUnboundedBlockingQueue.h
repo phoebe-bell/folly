@@ -1,11 +1,11 @@
 /*
- * Copyright 2019-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -33,9 +33,7 @@ class PriorityUnboundedBlockingQueue : public BlockingQueue<T> {
   explicit PriorityUnboundedBlockingQueue(uint8_t numPriorities)
       : queue_(numPriorities) {}
 
-  uint8_t getNumPriorities() override {
-    return queue_.priorities();
-  }
+  uint8_t getNumPriorities() override { return queue_.priorities(); }
 
   // Add at medium priority by default
   BlockingQueueAddResult add(T item) override {
@@ -66,13 +64,9 @@ class PriorityUnboundedBlockingQueue : public BlockingQueue<T> {
     return dequeue();
   }
 
-  size_t size() override {
-    return queue_.size();
-  }
+  size_t size() override { return queue_.size(); }
 
-  size_t sizeGuess() const {
-    return queue_.size();
-  }
+  size_t sizeGuess() const { return queue_.size(); }
 
  private:
   size_t translatePriority(int8_t const priority) {

@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <experimental/coroutine>
@@ -25,21 +26,21 @@ class Wait {
  public:
   class promise_type {
    public:
-    Wait get_return_object() {
-      return Wait(promise_.get_future());
+    static void* operator new(std::size_t size) {
+      return ::folly_coro_async_malloc(size);
     }
 
-    std::experimental::suspend_never initial_suspend() {
-      return {};
+    void operator delete(void* ptr, std::size_t size) {
+      ::folly_coro_async_malloc(ptr, size);
     }
 
-    std::experimental::suspend_never final_suspend() {
-      return {};
-    }
+    Wait get_return_object() { return Wait(promise_.get_future()); }
 
-    void return_void() {
-      promise_.set_value();
-    }
+    std::experimental::suspend_never initial_suspend() noexcept { return {}; }
+
+    std::experimental::suspend_never final_suspend() noexcept { return {}; }
+
+    void return_void() { promise_.set_value(); }
 
     void unhandled_exception() {
       promise_.set_exception(std::current_exception());
@@ -53,9 +54,7 @@ class Wait {
 
   Wait(Wait&&) = default;
 
-  void detach() {
-    future_ = {};
-  }
+  void detach() { future_ = {}; }
 
   ~Wait() {
     if (future_.valid()) {

@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <functional>
@@ -29,9 +30,7 @@ namespace detail {
 struct DynamicHasher {
   using is_transparent = void;
 
-  size_t operator()(dynamic const& d) const {
-    return d.hash();
-  }
+  size_t operator()(dynamic const& d) const { return d.hash(); }
 
   template <typename T>
   std::enable_if_t<std::is_convertible<T, StringPiece>::value, size_t>
@@ -83,9 +82,7 @@ namespace std {
 
 template <>
 struct hash<::folly::dynamic> {
-  size_t operator()(::folly::dynamic const& d) const {
-    return d.hash();
-  }
+  size_t operator()(::folly::dynamic const& d) const { return d.hash(); }
 };
 
 } // namespace std
@@ -258,9 +255,7 @@ struct dynamic::value_iterator : detail::IteratorAdaptor<
 
   using object_type = dynamic::ObjectImpl;
 
-  dynamic& dereference() const {
-    return base()->second;
-  }
+  dynamic& dereference() const { return base()->second; }
 };
 
 struct dynamic::const_item_iterator
@@ -298,9 +293,7 @@ struct dynamic::const_key_iterator : detail::IteratorAdaptor<
 
   using object_type = dynamic::ObjectImpl const;
 
-  dynamic const& dereference() const {
-    return base()->first;
-  }
+  dynamic const& dereference() const { return base()->first; }
 };
 
 struct dynamic::const_value_iterator : detail::IteratorAdaptor<
@@ -321,9 +314,7 @@ struct dynamic::const_value_iterator : detail::IteratorAdaptor<
 
   using object_type = dynamic::ObjectImpl const;
 
-  dynamic const& dereference() const {
-    return base()->second;
-  }
+  dynamic const& dereference() const { return base()->second; }
 };
 
 //////////////////////////////////////////////////////////////////////
@@ -434,13 +425,9 @@ struct dynamic::IterableProxy {
 
   /* implicit */ IterableProxy(object_type* o) : o_(o) {}
 
-  It begin() const {
-    return o_->begin();
-  }
+  It begin() const { return o_->begin(); }
 
-  It end() const {
-    return o_->end();
-  }
+  It end() const { return o_->end(); }
 
  private:
   object_type* o_;
@@ -562,9 +549,7 @@ inline StringPiece dynamic::stringPiece() const {
 
 template <class T>
 struct dynamic::CompareOp {
-  static bool comp(T const& a, T const& b) {
-    return a < b;
-  }
+  static bool comp(T const& a, T const& b) { return a < b; }
 };
 template <>
 struct dynamic::CompareOp<dynamic::ObjectImpl> {
@@ -1002,21 +987,21 @@ inline dynamic::dynamic(Array&& r) : type_(ARRAY) {
   new (&u_.array) Array(std::move(r));
 }
 
-#define FOLLY_DYNAMIC_DEC_TYPEINFO(T, str, val) \
-  template <>                                   \
-  struct dynamic::TypeInfo<T> {                 \
-    static constexpr const char* name = str;    \
-    static constexpr dynamic::Type type = val;  \
-  };                                            \
+#define FOLLY_DYNAMIC_DEC_TYPEINFO(T, val)     \
+  template <>                                  \
+  struct dynamic::TypeInfo<T> {                \
+    static const char* const name;             \
+    static constexpr dynamic::Type type = val; \
+  };                                           \
   //
 
-FOLLY_DYNAMIC_DEC_TYPEINFO(std::nullptr_t, "null", dynamic::NULLT)
-FOLLY_DYNAMIC_DEC_TYPEINFO(bool, "boolean", dynamic::BOOL)
-FOLLY_DYNAMIC_DEC_TYPEINFO(std::string, "string", dynamic::STRING)
-FOLLY_DYNAMIC_DEC_TYPEINFO(dynamic::Array, "array", dynamic::ARRAY)
-FOLLY_DYNAMIC_DEC_TYPEINFO(double, "double", dynamic::DOUBLE)
-FOLLY_DYNAMIC_DEC_TYPEINFO(int64_t, "int64", dynamic::INT64)
-FOLLY_DYNAMIC_DEC_TYPEINFO(dynamic::ObjectImpl, "object", dynamic::OBJECT)
+FOLLY_DYNAMIC_DEC_TYPEINFO(std::nullptr_t, dynamic::NULLT)
+FOLLY_DYNAMIC_DEC_TYPEINFO(bool, dynamic::BOOL)
+FOLLY_DYNAMIC_DEC_TYPEINFO(std::string, dynamic::STRING)
+FOLLY_DYNAMIC_DEC_TYPEINFO(dynamic::Array, dynamic::ARRAY)
+FOLLY_DYNAMIC_DEC_TYPEINFO(double, dynamic::DOUBLE)
+FOLLY_DYNAMIC_DEC_TYPEINFO(int64_t, dynamic::INT64)
+FOLLY_DYNAMIC_DEC_TYPEINFO(dynamic::ObjectImpl, dynamic::OBJECT)
 
 #undef FOLLY_DYNAMIC_DEC_TYPEINFO
 
@@ -1031,6 +1016,9 @@ T dynamic::asImpl() const {
       return to<T>(*get_nothrow<bool>());
     case STRING:
       return to<T>(*get_nothrow<std::string>());
+    case NULLT:
+    case ARRAY:
+    case OBJECT:
     default:
       throw_exception<TypeError>("int/double/bool/string", type());
   }
@@ -1068,39 +1056,27 @@ template <class T>
 struct dynamic::GetAddrImpl {};
 template <>
 struct dynamic::GetAddrImpl<std::nullptr_t> {
-  static std::nullptr_t* get(Data& d) noexcept {
-    return &d.nul;
-  }
+  static std::nullptr_t* get(Data& d) noexcept { return &d.nul; }
 };
 template <>
 struct dynamic::GetAddrImpl<dynamic::Array> {
-  static Array* get(Data& d) noexcept {
-    return &d.array;
-  }
+  static Array* get(Data& d) noexcept { return &d.array; }
 };
 template <>
 struct dynamic::GetAddrImpl<bool> {
-  static bool* get(Data& d) noexcept {
-    return &d.boolean;
-  }
+  static bool* get(Data& d) noexcept { return &d.boolean; }
 };
 template <>
 struct dynamic::GetAddrImpl<int64_t> {
-  static int64_t* get(Data& d) noexcept {
-    return &d.integer;
-  }
+  static int64_t* get(Data& d) noexcept { return &d.integer; }
 };
 template <>
 struct dynamic::GetAddrImpl<double> {
-  static double* get(Data& d) noexcept {
-    return &d.doubl;
-  }
+  static double* get(Data& d) noexcept { return &d.doubl; }
 };
 template <>
 struct dynamic::GetAddrImpl<std::string> {
-  static std::string* get(Data& d) noexcept {
-    return &d.string;
-  }
+  static std::string* get(Data& d) noexcept { return &d.string; }
 };
 template <>
 struct dynamic::GetAddrImpl<dynamic::ObjectImpl> {
@@ -1137,9 +1113,7 @@ T const& dynamic::get() const {
  */
 template <class T>
 struct dynamic::PrintImpl {
-  static void print(dynamic const&, std::ostream& out, T const& t) {
-    out << t;
-  }
+  static void print(dynamic const&, std::ostream& out, T const& t) { out << t; }
 };
 // Otherwise, null, being (void*)0, would print as 0.
 template <>

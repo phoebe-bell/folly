@@ -1,11 +1,11 @@
 /*
- * Copyright 2017-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -69,25 +69,15 @@ struct StampedPtr {
 
   /* IMPORTANT: default initialization doesn't result in a sane state */
 
-  T* ptr() const {
-    return unpackPtr(raw);
-  }
+  T* ptr() const { return unpackPtr(raw); }
 
-  uint16_t stamp() const {
-    return unpackStamp(raw);
-  }
+  uint16_t stamp() const { return unpackStamp(raw); }
 
-  void set(T* ptr, uint16_t stamp) {
-    raw = pack(ptr, stamp);
-  }
+  void set(T* ptr, uint16_t stamp) { raw = pack(ptr, stamp); }
 
-  void setPtr(T* ptr) {
-    raw = pack(ptr, unpackStamp(raw));
-  }
+  void setPtr(T* ptr) { raw = pack(ptr, unpackStamp(raw)); }
 
-  void setStamp(uint16_t stamp) {
-    raw = pack(unpackPtr(raw), stamp);
-  }
+  void setStamp(uint16_t stamp) { raw = pack(unpackPtr(raw), stamp); }
 
   static T* unpackPtr(uint64_t raw) {
     // Canonical form means we need to extend bit 47 of the pointer to

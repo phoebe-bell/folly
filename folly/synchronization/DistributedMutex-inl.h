@@ -1,11 +1,11 @@
 /*
- * Copyright 2004-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include <folly/synchronization/DistributedMutex.h>
 
 #include <folly/ConstexprMath.h>
@@ -395,9 +396,7 @@ class RequestWithReturn {
     // note that the invariant here is that this function is only called if the
     // requesting thread had it's critical section combined, and the value_
     // member constructed through detach()
-    SCOPE_EXIT {
-      value_.~ReturnType();
-    };
+    SCOPE_EXIT { value_.~ReturnType(); };
     return std::move(value_);
   }
 
@@ -499,9 +498,7 @@ class TaskWithoutCoalesce {
   using StorageType = folly::Unit;
   explicit TaskWithoutCoalesce(Func func, Waiter&) : func_{std::move(func)} {}
 
-  void operator()() const {
-    func_();
-  }
+  void operator()() const { func_(); }
 
  private:
   Func func_;
@@ -644,7 +641,7 @@ void throwIfExceptionOccurred(Request&, Waiter& waiter, bool exception) {
   // avoid leaks.  If we don't destroy the exception_ptr in storage, the
   // refcount for the internal exception will never hit zero, thereby leaking
   // memory
-  if (UNLIKELY(!folly::is_nothrow_invocable<const F&>{} && exception)) {
+  if (UNLIKELY(!folly::is_nothrow_invocable_v<const F&> && exception)) {
     auto storage = &waiter.storage_;
     auto exc = folly::launder(reinterpret_cast<std::exception_ptr*>(storage));
     auto copy = std::move(*exc);
@@ -778,9 +775,7 @@ class DistributedMutex<Atomic, TimePublishing>::DistributedMutexStateProxy {
 
   // The proxy is valid when a mutex acquisition attempt was successful,
   // lock() is guaranteed to return a valid proxy, try_lock() is not
-  explicit operator bool() const {
-    return expected_;
-  }
+  explicit operator bool() const { return expected_; }
 
   // private:
   // friend the mutex class, since that will be accessing state private to
@@ -872,7 +867,8 @@ std::uint64_t publish(
   // passes.  So we defer time publishing to the point when the current thread
   // gets preempted
   auto current = time();
-  if ((current - previous) >= kScheduledAwaySpinThreshold) {
+  if (previous != decltype(time())::zero() &&
+      (current - previous) >= kScheduledAwaySpinThreshold) {
     shouldPublish = true;
   }
   previous = current;
@@ -905,7 +901,7 @@ template <typename Waiter>
 bool spin(Waiter& waiter, std::uint32_t& sig, std::uint32_t mode) {
   auto spins = std::uint64_t{0};
   auto waitMode = (mode == kCombineUninitialized) ? kCombineWaiting : kWaiting;
-  auto previous = time();
+  auto previous = decltype(time())::zero();
   auto shouldPublish = false;
   while (true) {
     auto signal = publish(spins++, shouldPublish, previous, waiter, waitMode);
@@ -926,7 +922,7 @@ bool spin(Waiter& waiter, std::uint32_t& sig, std::uint32_t mode) {
     if (spins < kMaxSpins) {
       asm_volatile_pause();
     } else {
-      Sleeper::sleep();
+      std::this_thread::sleep_for(folly::detail::Sleeper::kMinYieldingSleep);
     }
   }
 }
@@ -1068,9 +1064,7 @@ auto DistributedMutex<Atomic, TimePublishing>::lock_combine(Func func)
     // to avoid having to play a return-value dance when the combinable
     // returns void, we use a scope exit to perform the unlock after the
     // function return has been processed
-    SCOPE_EXIT {
-      unlock(std::move(state));
-    };
+    SCOPE_EXIT { unlock(std::move(state)); };
     return func();
   }
 
@@ -1097,16 +1091,14 @@ DistributedMutex<Atomic, TimePublishing>::lock() {
 }
 
 template <template <typename> class Atomic, bool TimePublishing>
-template <typename Rep, typename Period, typename Func, typename ReturnType>
-folly::Optional<ReturnType>
+template <typename Rep, typename Period, typename Func>
+folly::Optional<invoke_result_t<Func&>>
 DistributedMutex<Atomic, TimePublishing>::try_lock_combine_for(
     const std::chrono::duration<Rep, Period>& duration,
     Func func) {
   auto state = try_lock_for(duration);
   if (state) {
-    SCOPE_EXIT {
-      unlock(std::move(state));
-    };
+    SCOPE_EXIT { unlock(std::move(state)); };
     return func();
   }
 
@@ -1114,16 +1106,14 @@ DistributedMutex<Atomic, TimePublishing>::try_lock_combine_for(
 }
 
 template <template <typename> class Atomic, bool TimePublishing>
-template <typename Clock, typename Duration, typename Func, typename ReturnType>
-folly::Optional<ReturnType>
+template <typename Clock, typename Duration, typename Func>
+folly::Optional<invoke_result_t<Func&>>
 DistributedMutex<Atomic, TimePublishing>::try_lock_combine_until(
     const std::chrono::time_point<Clock, Duration>& deadline,
     Func func) {
   auto state = try_lock_until(deadline);
   if (state) {
-    SCOPE_EXIT {
-      unlock(std::move(state));
-    };
+    SCOPE_EXIT { unlock(std::move(state)); };
     return func();
   }
 

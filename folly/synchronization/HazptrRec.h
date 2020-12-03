@@ -1,11 +1,11 @@
 /*
- * Copyright 2018-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #pragma once
 
 #include <folly/synchronization/Hazptr-fwd.h>
@@ -51,9 +52,7 @@ class alignas(hardware_destructive_interference_size) hazptr_rec {
     return active_.load(std::memory_order_acquire);
   }
 
-  void set_active() noexcept {
-    active_.store(true, std::memory_order_relaxed);
-  }
+  void set_active() noexcept { active_.store(true, std::memory_order_relaxed); }
 
   bool try_acquire() noexcept {
     bool a = active();
@@ -62,25 +61,15 @@ class alignas(hardware_destructive_interference_size) hazptr_rec {
             a, true, std::memory_order_release, std::memory_order_relaxed);
   }
 
-  void release() noexcept {
-    active_.store(false, std::memory_order_release);
-  }
+  void release() noexcept { active_.store(false, std::memory_order_release); }
 
-  hazptr_rec<Atom>* next() {
-    return next_;
-  }
+  hazptr_rec<Atom>* next() { return next_; }
 
-  void set_next(hazptr_rec<Atom>* rec) {
-    next_ = rec;
-  }
+  void set_next(hazptr_rec<Atom>* rec) { next_ = rec; }
 
-  FOLLY_ALWAYS_INLINE hazptr_domain<Atom>* domain() {
-    return domain_;
-  }
+  FOLLY_ALWAYS_INLINE hazptr_domain<Atom>* domain() { return domain_; }
 
-  void set_domain(hazptr_domain<Atom>* dom) {
-    domain_ = dom;
-  }
+  void set_domain(hazptr_domain<Atom>* dom) { domain_ = dom; }
 }; // hazptr_rec
 
 } // namespace folly

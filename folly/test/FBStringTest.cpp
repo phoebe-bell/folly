@@ -1,11 +1,11 @@
 /*
- * Copyright 2011-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -1498,16 +1498,9 @@ struct TestStructDefaultAllocator {
   folly::basic_fbstring<char> stringMember;
 };
 
-template <class A>
-struct TestStructWithAllocator {
-  folly::basic_fbstring<char, std::char_traits<char>, A> stringMember;
-};
-
 std::atomic<size_t> allocatorConstructedCount(0);
 struct TestStructStringAllocator : std::allocator<char> {
-  TestStructStringAllocator() {
-    ++allocatorConstructedCount;
-  }
+  TestStructStringAllocator() { ++allocatorConstructedCount; }
 };
 
 } // namespace
@@ -1515,13 +1508,6 @@ struct TestStructStringAllocator : std::allocator<char> {
 TEST(FBStringCtorTest, DefaultInitStructDefaultAlloc) {
   TestStructDefaultAllocator t1{};
   EXPECT_TRUE(t1.stringMember.empty());
-}
-
-TEST(FBStringCtorTest, DefaultInitStructAlloc) {
-  EXPECT_EQ(allocatorConstructedCount.load(), 0);
-  TestStructWithAllocator<TestStructStringAllocator> t2;
-  EXPECT_TRUE(t2.stringMember.empty());
-  EXPECT_EQ(allocatorConstructedCount.load(), 1);
 }
 
 TEST(FBStringCtorTest, NullZeroConstruction) {

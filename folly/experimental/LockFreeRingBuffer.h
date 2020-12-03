@@ -1,11 +1,11 @@
 /*
- * Copyright 2015-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -58,10 +58,6 @@ class LockFreeRingBuffer {
   static_assert(
       std::is_nothrow_default_constructible<T>::value,
       "Element type must be nothrow default constructible");
-
-  static_assert(
-      folly::is_trivially_copyable<T>::value,
-      "Element type must be trivially copyable");
 
  public:
   /// Opaque pointer to a past or future write.
@@ -141,9 +137,7 @@ class LockFreeRingBuffer {
   }
 
   /// Returns a Cursor pointing to the first write that has not occurred yet.
-  Cursor currentHead() noexcept {
-    return Cursor(ticket_.load());
-  }
+  Cursor currentHead() noexcept { return Cursor(ticket_.load()); }
 
   /// Returns a Cursor pointing to a currently readable write.
   /// skipFraction is a value in the [0, 1] range indicating how far into the
@@ -173,9 +167,7 @@ class LockFreeRingBuffer {
 
   Atom<uint64_t> ticket_;
 
-  uint32_t idx(uint64_t ticket) noexcept {
-    return ticket % capacity_;
-  }
+  uint32_t idx(uint64_t ticket) noexcept { return ticket % capacity_; }
 
   uint32_t turn(uint64_t ticket) noexcept {
     return (uint32_t)(ticket / capacity_);
@@ -185,10 +177,6 @@ class LockFreeRingBuffer {
 namespace detail {
 template <typename T, template <typename> class Atom>
 class RingBufferSlot {
-  void copy(T& dest, T& src) {
-    memcpy(&dest, &src, sizeof(T));
-  }
-
   template <typename V>
   void copy(V& dest, T& src) {
     dest = src;

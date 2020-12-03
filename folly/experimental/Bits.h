@@ -1,11 +1,11 @@
 /*
- * Copyright 2012-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -54,12 +54,8 @@ struct BitsTraits<
     Unaligned<T>,
     typename std::enable_if<(std::is_integral<T>::value)>::type> {
   typedef T UnderlyingType;
-  static T load(const Unaligned<T>& x) {
-    return x.value;
-  }
-  static void store(Unaligned<T>& x, T v) {
-    x.value = v;
-  }
+  static T load(const Unaligned<T>& x) { return x.value; }
+  static void store(Unaligned<T>& x, T v) { x.value = v; }
   static T loadRMW(const Unaligned<T>& x) {
     FOLLY_PUSH_WARNING
     FOLLY_GNU_DISABLE_WARNING("-Wuninitialized")
@@ -98,12 +94,8 @@ struct BitsTraits<
     T,
     typename std::enable_if<(std::is_integral<T>::value)>::type> {
   typedef T UnderlyingType;
-  static T load(const T& x) {
-    return x;
-  }
-  static void store(T& x, T v) {
-    x = v;
-  }
+  static T load(const T& x) { return x; }
+  static void store(T& x, T v) { x = v; }
   static T loadRMW(const T& x) {
     FOLLY_PUSH_WARNING
     FOLLY_GNU_DISABLE_WARNING("-Wuninitialized")
@@ -136,16 +128,12 @@ struct Bits {
   /**
    * Byte index of the given bit.
    */
-  static constexpr size_t blockIndex(size_t bit) {
-    return bit / bitsPerBlock;
-  }
+  static constexpr size_t blockIndex(size_t bit) { return bit / bitsPerBlock; }
 
   /**
    * Offset in block of the given bit.
    */
-  static constexpr size_t bitOffset(size_t bit) {
-    return bit % bitsPerBlock;
-  }
+  static constexpr size_t bitOffset(size_t bit) { return bit % bitsPerBlock; }
 
   /**
    * Number of blocks used by the given number of bits.

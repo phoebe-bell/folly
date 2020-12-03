@@ -1,11 +1,11 @@
 /*
- * Copyright 2013-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -1033,7 +1033,7 @@ TEST(CacheLocality, BenchmarkSysfs) {
 }
 #endif
 
-#if FOLLY_HAVE_LINUX_VDSO
+#if defined(FOLLY_HAVE_LINUX_VDSO) && !defined(FOLLY_SANITIZE_MEMORY)
 TEST(Getcpu, VdsoGetcpu) {
   unsigned cpu;
   Getcpu::resolveVdsoFunc()(&cpu, nullptr, nullptr);
@@ -1042,7 +1042,7 @@ TEST(Getcpu, VdsoGetcpu) {
 }
 #endif
 
-#ifdef FOLLY_TLS
+#ifdef FOLLY_CL_USE_FOLLY_TLS
 TEST(ThreadId, SimpleTls) {
   unsigned cpu = 0;
   auto rv = folly::FallbackGetcpu<SequentialThreadId<std::atomic>>::getcpu(
@@ -1067,7 +1067,7 @@ TEST(ThreadId, SimplePthread) {
   EXPECT_EQ(cpu, again);
 }
 
-#ifdef FOLLY_TLS
+#ifdef FOLLY_CL_USE_FOLLY_TLS
 static FOLLY_TLS unsigned testingCpu = 0;
 
 static int testingGetcpu(unsigned* cpu, unsigned* node, void* /* unused */) {
@@ -1111,7 +1111,7 @@ TEST(AccessSpreader, ConcurrentAccessCached) {
   }
 }
 
-#ifdef FOLLY_TLS
+#ifdef FOLLY_CL_USE_FOLLY_TLS
 #define DECLARE_SPREADER_TAG(tag, locality, func)      \
   namespace {                                          \
   template <typename dummy>                            \
@@ -1144,6 +1144,7 @@ TEST(AccessSpreader, Wrapping) {
       auto expected = AccessSpreader<ManualTag>::current(s);
       EXPECT_EQ(expected, observed)
           << "numCpus=" << numCpus << ", s=" << s << ", c=" << c;
+      EXPECT_LE(observed, AccessSpreader<ManualTag>::maxStripeValue());
     }
   }
 }

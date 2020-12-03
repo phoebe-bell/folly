@@ -1,11 +1,11 @@
 /*
- * Copyright 2016-present Facebook, Inc.
+ * Copyright (c) Facebook, Inc. and its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
  *
- *   http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -59,6 +59,8 @@ TEST(PThreadTest, pthread_equal) {
   pthread_t thread;
   EXPECT_EQ(pthread_create(&thread, nullptr, mainFunc, nullptr), 0);
   EXPECT_EQ(pthread_equal(thread, self), 0);
+  void* exitCode = nullptr;
+  pthread_join(thread, &exitCode);
 }
 
 TEST(PThreadTest, pthread_self_on_pthread_thread) {
