@@ -159,7 +159,7 @@ class CursorBase {
    */
   size_t totalLength() const {
     size_t len = 0;
-    const IOBuf* buf = crtBuf_->next();
+    const BufType* buf = crtBuf_->next();
     while (buf != buffer_ && len < remainingLen_) {
       len += buf->length();
       buf = buf->next();
@@ -178,7 +178,7 @@ class CursorBase {
     if (isBounded() && amount > remainingLen_ + length()) {
       return false;
     }
-    const IOBuf* nextBuf = crtBuf_;
+    const BufType* nextBuf = crtBuf_;
     size_t available = length();
     do {
       if (available >= amount) {
@@ -209,7 +209,7 @@ class CursorBase {
     // We are at the end of a buffer, but it isn't the last buffer.
     // We might still be at the end if the remaining buffers in the chain are
     // empty.
-    const IOBuf* buf = crtBuf_->next();
+    const BufType* buf = crtBuf_->next();
     while (buf != buffer_) {
       if (buf->length() > 0) {
         return false;
@@ -281,7 +281,7 @@ class CursorBase {
    * same IOBuf chain.
    */
   bool operator==(const Derived& other) const {
-    const IOBuf* crtBuf = crtBuf_;
+    const BufType* crtBuf = crtBuf_;
     auto crtPos = crtPos_;
     // We can be pointing to the end of a buffer chunk, find first non-empty.
     while (crtPos == crtBuf->tail() && crtBuf != buffer_->prev()) {
@@ -289,7 +289,7 @@ class CursorBase {
       crtPos = crtBuf->data();
     }
 
-    const IOBuf* crtBufOther = other.crtBuf_;
+    const BufType* crtBufOther = other.crtBuf_;
     auto crtPosOther = other.crtPos_;
     // We can be pointing to the end of a buffer chunk, find first non-empty.
     while (crtPosOther == crtBufOther->tail() &&
@@ -500,6 +500,7 @@ class CursorBase {
     auto bytes = peekBytes();
     return std::make_pair(bytes.data(), bytes.size());
   }
+
 
   void clone(std::unique_ptr<folly::IOBuf>& buf, size_t len) {
     if (UNLIKELY(cloneAtMost(buf, len) != len)) {
