@@ -16,8 +16,6 @@
 
 #include <folly/Portability.h>
 
-#if FOLLY_HAS_COROUTINES
-
 #include <folly/experimental/coro/BlockingWait.h>
 #include <folly/experimental/coro/Retry.h>
 #include <folly/experimental/coro/Sleep.h>
@@ -27,12 +25,14 @@
 #include <chrono>
 #include <exception>
 
+#if FOLLY_HAS_COROUTINES
+
 using namespace std::chrono_literals;
 
 namespace {
 
 struct SomeError : std::exception {
-  explicit SomeError(int value) : value(value) {}
+  explicit SomeError(int v) : value(v) {}
   int value;
 };
 

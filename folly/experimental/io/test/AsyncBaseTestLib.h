@@ -63,10 +63,24 @@ struct TestUtil {
 };
 
 template <typename TAsync>
+std::unique_ptr<TAsync> getAIO(size_t capacity, AsyncBase::PollMode pollMode) {
+  try {
+    auto ret = std::make_unique<TAsync>(capacity, pollMode);
+    ret->initializeContext();
+
+    return ret;
+  } catch (const std::runtime_error&) {
+  }
+
+  return nullptr;
+}
+
+template <typename TAsync>
 void testReadsSerially(
-    const std::vector<TestSpec>& specs,
-    folly::AsyncBase::PollMode pollMode) {
-  TAsync aioReader(1, pollMode);
+    const std::vector<TestSpec>& specs, folly::AsyncBase::PollMode pollMode) {
+  auto aioReader = getAIO<TAsync>(1, pollMode);
+  SKIP_IF(!aioReader) << "TAsync not available";
+
   typename TAsync::Op op;
   auto tempFile = folly::test::TempFileUtil::getTempFile(kDefaultFileSize);
   int fd = ::open(tempFile.path().c_str(), O_DIRECT | O_RDONLY);
@@ -77,14 +91,14 @@ void testReadsSerially(
   for (size_t i = 0; i < specs.size(); i++) {
     auto buf = TestUtil::allocateAligned(specs[i].size);
     op.pread(fd, buf.get(), specs[i].size, specs[i].start);
-    aioReader.submit(&op);
-    EXPECT_EQ((i + 1), aioReader.totalSubmits());
-    EXPECT_EQ(aioReader.pending(), 1);
+    aioReader->submit(&op);
+    EXPECT_EQ((i + 1), aioReader->totalSubmits());
+    EXPECT_EQ(aioReader->pending(), 1);
     auto ops =
-        test::async_base_test_lib_detail::TestUtil::readerWait(&aioReader);
+        test::async_base_test_lib_detail::TestUtil::readerWait(aioReader.get());
     EXPECT_EQ(1, ops.size());
     EXPECT_TRUE(ops[0] == &op);
-    EXPECT_EQ(aioReader.pending(), 0);
+    EXPECT_EQ(aioReader->pending(), 0);
     ssize_t res = op.result();
     EXPECT_LE(0, res) << folly::errnoStr(-res);
     EXPECT_EQ(specs[i].size, res);
@@ -97,7 +111,9 @@ void testReadsParallel(
     const std::vector<TestSpec>& specs,
     folly::AsyncBase::PollMode pollMode,
     bool multithreaded) {
-  TAsync aioReader(specs.size(), pollMode);
+  auto aioReader = getAIO<TAsync>(specs.size(), pollMode);
+  SKIP_IF(!aioReader) << "TAsync not available";
+
   std::unique_ptr<typename TAsync::Op[]> ops(new
                                              typename TAsync::Op[specs.size()]);
   uintptr_t sizeOf = sizeof(typename TAsync::Op);
@@ -119,7 +135,7 @@ void testReadsParallel(
   }
   auto submit = [&](size_t i) {
     ops[i].pread(fd, bufs[i].get(), specs[i].size, specs[i].start);
-    aioReader.submit(&ops[i]);
+    aioReader->submit(&ops[i]);
   };
   for (size_t i = 0; i < specs.size(); i++) {
     if (multithreaded) {
@@ -135,11 +151,10 @@ void testReadsParallel(
 
   size_t remaining = specs.size();
   while (remaining != 0) {
-    EXPECT_EQ(remaining, aioReader.pending());
+    EXPECT_EQ(remaining, aioReader->pending());
     auto completed =
-        test::async_base_test_lib_detail::TestUtil::readerWait(&aioReader);
+        test::async_base_test_lib_detail::TestUtil::readerWait(aioReader.get());
     size_t nrRead = completed.size();
-    EXPECT_NE(nrRead, 0);
     remaining -= nrRead;
 
     for (size_t i = 0; i < nrRead; i++) {
@@ -155,9 +170,9 @@ void testReadsParallel(
       EXPECT_EQ(specs[id].size, res);
     }
   }
-  EXPECT_EQ(specs.size(), aioReader.totalSubmits());
+  EXPECT_EQ(specs.size(), aioReader->totalSubmits());
 
-  EXPECT_EQ(aioReader.pending(), 0);
+  EXPECT_EQ(aioReader->pending(), 0);
   for (size_t i = 0; i < pending.size(); i++) {
     EXPECT_FALSE(pending[i]);
   }
@@ -165,11 +180,11 @@ void testReadsParallel(
 
 template <typename TAsync>
 void testReadsQueued(
-    const std::vector<TestSpec>& specs,
-    folly::AsyncBase::PollMode pollMode) {
+    const std::vector<TestSpec>& specs, folly::AsyncBase::PollMode pollMode) {
   size_t readerCapacity = std::max(specs.size() / 2, size_t(1));
-  TAsync aioReader(readerCapacity, pollMode);
-  folly::AsyncBaseQueue aioQueue(&aioReader);
+  auto aioReader = getAIO<TAsync>(readerCapacity, pollMode);
+  SKIP_IF(!aioReader) << "TAsync not available";
+  folly::AsyncBaseQueue aioQueue(aioReader.get());
   std::unique_ptr<typename TAsync::Op[]> ops(new
                                              typename TAsync::Op[specs.size()]);
   uintptr_t sizeOf = sizeof(typename TAsync::Op);
@@ -190,16 +205,15 @@ void testReadsQueued(
   size_t remaining = specs.size();
   while (remaining != 0) {
     if (remaining >= readerCapacity) {
-      EXPECT_EQ(readerCapacity, aioReader.pending());
+      EXPECT_EQ(readerCapacity, aioReader->pending());
       EXPECT_EQ(remaining - readerCapacity, aioQueue.queued());
     } else {
-      EXPECT_EQ(remaining, aioReader.pending());
+      EXPECT_EQ(remaining, aioReader->pending());
       EXPECT_EQ(0, aioQueue.queued());
     }
     auto completed =
-        test::async_base_test_lib_detail::TestUtil::readerWait(&aioReader);
+        test::async_base_test_lib_detail::TestUtil::readerWait(aioReader.get());
     size_t nrRead = completed.size();
-    EXPECT_NE(nrRead, 0);
     remaining -= nrRead;
 
     for (size_t i = 0; i < nrRead; i++) {
@@ -215,8 +229,8 @@ void testReadsQueued(
       EXPECT_EQ(specs[id].size, res);
     }
   }
-  EXPECT_EQ(specs.size(), aioReader.totalSubmits());
-  EXPECT_EQ(aioReader.pending(), 0);
+  EXPECT_EQ(specs.size(), aioReader->totalSubmits());
+  EXPECT_EQ(aioReader->pending(), 0);
   EXPECT_EQ(aioQueue.queued(), 0);
   for (size_t i = 0; i < pending.size(); i++) {
     EXPECT_FALSE(pending[i]);
@@ -225,8 +239,7 @@ void testReadsQueued(
 
 template <typename TAsync>
 void testReads(
-    const std::vector<TestSpec>& specs,
-    folly::AsyncBase::PollMode pollMode) {
+    const std::vector<TestSpec>& specs, folly::AsyncBase::PollMode pollMode) {
   testReadsSerially<TAsync>(specs, pollMode);
   testReadsParallel<TAsync>(specs, pollMode, false);
   testReadsParallel<TAsync>(specs, pollMode, true);
@@ -343,8 +356,9 @@ TYPED_TEST_P(AsyncTest, ManyAsyncDataNotPollable) {
   {
     std::vector<test::async_base_test_lib_detail::TestSpec> v;
     for (int i = 0; i < 1000; i++) {
-      v.push_back({off_t(test::async_base_test_lib_detail::kODirectAlign * i),
-                   test::async_base_test_lib_detail::kODirectAlign});
+      v.push_back(
+          {off_t(test::async_base_test_lib_detail::kODirectAlign * i),
+           test::async_base_test_lib_detail::kODirectAlign});
     }
     test::async_base_test_lib_detail::testReads<TypeParam>(
         v, folly::AsyncBase::NOT_POLLABLE);
@@ -355,8 +369,9 @@ TYPED_TEST_P(AsyncTest, ManyAsyncDataPollable) {
   {
     std::vector<test::async_base_test_lib_detail::TestSpec> v;
     for (int i = 0; i < 1000; i++) {
-      v.push_back({off_t(test::async_base_test_lib_detail::kODirectAlign * i),
-                   test::async_base_test_lib_detail::kODirectAlign});
+      v.push_back(
+          {off_t(test::async_base_test_lib_detail::kODirectAlign * i),
+           test::async_base_test_lib_detail::kODirectAlign});
     }
     test::async_base_test_lib_detail::testReads<TypeParam>(
         v, folly::AsyncBase::POLLABLE);
@@ -455,19 +470,6 @@ TYPED_TEST_P(AsyncTest, Cancel) {
   EXPECT_EQ(foundCompleted, completed);
 }
 
-REGISTER_TYPED_TEST_CASE_P(
-    AsyncTest,
-    ZeroAsyncDataNotPollable,
-    ZeroAsyncDataPollable,
-    SingleAsyncDataNotPollable,
-    SingleAsyncDataPollable,
-    MultipleAsyncDataNotPollable,
-    MultipleAsyncDataPollable,
-    ManyAsyncDataNotPollable,
-    ManyAsyncDataPollable,
-    NonBlockingWait,
-    Cancel);
-
 // batch tests
 template <typename T>
 class AsyncBatchTest : public ::testing::Test {};
@@ -509,7 +511,6 @@ TYPED_TEST_P(AsyncBatchTest, BatchRead) {
   CHECK_EQ(completed, kBatchNumEntries);
 }
 
-REGISTER_TYPED_TEST_CASE_P(AsyncBatchTest, BatchRead);
 } // namespace async_base_test_lib_detail
 } // namespace test
 } // namespace folly

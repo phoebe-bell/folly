@@ -16,13 +16,14 @@
 
 #pragma once
 
-#include <folly/io/async/AsyncTransportCertificate.h>
 #include <memory>
+
+#include <folly/io/async/ssl/OpenSSLTransportCertificate.h>
 
 namespace folly {
 namespace ssl {
 
-class BasicTransportCertificate : public folly::AsyncTransportCertificate {
+class BasicTransportCertificate : public folly::OpenSSLTransportCertificate {
  public:
   // Create a basic transport cert from an existing one.  Returns nullptr
   // if cert is null.
@@ -36,8 +37,7 @@ class BasicTransportCertificate : public folly::AsyncTransportCertificate {
   }
 
   BasicTransportCertificate(
-      std::string identity,
-      folly::ssl::X509UniquePtr x509)
+      std::string identity, folly::ssl::X509UniquePtr x509)
       : identity_(std::move(identity)), x509_(std::move(x509)) {}
 
   std::string getIdentity() const override { return identity_; }

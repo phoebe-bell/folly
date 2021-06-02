@@ -15,14 +15,17 @@
  */
 
 #include <folly/executors/Async.h>
-#include <folly/executors/ManualExecutor.h>
-#include <folly/portability/GTest.h>
 
 #include <memory>
+
+#include <folly/executors/ManualExecutor.h>
+#include <folly/portability/GTest.h>
 
 using namespace folly;
 
 TEST(AsyncFunc, manual_executor) {
+  FOLLY_PUSH_WARNING
+  FOLLY_GNU_DISABLE_WARNING("-Wdeprecated-declarations")
   auto x = std::make_shared<ManualExecutor>();
   auto oldX = getCPUExecutor();
   setCPUExecutor(x);
@@ -31,6 +34,7 @@ TEST(AsyncFunc, manual_executor) {
   x->run();
   EXPECT_EQ(42, f.value());
   setCPUExecutor(oldX);
+  FOLLY_POP_WARNING
 }
 
 TEST(AsyncFunc, value_lambda) {

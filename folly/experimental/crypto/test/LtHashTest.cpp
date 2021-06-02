@@ -15,16 +15,19 @@
  */
 
 #include <folly/experimental/crypto/LtHash.h>
-#include <folly/Random.h>
-#include <folly/String.h>
-#include <folly/io/IOBuf.h>
-#include <folly/portability/GTest.h>
-#include <sodium.h>
+
 #include <algorithm>
 #include <memory>
 #include <random>
 #include <string>
 #include <vector>
+
+#include <sodium.h>
+
+#include <folly/Random.h>
+#include <folly/String.h>
+#include <folly/io/IOBuf.h>
+#include <folly/portability/GTest.h>
 
 using namespace ::testing;
 
@@ -89,7 +92,7 @@ class LtHashTest : public ::testing::Test {
 // Some googletest macro magic to make TYPED_TEST work
 using LtHashTestTypes =
     ::testing::Types<LtHash<16, 1024>, LtHash<20, 1008>, LtHash<32, 1024>>;
-TYPED_TEST_CASE(LtHashTest, LtHashTestTypes);
+TYPED_TEST_SUITE(LtHashTest, LtHashTestTypes);
 
 // Note: in all test cases below, `TypeParam` refers to the H template param.
 // Static methods must be prefixed with `TestFixture::`, while class variables

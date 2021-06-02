@@ -15,10 +15,13 @@
  */
 
 #include <folly/Format.h>
+
+#include <string>
+
 #include <folly/Utility.h>
 #include <folly/portability/GTest.h>
 
-#include <string>
+FOLLY_GNU_DISABLE_WARNING("-Wdeprecated")
 
 using namespace folly;
 

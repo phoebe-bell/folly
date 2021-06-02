@@ -219,6 +219,7 @@ class FiberManager : public ::folly::Executor {
    * @return true if there are outstanding tasks.
    */
   bool hasTasks() const;
+  bool isRemoteScheduled() const;
 
   /**
    * @return The number of currently active fibers (ready to run or blocked).
@@ -584,8 +585,8 @@ class FiberManager : public ::folly::Executor {
 
    private:
     FiberManager& fiberManager_;
-    void timeoutExpired() noexcept { run(); }
-    void callbackCanceled() noexcept {}
+    void timeoutExpired() noexcept override { run(); }
+    void callbackCanceled() noexcept override {}
   };
 
   FibersPoolResizer fibersPoolResizer_;
@@ -607,13 +608,9 @@ class FiberManager : public ::folly::Executor {
   // find the right stack extents when it needs to poison/unpoison the stack.
 
   void registerStartSwitchStackWithAsan(
-      void** saveFakeStack,
-      const void* stackBase,
-      size_t stackSize);
+      void** saveFakeStack, const void* stackBase, size_t stackSize);
   void registerFinishSwitchStackWithAsan(
-      void* fakeStack,
-      const void** saveStackBase,
-      size_t* saveStackSize);
+      void* fakeStack, const void** saveStackBase, size_t* saveStackSize);
   void freeFakeStack(void* fakeStack);
   void unpoisonFiberStack(const Fiber* fiber);
 

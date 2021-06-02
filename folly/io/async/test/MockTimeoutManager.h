@@ -16,10 +16,10 @@
 
 #pragma once
 
+#include <chrono>
+
 #include <folly/io/async/TimeoutManager.h>
 #include <folly/portability/GMock.h>
-
-#include <chrono>
 
 namespace folly {
 namespace test {
@@ -33,8 +33,7 @@ class MockTimeoutManager : public folly::TimeoutManager {
   MOCK_METHOD1(detachTimeoutManager, void(folly::AsyncTimeout*));
 
   MOCK_METHOD2(
-      scheduleTimeout,
-      bool(folly::AsyncTimeout*, std::chrono::milliseconds));
+      scheduleTimeout, bool(folly::AsyncTimeout*, std::chrono::milliseconds));
 
   MOCK_METHOD1(cancelTimeout, void(folly::AsyncTimeout*));
 

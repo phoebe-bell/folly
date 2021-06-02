@@ -14,23 +14,22 @@
  * limitations under the License.
  */
 
+#include <folly/portability/Filesystem.h>
+
+#include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 
-#include <folly/Random.h>
-#include <folly/stats/detail/DoubleRadixSort.h>
+using namespace testing;
 
-using namespace folly::detail;
+class FilesystemTest : public Test {};
 
-TEST(DoubleRadixSort, Basic) {
-  std::unique_ptr<uint64_t[]> buckets(new uint64_t[256 * 9]);
-  for (int i = 0; i < 100; i++) {
-    size_t sz = folly::Random::rand32(0, 100000);
-    std::unique_ptr<double[]> in(new double[sz]);
-    std::unique_ptr<double[]> out(new double[sz]);
-    for (size_t j = 0; j < sz; j++) {
-      in[j] = folly::Random::randDouble(-100.0, 100.0);
-    }
-    double_radix_sort(sz, buckets.get(), in.get(), out.get());
-    EXPECT_TRUE(std::is_sorted(in.get(), in.get() + sz));
-  }
+TEST_F(FilesystemTest, lexically_normal) {
+  //  from: https://en.cppreference.com/w/cpp/filesystem/path/lexically_normal,
+  //      CC-BY-SA, GFDL
+  EXPECT_THAT(
+      folly::fs::lexically_normal("foo/./bar/..").native(),
+      Eq(folly::fs::path("foo/").make_preferred().native()));
+  EXPECT_THAT(
+      folly::fs::lexically_normal("foo/.///bar/../").native(),
+      Eq(folly::fs::path("foo/").make_preferred().native()));
 }

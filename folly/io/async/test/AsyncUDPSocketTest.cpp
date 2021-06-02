@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <folly/io/async/AsyncUDPSocket.h>
+
 #include <thread>
 
 #include <folly/Conv.h>
@@ -23,7 +25,6 @@
 #include <folly/io/IOBuf.h>
 #include <folly/io/async/AsyncTimeout.h>
 #include <folly/io/async/AsyncUDPServerSocket.h>
-#include <folly/io/async/AsyncUDPSocket.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
@@ -187,8 +188,8 @@ class UDPClient : private AsyncUDPSocket::ReadCallback, private AsyncTimeout {
 
   explicit UDPClient(EventBase* evb) : AsyncTimeout(evb), evb_(evb) {}
 
-  void
-  start(const folly::SocketAddress& server, int n, bool sendClustered = false) {
+  void start(
+      const folly::SocketAddress& server, int n, bool sendClustered = false) {
     CHECK(evb_->isInEventBaseThread());
     server_ = server;
     socket_ = std::make_unique<AsyncUDPSocket>(evb_);
@@ -294,8 +295,7 @@ class UDPClient : private AsyncUDPSocket::ReadCallback, private AsyncTimeout {
   AsyncUDPSocket& getSocket() { return *socket_; }
 
   void setShouldConnect(
-      const folly::SocketAddress& connectAddr,
-      BindSocket bindSocket) {
+      const folly::SocketAddress& connectAddr, BindSocket bindSocket) {
     connectAddr_ = connectAddr;
     bindSocket_ = bindSocket;
   }
@@ -325,9 +325,7 @@ class UDPNotifyClient : public UDPClient {
   ~UDPNotifyClient() override = default;
 
   explicit UDPNotifyClient(
-      EventBase* evb,
-      bool useRecvmmsg = false,
-      unsigned int numMsgs = 1)
+      EventBase* evb, bool useRecvmmsg = false, unsigned int numMsgs = 1)
       : UDPClient(evb), useRecvmmsg_(useRecvmmsg), numMsgs_(numMsgs) {}
 
   bool shouldOnlyNotify() override { return true; }
@@ -597,8 +595,7 @@ TEST_P(ConnectedAsyncSocketIntegrationTest, ConnectedPingPong) {
 }
 
 TEST_P(
-    ConnectedAsyncSocketIntegrationTest,
-    ConnectedPingPongServerWrongAddress) {
+    ConnectedAsyncSocketIntegrationTest, ConnectedPingPongServerWrongAddress) {
   server->setChangePortForWrites(true);
   startServer();
   auto pingClient =
@@ -608,8 +605,7 @@ TEST_P(
 }
 
 TEST_P(
-    ConnectedAsyncSocketIntegrationTest,
-    ConnectedPingPongClientWrongAddress) {
+    ConnectedAsyncSocketIntegrationTest, ConnectedPingPongClientWrongAddress) {
   server->setChangePortForWrites(false);
   startServer();
   folly::SocketAddress connectAddr(
@@ -635,7 +631,7 @@ TEST_P(
   EXPECT_TRUE(pingClient->error());
 }
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     ConnectedAsyncSocketIntegrationTests,
     ConnectedAsyncSocketIntegrationTest,
     Values(BindSocket::YES, BindSocket::NO));

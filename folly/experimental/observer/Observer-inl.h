@@ -99,8 +99,68 @@ Observer<observer_detail::ResultOfUnwrapObserver<F>> makeObserver(F&& creator) {
 }
 
 template <typename T>
+Observer<T> makeStaticObserver(T value) {
+  return makeStaticObserver<T>(std::make_shared<T>(std::move(value)));
+}
+
+template <typename T>
+Observer<T> makeStaticObserver(std::shared_ptr<T> value) {
+  return makeObserver([value = std::move(value)] { return value; });
+}
+
+template <typename T>
+AtomicObserver<T>::AtomicObserver(Observer<T> observer)
+    : observer_(std::move(observer)) {}
+
+template <typename T>
+AtomicObserver<T>::AtomicObserver(const AtomicObserver<T>& other)
+    : AtomicObserver(other.observer_) {}
+
+template <typename T>
+AtomicObserver<T>::AtomicObserver(AtomicObserver<T>&& other) noexcept
+    : AtomicObserver(std::move(other.observer_)) {}
+
+template <typename T>
+AtomicObserver<T>& AtomicObserver<T>::operator=(
+    const AtomicObserver<T>& other) {
+  return *this = other.observer_;
+}
+
+template <typename T>
+AtomicObserver<T>& AtomicObserver<T>::operator=(
+    AtomicObserver<T>&& other) noexcept {
+  return *this = std::move(other.observer_);
+}
+
+template <typename T>
+AtomicObserver<T>& AtomicObserver<T>::operator=(Observer<T> observer) {
+  observer_ = std::move(observer);
+  cachedVersion_.store(0, std::memory_order_release);
+  return *this;
+}
+
+template <typename T>
+T AtomicObserver<T>::get() const {
+  auto version = cachedVersion_.load(std::memory_order_acquire);
+  if (UNLIKELY(
+          observer_.needRefresh(version) ||
+          observer_detail::ObserverManager::inManagerThread())) {
+    SharedMutex::WriteHolder guard{refreshLock_};
+    version = cachedVersion_.load(std::memory_order_acquire);
+    if (LIKELY(
+            observer_.needRefresh(version) ||
+            observer_detail::ObserverManager::inManagerThread())) {
+      auto snapshot = *observer_;
+      cachedValue_.store(*snapshot, std::memory_order_relaxed);
+      cachedVersion_.store(snapshot.getVersion(), std::memory_order_release);
+    }
+  }
+  return cachedValue_.load(std::memory_order_relaxed);
+}
+
+template <typename T>
 TLObserver<T>::TLObserver(Observer<T> observer)
-    : observer_(observer),
+    : observer_(std::move(observer)),
       snapshot_([&] { return new Snapshot<T>(observer_.getSnapshot()); }) {}
 
 template <typename T>
@@ -119,13 +179,26 @@ const Snapshot<T>& TLObserver<T>::getSnapshotRef() const {
 }
 
 template <typename T>
+ReadMostlyAtomicObserver<T>::ReadMostlyAtomicObserver(Observer<T> observer)
+    : observer_(std::move(observer)),
+      cachedValue_(**observer_),
+      callback_(observer_.addCallback([this](Snapshot<T> snapshot) {
+        cachedValue_.store(*snapshot, std::memory_order_relaxed);
+      })) {}
+
+template <typename T>
+T ReadMostlyAtomicObserver<T>::get() const {
+  if (UNLIKELY(observer_detail::ObserverManager::inManagerThread())) {
+    return **observer_;
+  }
+  return cachedValue_.load(std::memory_order_relaxed);
+}
+
+template <typename T>
 ReadMostlyTLObserver<T>::ReadMostlyTLObserver(Observer<T> observer)
-    : observer_(observer),
-      callback_(
-          observer_.addCallback([this](folly::observer::Snapshot<T> snapshot) {
-            globalData_.lock()->reset(snapshot.getShared());
-            globalVersion_ = snapshot.getVersion();
-          })) {}
+    : observer_(std::move(observer)) {
+  refresh();
+}
 
 template <typename T>
 ReadMostlyTLObserver<T>::ReadMostlyTLObserver(
@@ -133,8 +206,9 @@ ReadMostlyTLObserver<T>::ReadMostlyTLObserver(
     : ReadMostlyTLObserver(other.observer_) {}
 
 template <typename T>
-folly::ReadMostlySharedPtr<const T> ReadMostlyTLObserver<T>::getShared() const {
-  if (localSnapshot_->version_ == globalVersion_.load()) {
+ReadMostlySharedPtr<const T> ReadMostlyTLObserver<T>::getShared() const {
+  if (!observer_.needRefresh(localSnapshot_->version_) &&
+      !observer_detail::ObserverManager::inManagerThread()) {
     if (auto data = localSnapshot_->data_.lock()) {
       return data;
     }
@@ -143,10 +217,14 @@ folly::ReadMostlySharedPtr<const T> ReadMostlyTLObserver<T>::getShared() const {
 }
 
 template <typename T>
-folly::ReadMostlySharedPtr<const T> ReadMostlyTLObserver<T>::refresh() const {
-  auto version = globalVersion_.load();
+ReadMostlySharedPtr<const T> ReadMostlyTLObserver<T>::refresh() const {
+  auto snapshot = observer_.getSnapshot();
   auto globalData = globalData_.lock();
-  *localSnapshot_ = LocalSnapshot(*globalData, version);
+  if (globalVersion_.load() < snapshot.getVersion()) {
+    globalData->reset(snapshot.getShared());
+    globalVersion_ = snapshot.getVersion();
+  }
+  *localSnapshot_ = LocalSnapshot(*globalData, globalVersion_.load());
   return globalData->getShared();
 }
 
@@ -159,8 +237,7 @@ inline CallbackHandle::CallbackHandle() {}
 
 template <typename T>
 CallbackHandle::CallbackHandle(
-    Observer<T> observer,
-    folly::Function<void(Snapshot<T>)> callback) {
+    Observer<T> observer, Function<void(Snapshot<T>)> callback) {
   context_ = std::make_shared<Context>();
   context_->observer = makeObserver([observer = std::move(observer),
                                      callback = std::move(callback),
@@ -196,7 +273,7 @@ inline void CallbackHandle::cancel() {
 
 template <typename T>
 CallbackHandle Observer<T>::addCallback(
-    folly::Function<void(Snapshot<T>)> callback) const {
+    Function<void(Snapshot<T>)> callback) const {
   return CallbackHandle(*this, std::move(callback));
 }
 
@@ -229,6 +306,26 @@ Observer<observer_detail::ResultOfUnwrapSharedPtr<F>> makeValueObserver(
     }
     return activeValue;
   });
+}
+
+template <typename T>
+typename HazptrObserver<T>::DefaultSnapshot HazptrObserver<T>::getSnapshot()
+    const {
+  if (UNLIKELY(observer_detail::ObserverManager::inManagerThread())) {
+    // Wait for updates
+    observer_.getSnapshot();
+  }
+  return DefaultSnapshot(state_);
+}
+
+template <typename T>
+typename HazptrObserver<T>::LocalSnapshot HazptrObserver<T>::getLocalSnapshot()
+    const {
+  if (UNLIKELY(observer_detail::ObserverManager::inManagerThread())) {
+    // Wait for updates
+    observer_.getSnapshot();
+  }
+  return LocalSnapshot(state_);
 }
 } // namespace observer
 } // namespace folly

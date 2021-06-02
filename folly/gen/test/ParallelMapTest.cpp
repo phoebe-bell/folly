@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
+#include <folly/gen/ParallelMap.h>
+
 #include <vector>
 
 #include <glog/logging.h>
 
 #include <folly/Memory.h>
 #include <folly/gen/Base.h>
-#include <folly/gen/ParallelMap.h>
 #include <folly/portability/GFlags.h>
 #include <folly/portability/GTest.h>
 
@@ -155,6 +156,9 @@ TEST(Pmap, Rvalues) {
 }
 
 TEST(Pmap, Exception) {
+#if __GNUC__ == 7 && __GNUC_MINOR__ == 5 && !__clang__
+  LOG(INFO) << "some versions of gcc miscompile the code below without this";
+#endif
   std::vector<char const*> input{"a"};
   EXPECT_THROW(from(input) | pmap(To<int>()) | count, std::runtime_error);
 }

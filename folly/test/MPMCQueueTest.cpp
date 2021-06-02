@@ -15,6 +15,16 @@
  */
 
 #include <folly/MPMCQueue.h>
+
+#include <functional>
+#include <memory>
+#include <string>
+#include <thread>
+#include <utility>
+
+#include <boost/intrusive_ptr.hpp>
+#include <boost/thread/barrier.hpp>
+
 #include <folly/Format.h>
 #include <folly/Memory.h>
 #include <folly/portability/GTest.h>
@@ -23,13 +33,6 @@
 #include <folly/portability/Unistd.h>
 #include <folly/stop_watch.h>
 #include <folly/test/DeterministicSchedule.h>
-
-#include <boost/intrusive_ptr.hpp>
-#include <boost/thread/barrier.hpp>
-#include <functional>
-#include <memory>
-#include <thread>
-#include <utility>
 
 FOLLY_ASSUME_FBVECTOR_COMPATIBLE_1(boost::intrusive_ptr)
 
@@ -125,7 +128,7 @@ void runElementTypeTest(T&& src) {
 }
 
 struct RefCounted {
-  static FOLLY_TLS int active_instances;
+  static thread_local int active_instances;
 
   mutable std::atomic<int> rc;
 
@@ -133,7 +136,7 @@ struct RefCounted {
 
   ~RefCounted() { --active_instances; }
 };
-FOLLY_TLS int RefCounted::active_instances;
+thread_local int RefCounted::active_instances;
 
 void intrusive_ptr_add_ref(RefCounted const* p) {
   p->rc++;
@@ -886,8 +889,8 @@ enum LifecycleEvent {
   MAX_LIFECYCLE_EVENT
 };
 
-static FOLLY_TLS int lc_counts[MAX_LIFECYCLE_EVENT];
-static FOLLY_TLS int lc_prev[MAX_LIFECYCLE_EVENT];
+static thread_local int lc_counts[MAX_LIFECYCLE_EVENT];
+static thread_local int lc_prev[MAX_LIFECYCLE_EVENT];
 
 static int lc_outstanding() {
   return lc_counts[DEFAULT_CONSTRUCTOR] + lc_counts[COPY_CONSTRUCTOR] +

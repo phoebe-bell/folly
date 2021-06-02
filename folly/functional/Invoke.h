@@ -420,16 +420,17 @@ struct invoke_traits : detail::invoke_traits_base<I> {
  *    traits::is_nothrow_invocable_v<int, CanFoo, Car&&> // true
  *    traits::is_nothrow_invocable_v<char*, CanFoo, Car&&> // false
  */
-#define FOLLY_CREATE_MEMBER_INVOKER(classname, membername)                  \
-  struct classname {                                                        \
-    template <typename O, typename... Args>                                 \
-    FOLLY_MAYBE_UNUSED FOLLY_ERASE_HACK_GCC constexpr auto                  \
-    operator()(O&& o, Args&&... args) const noexcept(noexcept(              \
-        static_cast<O&&>(o).membername(static_cast<Args&&>(args)...)))      \
-        -> decltype(                                                        \
-            static_cast<O&&>(o).membername(static_cast<Args&&>(args)...)) { \
-      return static_cast<O&&>(o).membername(static_cast<Args&&>(args)...);  \
-    }                                                                       \
+#define FOLLY_CREATE_MEMBER_INVOKER(classname, membername)                 \
+  struct classname {                                                       \
+    template <typename O, typename... Args>                                \
+    FOLLY_MAYBE_UNUSED FOLLY_ERASE_HACK_GCC constexpr auto operator()(     \
+        O&& o, Args&&... args) const                                       \
+        noexcept(noexcept(                                                 \
+            static_cast<O&&>(o).membername(static_cast<Args&&>(args)...))) \
+            -> decltype(static_cast<O&&>(o).membername(                    \
+                static_cast<Args&&>(args)...)) {                           \
+      return static_cast<O&&>(o).membername(static_cast<Args&&>(args)...); \
+    }                                                                      \
   }
 
 /***
@@ -476,11 +477,11 @@ struct invoke_traits : detail::invoke_traits_base<I> {
 #define FOLLY_CREATE_STATIC_MEMBER_INVOKER(classname, membername)             \
   template <typename T>                                                       \
   struct classname {                                                          \
-    template <typename... Args>                                               \
+    template <typename... Args, typename U = T>                               \
     FOLLY_MAYBE_UNUSED FOLLY_ERASE constexpr auto operator()(Args&&... args)  \
-        const noexcept(noexcept(T::membername(static_cast<Args&&>(args)...))) \
-            -> decltype(T::membername(static_cast<Args&&>(args)...)) {        \
-      return T::membername(static_cast<Args&&>(args)...);                     \
+        const noexcept(noexcept(U::membername(static_cast<Args&&>(args)...))) \
+            -> decltype(U::membername(static_cast<Args&&>(args)...)) {        \
+      return U::membername(static_cast<Args&&>(args)...);                     \
     }                                                                         \
   }
 
@@ -494,8 +495,8 @@ struct tag_invoke_fn {
   template <typename Tag, typename... Args>
   constexpr auto operator()(Tag tag, Args&&... args) const noexcept(noexcept(
       tag_invoke(static_cast<Tag&&>(tag), static_cast<Args&&>(args)...)))
-      -> decltype(
-          tag_invoke(static_cast<Tag&&>(tag), static_cast<Args&&>(args)...)) {
+      -> decltype(tag_invoke(
+          static_cast<Tag&&>(tag), static_cast<Args&&>(args)...)) {
     return tag_invoke(static_cast<Tag&&>(tag), static_cast<Args&&>(args)...);
   }
 };

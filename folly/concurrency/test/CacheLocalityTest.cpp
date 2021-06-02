@@ -16,13 +16,14 @@
 
 #include <folly/concurrency/CacheLocality.h>
 
+#include <memory>
+#include <thread>
+#include <unordered_map>
+
 #include <folly/portability/GTest.h>
 #include <folly/portability/SysResource.h>
 
 #include <glog/logging.h>
-#include <memory>
-#include <thread>
-#include <unordered_map>
 
 using namespace folly;
 
@@ -305,10 +306,9 @@ static std::unordered_map<std::string, std::string> fakeSysfsTree = {
 
 /// This is the expected CacheLocality structure for fakeSysfsTree
 static const CacheLocality nonUniformExampleLocality = {
-    32,
-    {16, 16, 2},
-    {0,  2, 4, 6, 8, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28,
-     30, 1, 3, 5, 7, 9,  13, 15, 17, 19, 21, 23, 25, 27, 29, 31}};
+    32, {16, 16, 2}, {0,  2,  4,  6,  8,  10, 11, 12, 14, 16, 18,
+                      20, 22, 24, 26, 28, 30, 1,  3,  5,  7,  9,
+                      13, 15, 17, 19, 21, 23, 25, 27, 29, 31}};
 
 TEST(CacheLocality, FakeSysfs) {
   auto parsed = CacheLocality::readFromSysfsTree([](std::string name) {
@@ -959,11 +959,10 @@ static const std::vector<std::string> fakeProcCpuinfo = {
 
 /// This is the expected CacheLocality structure for fakeProcCpuinfo
 static const CacheLocality fakeProcCpuinfoLocality = {
-    56,
-    {28, 28, 2},
-    {0,  2,  4,  6,  8,  10, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36,
-     38, 40, 42, 44, 46, 48, 50, 52, 54, 1,  3,  5,  7,  9,  11, 13, 15, 17, 19,
-     21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 43, 45, 47, 49, 51, 53, 55}};
+    56, {28, 28, 2}, {0,  2,  4,  6,  8,  10, 12, 14, 16, 18, 20, 22, 24, 26,
+                      28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54,
+                      1,  3,  5,  7,  9,  11, 13, 15, 17, 19, 21, 23, 25, 27,
+                      29, 31, 33, 35, 37, 39, 41, 43, 45, 47, 49, 51, 53, 55}};
 
 TEST(CacheLocality, ProcCpu) {
   auto parsed = CacheLocality::readFromProcCpuinfoLines(fakeProcCpuinfo);
@@ -1042,19 +1041,16 @@ TEST(Getcpu, VdsoGetcpu) {
 }
 #endif
 
-#ifdef FOLLY_CL_USE_FOLLY_TLS
 TEST(ThreadId, SimpleTls) {
   unsigned cpu = 0;
-  auto rv = folly::FallbackGetcpu<SequentialThreadId<std::atomic>>::getcpu(
-      &cpu, nullptr, nullptr);
+  auto rv =
+      folly::FallbackGetcpu<SequentialThreadId>::getcpu(&cpu, nullptr, nullptr);
   EXPECT_EQ(rv, 0);
   EXPECT_TRUE(cpu > 0);
   unsigned again;
-  folly::FallbackGetcpu<SequentialThreadId<std::atomic>>::getcpu(
-      &again, nullptr, nullptr);
+  folly::FallbackGetcpu<SequentialThreadId>::getcpu(&again, nullptr, nullptr);
   EXPECT_EQ(cpu, again);
 }
-#endif
 
 TEST(ThreadId, SimplePthread) {
   unsigned cpu = 0;
@@ -1067,8 +1063,7 @@ TEST(ThreadId, SimplePthread) {
   EXPECT_EQ(cpu, again);
 }
 
-#ifdef FOLLY_CL_USE_FOLLY_TLS
-static FOLLY_TLS unsigned testingCpu = 0;
+static thread_local unsigned testingCpu = 0;
 
 static int testingGetcpu(unsigned* cpu, unsigned* node, void* /* unused */) {
   if (cpu != nullptr) {
@@ -1079,7 +1074,6 @@ static int testingGetcpu(unsigned* cpu, unsigned* node, void* /* unused */) {
   }
   return 0;
 }
-#endif
 
 TEST(AccessSpreader, Simple) {
   for (size_t s = 1; s < 200; ++s) {
@@ -1111,7 +1105,6 @@ TEST(AccessSpreader, ConcurrentAccessCached) {
   }
 }
 
-#ifdef FOLLY_CL_USE_FOLLY_TLS
 #define DECLARE_SPREADER_TAG(tag, locality, func)      \
   namespace {                                          \
   template <typename dummy>                            \
@@ -1176,5 +1169,3 @@ TEST(CoreRawAllocator, Basic) {
   }
   mems.clear();
 }
-
-#endif

@@ -15,19 +15,19 @@
  */
 
 #include <folly/synchronization/Hazptr.h>
-#include <folly/synchronization/example/HazptrLockFreeLIFO.h>
-#include <folly/synchronization/example/HazptrSWMRSet.h>
-#include <folly/synchronization/example/HazptrWideCAS.h>
-#include <folly/synchronization/test/Barrier.h>
+
+#include <atomic>
+#include <thread>
 
 #include <folly/Singleton.h>
 #include <folly/portability/GFlags.h>
 #include <folly/portability/GTest.h>
 #include <folly/synchronization/HazptrThreadPoolExecutor.h>
+#include <folly/synchronization/example/HazptrLockFreeLIFO.h>
+#include <folly/synchronization/example/HazptrSWMRSet.h>
+#include <folly/synchronization/example/HazptrWideCAS.h>
+#include <folly/synchronization/test/Barrier.h>
 #include <folly/test/DeterministicSchedule.h>
-
-#include <atomic>
-#include <thread>
 
 DEFINE_bool(bench, false, "run benchmark");
 DEFINE_int64(num_reps, 10, "Number of test reps");
@@ -171,9 +171,7 @@ struct List {
   }
 
   bool hand_over_hand(
-      int val,
-      hazptr_holder<Atom>* hptr_prev,
-      hazptr_holder<Atom>* hptr_curr) {
+      int val, hazptr_holder<Atom>* hptr_prev, hazptr_holder<Atom>* hptr_curr) {
     while (true) {
       auto prev = &head_;
       auto curr = prev->load(std::memory_order_acquire);
@@ -1230,10 +1228,7 @@ TEST(HazptrTest, reclamation_without_calling_cleanup) {
 
 template <typename InitFunc, typename Func, typename EndFunc>
 uint64_t run_once(
-    int nthreads,
-    const InitFunc& init,
-    const Func& fn,
-    const EndFunc& endFn) {
+    int nthreads, const InitFunc& init, const Func& fn, const EndFunc& endFn) {
   std::atomic<bool> start{false};
   Barrier b(nthreads + 1);
   init();
@@ -1352,10 +1347,7 @@ inline uint64_t obj_bench(std::string name, int nthreads) {
 }
 
 uint64_t list_hoh_bench(
-    std::string name,
-    int nthreads,
-    int size,
-    bool provided = false) {
+    std::string name, int nthreads, int size, bool provided = false) {
   auto repFn = [&] {
     List<Node<>> l(size);
     auto init = [&] {};
@@ -1378,10 +1370,7 @@ uint64_t list_hoh_bench(
 }
 
 uint64_t list_protect_all_bench(
-    std::string name,
-    int nthreads,
-    int size,
-    bool provided = false) {
+    std::string name, int nthreads, int size, bool provided = false) {
   auto repFn = [&] {
     List<NodeRC<true>> l(size);
     auto init = [] {};

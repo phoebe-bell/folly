@@ -16,16 +16,16 @@
 
 #pragma once
 
-#include <folly/Portability.h>
-#include <folly/synchronization/detail/Sleeper.h>
-
-#include <glog/logging.h>
-
 #include <atomic>
 #include <thread>
 
+#include <glog/logging.h>
+
+#include <folly/Portability.h>
+#include <folly/synchronization/detail/Sleeper.h>
+
 /// Linked list class templates used in the hazard pointer library:
-/// - linked_list: Sequential linked list that uses a pre-existing
+/// - linked_list: Sequential linked list that uses pre-existing
 ///   members next() and set_next();.
 /// - shared_head_tail_list: Thread-safe linked list that maintains
 ///   head and tail pointers. Supports push and pop_all.

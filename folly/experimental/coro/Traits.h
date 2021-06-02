@@ -17,9 +17,11 @@
 #pragma once
 
 #include <folly/Traits.h>
+#include <folly/experimental/coro/Coroutine.h>
 
-#include <experimental/coroutine>
 #include <type_traits>
+
+#if FOLLY_HAS_COROUTINES
 
 namespace folly {
 namespace coro {
@@ -41,14 +43,11 @@ using remove_reference_wrapper_t = typename remove_reference_wrapper<T>::type;
 namespace detail {
 
 template <typename T>
-using _is_coroutine_handle =
-    folly::detail::is_instantiation_of<std::experimental::coroutine_handle, T>;
+inline constexpr bool is_coroutine_handle_v =
+    folly::detail::is_instantiation_of_v< //
+        coroutine_handle,
+        T>;
 
-template <typename T>
-struct _is_valid_await_suspend_return_type : folly::Disjunction<
-                                                 std::is_void<T>,
-                                                 std::is_same<bool, T>,
-                                                 _is_coroutine_handle<T>> {};
 } // namespace detail
 
 /// is_awaiter<T>::value
@@ -59,10 +58,10 @@ struct _is_valid_await_suspend_return_type : folly::Disjunction<
 ///
 /// An 'Awaiter' must have the following three methods.
 /// - awaiter.await_ready() -> bool
-/// - awaiter.await_suspend(std::experimental::coroutine_handle<void>()) ->
+/// - awaiter.await_suspend(coroutine_handle<void>()) ->
 ///     void OR
 ///     bool OR
-///     std::experimental::coroutine_handle<T> for some T
+///     coroutine_handle<T> for some T
 /// - awaiter.await_resume()
 ///
 /// Note that we don't check for a valid await_suspend() method here since
@@ -206,9 +205,11 @@ constexpr bool promiseHasAsyncFrame_v = false;
 template <typename Promise>
 constexpr bool promiseHasAsyncFrame_v<
     Promise,
-    std::void_t<decltype(std::declval<Promise&>().getAsyncFrame())>> = true;
+    void_t<decltype(std::declval<Promise&>().getAsyncFrame())>> = true;
 
 } // namespace detail
 
 } // namespace coro
 } // namespace folly
+
+#endif // FOLLY_HAS_COROUTINES

@@ -935,7 +935,7 @@ struct ByteSetNeedleFinder {
 
 using NeedleFinders =
     ::testing::Types<SseNeedleFinder, NoSseNeedleFinder, ByteSetNeedleFinder>;
-TYPED_TEST_CASE(NeedleFinderTest, NeedleFinders);
+TYPED_TEST_SUITE(NeedleFinderTest, NeedleFinders);
 
 TYPED_TEST(NeedleFinderTest, Null) {
   { // null characters in the string
@@ -1243,9 +1243,7 @@ TEST(CRangeFunc, Collection) {
 }
 
 std::string get_rand_str(
-    size_t size,
-    std::uniform_int_distribution<>& dist,
-    std::mt19937& gen) {
+    size_t size, std::uniform_int_distribution<>& dist, std::mt19937& gen) {
   std::string ret(size, '\0');
   for (size_t i = 0; i < size; ++i) {
     ret[i] = static_cast<char>(dist(gen));

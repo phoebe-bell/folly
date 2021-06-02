@@ -36,6 +36,8 @@ namespace detail {
 template <class T, std::atomic<uint64_t>* TrivialPtr>
 class SettingWrapper {
  public:
+  using CallbackHandle = typename SettingCore<T>::CallbackHandle;
+
   /**
    * Returns the setting's current value.
    *
@@ -77,6 +79,19 @@ class SettingWrapper {
    * @throws std::runtime_error  If we can't convert t to string.
    */
   void set(const T& t, StringPiece reason = "api") { core_.set(t, reason); }
+
+  /**
+   * Adds a callback to be invoked any time the setting is updated. Callback
+   * is not invoked for snapshot updates unless published.
+   *
+   * @param callback  void function that accepts a SettingsContents with value
+   *        and reason, to be invoked on updates
+   * @returns  a handle object which automatically removes the callback from
+   *           processing once destroyd
+   */
+  CallbackHandle addCallback(typename SettingCore<T>::UpdateCallback callback) {
+    return core_.addCallback(std::move(callback));
+  }
 
   /**
    * Returns the default value this setting was constructed with.
@@ -164,8 +179,8 @@ using TypeIdentityT = typename TypeIdentity<T>::type;
      Aggregate all off these together in a single section for better TLB      \
      and cache locality. */                                                   \
   __attribute__((__section__(".folly.settings.cache")))                       \
-      std::atomic<folly::settings::detail::SettingCore<_Type>*>               \
-          FOLLY_SETTINGS_CACHE__##_project##_##_name;                         \
+  std::atomic<folly::settings::detail::SettingCore<_Type>*>                   \
+      FOLLY_SETTINGS_CACHE__##_project##_##_name;                             \
   /* Location for the small value cache (if _Type is small and trivial).      \
      Intentionally located right after the pointer cache above to take        \
      advantage of the prefetching */                                          \

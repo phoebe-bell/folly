@@ -14,27 +14,24 @@
  * limitations under the License.
  */
 
-#pragma once
+#include <folly/synchronization/NativeSemaphore.h>
 
-#ifndef _WIN32
-#include <semaphore.h>
-#else
-#include <limits.h>
+#include <folly/portability/GTest.h>
 
-#include <folly/Portability.h>
+using folly::NativeSemaphore;
 
-#define SEM_VALUE_MAX INT_MAX
-namespace folly::portability::semaphore {
-using sem_t = struct sem_t_*;
-int sem_init(sem_t* s, int shared, unsigned int value);
-int sem_destroy(sem_t* s);
-int sem_post(sem_t* s);
-int sem_trywait(sem_t* s);
-int sem_wait(sem_t* s);
-} // namespace folly::portability::semaphore
+class NativeSemaphoreTest : public testing::Test {};
 
-FOLLY_PUSH_WARNING
-FOLLY_CLANG_DISABLE_WARNING("-Wheader-hygiene")
-/* using override */ using namespace folly::portability::semaphore;
-FOLLY_POP_WARNING
-#endif
+TEST_F(NativeSemaphoreTest, empty) {
+  NativeSemaphore sem;
+  EXPECT_FALSE(sem.try_wait());
+  EXPECT_FALSE(sem.try_wait());
+
+  sem.post();
+  EXPECT_TRUE(sem.try_wait());
+  EXPECT_FALSE(sem.try_wait());
+
+  sem.post();
+  sem.wait();
+  EXPECT_FALSE(sem.try_wait());
+}

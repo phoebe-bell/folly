@@ -125,8 +125,7 @@ class AsyncSSLSocket : public AsyncSocket {
      * @param ex  An exception representing the error.
      */
     virtual void handshakeErr(
-        AsyncSSLSocket* sock,
-        const AsyncSocketException& ex) noexcept = 0;
+        AsyncSSLSocket* sock, const AsyncSocketException& ex) noexcept = 0;
   };
 
   class Timeout : public AsyncTimeout {
@@ -253,13 +252,17 @@ class AsyncSSLSocket : public AsyncSocket {
    * @param server Is socket in server mode?
    * @param deferSecurityNegotiation
    *          unencrypted data can be sent before sslConn/Accept
+   * @param peerAddress optional peer address (eg: returned from accept).  If
+   *          nullptr, AsyncSocket will lazily attempt to determine it from fd
+   *          via a system call
    */
   AsyncSSLSocket(
       std::shared_ptr<folly::SSLContext> ctx,
       EventBase* evb,
       NetworkSocket fd,
       bool server = true,
-      bool deferSecurityNegotiation = false);
+      bool deferSecurityNegotiation = false,
+      const SocketAddress* peerAddress = nullptr);
 
   /**
    * Create a server/client AsyncSSLSocket from an already connected
@@ -284,26 +287,26 @@ class AsyncSSLSocket : public AsyncSocket {
   /**
    * Helper function to create a server/client shared_ptr<AsyncSSLSocket>.
    */
-  static std::shared_ptr<AsyncSSLSocket> newSocket(
+  static UniquePtr newSocket(
       const std::shared_ptr<folly::SSLContext>& ctx,
       EventBase* evb,
       NetworkSocket fd,
       bool server = true,
-      bool deferSecurityNegotiation = false) {
-    return std::shared_ptr<AsyncSSLSocket>(
-        new AsyncSSLSocket(ctx, evb, fd, server, deferSecurityNegotiation),
-        Destructor());
+      bool deferSecurityNegotiation = false,
+      const folly::SocketAddress* peerAddress = nullptr) {
+    return AsyncSSLSocket::UniquePtr(new AsyncSSLSocket(
+        ctx, evb, fd, server, deferSecurityNegotiation, peerAddress));
   }
 
   /**
    * Helper function to create a client shared_ptr<AsyncSSLSocket>.
    */
-  static std::shared_ptr<AsyncSSLSocket> newSocket(
+  static UniquePtr newSocket(
       const std::shared_ptr<folly::SSLContext>& ctx,
       EventBase* evb,
       bool deferSecurityNegotiation = false) {
-    return std::shared_ptr<AsyncSSLSocket>(
-        new AsyncSSLSocket(ctx, evb, deferSecurityNegotiation), Destructor());
+    return AsyncSSLSocket::UniquePtr(
+        new AsyncSSLSocket(ctx, evb, deferSecurityNegotiation));
   }
 
 #if FOLLY_OPENSSL_HAS_SNI
@@ -331,22 +334,27 @@ class AsyncSSLSocket : public AsyncSocket {
    * @param evb  EventBase that will manage this socket.
    * @param fd   File descriptor to take over (should be a connected socket).
    * @param serverName tlsext_hostname that will be sent in ClientHello.
+   * @param deferSecurityNegotiation
+   *          unencrypted data can be sent before sslConn/Accept
+   * @param peerAddress optional peer address (eg: returned from accept).  If
+   *          nullptr, AsyncSocket will lazily attempt to determine it from fd
+   *          via a system call
    */
   AsyncSSLSocket(
       const std::shared_ptr<folly::SSLContext>& ctx,
       EventBase* evb,
       NetworkSocket fd,
       const std::string& serverName,
-      bool deferSecurityNegotiation = false);
+      bool deferSecurityNegotiation = false,
+      const SocketAddress* peerAddr = nullptr);
 
-  static std::shared_ptr<AsyncSSLSocket> newSocket(
+  static UniquePtr newSocket(
       const std::shared_ptr<folly::SSLContext>& ctx,
       EventBase* evb,
       const std::string& serverName,
       bool deferSecurityNegotiation = false) {
-    return std::shared_ptr<AsyncSSLSocket>(
-        new AsyncSSLSocket(ctx, evb, serverName, deferSecurityNegotiation),
-        Destructor());
+    return AsyncSSLSocket::UniquePtr(
+        new AsyncSSLSocket(ctx, evb, serverName, deferSecurityNegotiation));
   }
 #endif // FOLLY_OPENSSL_HAS_SNI
 
@@ -385,6 +393,18 @@ class AsyncSSLSocket : public AsyncSocket {
   void setEorTracking(bool track) override;
   size_t getRawBytesWritten() const override;
   size_t getRawBytesReceived() const override;
+
+  // End of methods inherited from AsyncTransport
+
+  /**
+   * Enable ByteEvents for this socket.
+   *
+   * ByteEvents cannot be enabled if TLS 1.0 or earlier is in use, as these
+   * client implementations often have trouble handling cases where a TLS
+   * record is split across multiple packets.
+   */
+  void enableByteEvents() override;
+
   void enableClientHelloParsing();
 
   /**
@@ -423,7 +443,8 @@ class AsyncSSLSocket : public AsyncSocket {
       const folly::SocketAddress& address,
       int timeout = 0,
       const SocketOptionMap& options = emptySocketOptionMap,
-      const folly::SocketAddress& bindAddr = anyAddress()) noexcept override;
+      const folly::SocketAddress& bindAddr = anyAddress(),
+      const std::string& ifName = "") noexcept override;
 
   /**
    * A variant of connect that allows the caller to specify
@@ -446,7 +467,8 @@ class AsyncSSLSocket : public AsyncSocket {
       std::chrono::milliseconds connectTimeout,
       std::chrono::milliseconds totalConnectTimeout,
       const SocketOptionMap& options = emptySocketOptionMap,
-      const folly::SocketAddress& bindAddr = anyAddress()) noexcept;
+      const folly::SocketAddress& bindAddr = anyAddress(),
+      const std::string& ifName = "") noexcept;
 
   using AsyncSocket::connect;
 
@@ -500,17 +522,13 @@ class AsyncSSLSocket : public AsyncSocket {
   SSLStateEnum getSSLState() const { return sslState_; }
 
   /**
-   * Get a handle to the negotiated SSL session.  This increments the session
-   * refcount and must be deallocated by the caller.
+   * Retrieve the SSL session associated with this established connection.
+   *
+   * The SSL Session object is a copyable, opaque token that can be set on other
+   * unconnected AsyncSSLSockets. If AsyncSSLSocket::connect() is called with a
+   * previous session set, TLS resumption will be attempted.
    */
-  SSL_SESSION* getSSLSession();
-
-  /**
-   * Currently unsupported. Eventually intended to replace getSSLSession()
-   * once TLS 1.3 is enabled by default.
-   * Get an abstracted SSL Session.
-   */
-  std::shared_ptr<ssl::SSLSession> getSSLSessionV2();
+  std::shared_ptr<ssl::SSLSession> getSSLSession();
 
   /**
    * Get a handle to the SSL struct.
@@ -518,25 +536,13 @@ class AsyncSSLSocket : public AsyncSocket {
   const SSL* getSSL() const;
 
   /**
-   * DEPRECATED. Will eventually be removed. Please use setSSLSessionV2.
-   *
-   * Set the SSL session to be used during sslConn.  AsyncSSLSocket will
-   * hold a reference to the session until it is destroyed or released by the
-   * underlying SSL structure.
-   *
-   * @param takeOwnership if true, AsyncSSLSocket will assume the caller's
-   *                      reference count to session.
+   * Sets the SSL session that will be attempted for TLS resumption.
    */
-  void setSSLSession(SSL_SESSION* session, bool takeOwnership = false);
-
-  /**
-   * Set the SSL session to be used during sslConn.
-   */
-  void setSSLSessionV2(std::shared_ptr<ssl::SSLSession> session);
+  void setSSLSession(std::shared_ptr<ssl::SSLSession> session);
 
   /**
    * Note: This function exists for compatibility reasons. It is strongly
-   * recommended to use setSSLSessionV2 instead. After setRawSSLSession is
+   * recommended to use setSSLSession instead. After setRawSSLSession is
    * called, subsequent calls to getSSLSession on the socket will return null.
    *
    * Set the SSL session to be used during sslConn.
@@ -561,8 +567,7 @@ class AsyncSSLSocket : public AsyncSocket {
    * @param protoType      Whether this was an NPN or ALPN negotiation
    */
   virtual void getSelectedNextProtocol(
-      const unsigned char** protoName,
-      unsigned* protoLen) const;
+      const unsigned char** protoName, unsigned* protoLen) const;
 
   /**
    * Get the name of the protocol selected by the client during
@@ -579,8 +584,7 @@ class AsyncSSLSocket : public AsyncSocket {
    * @return false if openssl does not support NPN
    */
   virtual bool getSelectedNextProtocolNoThrow(
-      const unsigned char** protoName,
-      unsigned* protoLen) const;
+      const unsigned char** protoName, unsigned* protoLen) const;
 
   /**
    * Determine if the session specified during setSSLSession was reused
@@ -721,8 +725,7 @@ class AsyncSSLSocket : public AsyncSocket {
    * preference order.
    */
   void getSSLClientCiphers(
-      std::string& clientCiphers,
-      bool convertToString = true) const;
+      std::string& clientCiphers, bool convertToString = true) const;
 
   /**
    * Get the list of compression methods sent by the client in TLS Hello.
@@ -842,8 +845,14 @@ class AsyncSSLSocket : public AsyncSocket {
     asyncOperationFinishCallback_ = std::move(cb);
   }
 
+  // Only enable if security negotiation is deferred
   // zero copy is not supported by openssl.
-  bool setZeroCopy(bool /*enable*/) override { return false; }
+  bool setZeroCopy(bool enable) override {
+    if (sslState_ == STATE_UNENCRYPTED) {
+      return AsyncSocket::setZeroCopy(enable);
+    }
+    return false;
+  }
 
  private:
   /**
@@ -874,8 +883,8 @@ class AsyncSSLSocket : public AsyncSocket {
   void handleConnect() noexcept override;
 
   void invalidState(HandshakeCB* callback);
-  bool
-  willBlock(int ret, int* sslErrorOut, unsigned long* errErrorOut) noexcept;
+  bool willBlock(
+      int ret, int* sslErrorOut, unsigned long* errErrorOut) noexcept;
 
   void checkForImmediateRead() noexcept override;
   // AsyncSocket calls this at the wrong time for SSL

@@ -16,14 +16,16 @@
 
 #pragma once
 
-#include <experimental/coroutine>
 #include <type_traits>
 
 #include <folly/experimental/coro/Baton.h>
+#include <folly/experimental/coro/Coroutine.h>
 #include <folly/experimental/coro/Invoke.h>
 #include <folly/experimental/coro/Task.h>
 #include <folly/experimental/coro/Traits.h>
 #include <folly/experimental/coro/detail/Helpers.h>
+
+#if FOLLY_HAS_COROUTINES
 
 namespace folly {
 namespace coro {
@@ -33,22 +35,26 @@ Task<semi_await_result_t<Awaitable>> detachOnCancel(Awaitable awaitable) {
   Baton baton;
   Try<detail::lift_lvalue_reference_t<semi_await_result_t<Awaitable>>> result;
 
-  co_invoke(
-      [awaitable = std::move(
-           awaitable)]() mutable -> Task<semi_await_result_t<Awaitable>> {
-        co_return co_await std::move(awaitable);
-      })
-      .scheduleOn(co_await co_current_executor)
-      .startInlineUnsafe(
-          [postedPtr = posted.get(), &baton, &result](auto&& r) {
-            std::unique_ptr<std::atomic<bool>> p(postedPtr);
-            if (!p->exchange(true, std::memory_order_relaxed)) {
-              p.release();
-              tryAssign(result, std::move(r));
-              baton.post();
-            }
-          },
-          co_await co_current_cancellation_token);
+  {
+    auto t = co_invoke(
+        [awaitable = std::move(
+             awaitable)]() mutable -> Task<semi_await_result_t<Awaitable>> {
+          co_return co_await std::move(awaitable);
+        });
+    std::move(t)
+        .scheduleOn(co_await co_current_executor)
+        .startInlineUnsafe(
+            [postedPtr = posted.get(), &baton, &result](auto&& r) {
+              std::unique_ptr<std::atomic<bool>> p(postedPtr);
+              if (!p->exchange(true, std::memory_order_relaxed)) {
+                p.release();
+                tryAssign(result, std::move(r));
+                baton.post();
+              }
+            },
+            co_await co_current_cancellation_token);
+  }
+
   {
     CancellationCallback cancelCallback(
         co_await co_current_cancellation_token, [&posted, &baton, &result] {
@@ -69,3 +75,5 @@ Task<semi_await_result_t<Awaitable>> detachOnCancel(Awaitable awaitable) {
 }
 } // namespace coro
 } // namespace folly
+
+#endif // FOLLY_HAS_COROUTINES

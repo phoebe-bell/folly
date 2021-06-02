@@ -20,14 +20,13 @@
 
 #if FOLLY_HAZPTR_THR_LOCAL
 
-#include <folly/synchronization/HazptrObj.h>
-#include <folly/synchronization/HazptrRec.h>
-
-#include <folly/SingletonThreadLocal.h>
+#include <atomic>
 
 #include <glog/logging.h>
 
-#include <atomic>
+#include <folly/SingletonThreadLocal.h>
+#include <folly/synchronization/HazptrObj.h>
+#include <folly/synchronization/HazptrRec.h>
 
 /**
  *  Thread local classes and singletons
@@ -221,8 +220,7 @@ class hazptr_priv {
   }
 
   void collect(
-      hazptr_obj<Atom>*& colHead,
-      hazptr_obj<Atom>*& colTail) noexcept {
+      hazptr_obj<Atom>*& colHead, hazptr_obj<Atom>*& colTail) noexcept {
     // This function doesn't change rcount_.
     // The value rcount_ is accurate excluding the effects of calling collect().
     auto h = exchange_head();

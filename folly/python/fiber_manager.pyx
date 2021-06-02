@@ -13,8 +13,13 @@
 # limitations under the License.
 
 import asyncio
+from cython.operator cimport dereference as deref
 from libcpp.memory cimport unique_ptr
 from folly.executor cimport get_executor
+from libcpp.cast cimport (
+    dynamic_cast,
+)
+from folly.executor cimport cAsyncioExecutor
 from folly.fiber_manager cimport (
     cFiberManager,
     cLoopController,
@@ -28,13 +33,26 @@ loop_to_controller = WeakKeyDictionary()
 
 cdef class FiberManager:
     cdef unique_ptr[cFiberManager] cManager
+    cdef cAsyncioExecutor* cExecutor
 
     # Lazy constructor, as __cinit__ doesn't support C types
     cdef init(self, const cFiberManagerOptions& opts):
+        self.cExecutor = get_executor()
         self.cManager.reset(new cFiberManager(
             unique_ptr[cLoopController](new cAsyncioLoopController(
-                get_executor())),
+                self.cExecutor)),
             opts));
+
+    def __dealloc__(FiberManager self):
+        while deref(self.cManager).isRemoteScheduled():
+            self.cExecutor.driveNoDiscard()
+
+        deref(self.cManager).loopUntilNoReady()
+
+        # Explicitly reset here, otherwise it is possible
+        # that self.cManager dstor runs after python finalizes
+        # Cython deletes these after __dealloc__ returns.
+        self.cManager.reset()
 
 
 cdef cFiberManager* get_fiber_manager(const cFiberManagerOptions& opts):

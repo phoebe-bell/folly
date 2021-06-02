@@ -30,7 +30,6 @@
 #include <folly/detail/Futex.h>
 #include <folly/portability/Asm.h>
 #include <folly/portability/SysResource.h>
-#include <folly/synchronization/AtomicRef.h>
 #include <folly/synchronization/SanitizeThread.h>
 #include <folly/system/ThreadId.h>
 
@@ -238,14 +237,6 @@
 // no actions by a thread B that can make C need to wait for A. Since the
 // overwhelming majority of SharedMutex instances use write priority, we
 // restrict the TSAN annotations to only SharedMutexWritePriority.
-
-#ifndef FOLLY_SHAREDMUTEX_TLS
-#if !FOLLY_MOBILE
-#define FOLLY_SHAREDMUTEX_TLS FOLLY_TLS
-#else
-#define FOLLY_SHAREDMUTEX_TLS
-#endif
-#endif
 
 namespace folly {
 
@@ -504,8 +495,7 @@ class SharedMutexImpl : std::conditional_t<
 
   template <class Rep, class Period>
   bool try_lock_shared_for(
-      const std::chrono::duration<Rep, Period>& duration,
-      Token& token) {
+      const std::chrono::duration<Rep, Period>& duration, Token& token) {
     WaitForDuration<Rep, Period> ctx(duration);
     auto result = lockSharedImpl(&token, ctx);
     annotateTryAcquired(result, annotate_rwlock_level::rdlock);
@@ -705,9 +695,7 @@ class SharedMutexImpl : std::conditional_t<
     bool shouldTimeOut() { return true; }
 
     bool doWait(
-        Futex& /* futex */,
-        uint32_t /* expected */,
-        uint32_t /* waitMask */) {
+        Futex& /* futex */, uint32_t /* expected */, uint32_t /* waitMask */) {
       return false;
     }
   };
@@ -774,8 +762,10 @@ class SharedMutexImpl : std::conditional_t<
 
   void annotateDestroy() {
     if (AnnotateForThreadSanitizer) {
-      annotateLazyCreate();
-      annotate_rwlock_destroy(this, __FILE__, __LINE__);
+      // call destroy only if the annotation was created
+      if (state_.load() & kAnnotationCreated) {
+        annotate_rwlock_destroy(this, __FILE__, __LINE__);
+      }
     }
   }
 
@@ -969,10 +959,20 @@ class SharedMutexImpl : std::conditional_t<
   static constexpr uintptr_t kTokenless = 0x1;
 
   // This is the starting location for Token-less unlock_shared().
-  static FOLLY_SHAREDMUTEX_TLS uint32_t tls_lastTokenlessSlot;
+  FOLLY_EXPORT FOLLY_ALWAYS_INLINE static std::atomic<uint32_t>&
+  tls_lastTokenlessSlot() {
+    static std::atomic<uint32_t> non_tl{};
+    static thread_local std::atomic<uint32_t> tl{};
+    return kIsMobile ? non_tl : tl;
+  }
 
   // Last deferred reader slot used.
-  static FOLLY_SHAREDMUTEX_TLS uint32_t tls_lastDeferredReaderSlot;
+  FOLLY_EXPORT FOLLY_ALWAYS_INLINE static std::atomic<uint32_t>&
+  tls_lastDeferredReaderSlot() {
+    static std::atomic<uint32_t> non_tl{};
+    static thread_local std::atomic<uint32_t> tl{};
+    return kIsMobile ? non_tl : tl;
+  }
 
   // Only indexes divisible by kDeferredSeparationFactor are used.
   // If any of those elements points to a SharedMutexImpl, then it
@@ -1003,9 +1003,7 @@ class SharedMutexImpl : std::conditional_t<
 
   template <class WaitContext>
   bool lockExclusiveImpl(
-      uint32_t& state,
-      uint32_t preconditionGoalMask,
-      WaitContext& ctx) {
+      uint32_t& state, uint32_t preconditionGoalMask, WaitContext& ctx) {
     while (true) {
       if (UNLIKELY((state & preconditionGoalMask) != 0) &&
           !waitForZeroBits(state, preconditionGoalMask, kWaitingE, ctx) &&
@@ -1071,10 +1069,7 @@ class SharedMutexImpl : std::conditional_t<
 
   template <class WaitContext>
   bool waitForZeroBits(
-      uint32_t& state,
-      uint32_t goal,
-      uint32_t waitMask,
-      WaitContext& ctx) {
+      uint32_t& state, uint32_t goal, uint32_t waitMask, WaitContext& ctx) {
     uint32_t spinCount = 0;
     while (true) {
       state = state_.load(std::memory_order_acquire);
@@ -1092,10 +1087,7 @@ class SharedMutexImpl : std::conditional_t<
 
   template <class WaitContext>
   bool yieldWaitForZeroBits(
-      uint32_t& state,
-      uint32_t goal,
-      uint32_t waitMask,
-      WaitContext& ctx) {
+      uint32_t& state, uint32_t goal, uint32_t waitMask, WaitContext& ctx) {
 #ifdef RUSAGE_THREAD
     struct rusage usage;
     std::memset(&usage, 0, sizeof(usage));
@@ -1133,10 +1125,7 @@ class SharedMutexImpl : std::conditional_t<
 
   template <class WaitContext>
   bool futexWaitForZeroBits(
-      uint32_t& state,
-      uint32_t goal,
-      uint32_t waitMask,
-      WaitContext& ctx) {
+      uint32_t& state, uint32_t goal, uint32_t waitMask, WaitContext& ctx) {
     assert(
         waitMask == kWaitingNotS || waitMask == kWaitingE ||
         waitMask == kWaitingU || waitMask == kWaitingS);
@@ -1602,7 +1591,8 @@ extern template class SharedMutexImpl<false>;
 template <
     bool ReaderPriority,
     typename Tag_,
-    template <typename> class Atom,
+    template <typename>
+    class Atom,
     bool BlockImmediately,
     bool AnnotateForThreadSanitizer,
     bool TrackThreadId>
@@ -1626,37 +1616,8 @@ alignas(hardware_destructive_interference_size) typename SharedMutexImpl<
 template <
     bool ReaderPriority,
     typename Tag_,
-    template <typename> class Atom,
-    bool BlockImmediately,
-    bool AnnotateForThreadSanitizer,
-    bool TrackThreadId>
-FOLLY_SHAREDMUTEX_TLS uint32_t SharedMutexImpl<
-    ReaderPriority,
-    Tag_,
-    Atom,
-    BlockImmediately,
-    AnnotateForThreadSanitizer,
-    TrackThreadId>::tls_lastTokenlessSlot = 0;
-
-template <
-    bool ReaderPriority,
-    typename Tag_,
-    template <typename> class Atom,
-    bool BlockImmediately,
-    bool AnnotateForThreadSanitizer,
-    bool TrackThreadId>
-FOLLY_SHAREDMUTEX_TLS uint32_t SharedMutexImpl<
-    ReaderPriority,
-    Tag_,
-    Atom,
-    BlockImmediately,
-    AnnotateForThreadSanitizer,
-    TrackThreadId>::tls_lastDeferredReaderSlot = 0;
-
-template <
-    bool ReaderPriority,
-    typename Tag_,
-    template <typename> class Atom,
+    template <typename>
+    class Atom,
     bool BlockImmediately,
     bool AnnotateForThreadSanitizer,
     bool TrackThreadId>
@@ -1667,8 +1628,7 @@ bool SharedMutexImpl<
     BlockImmediately,
     AnnotateForThreadSanitizer,
     TrackThreadId>::tryUnlockTokenlessSharedDeferred() {
-  auto bestSlot =
-      make_atomic_ref(tls_lastTokenlessSlot).load(std::memory_order_relaxed);
+  auto bestSlot = tls_lastTokenlessSlot().load(std::memory_order_relaxed);
   // use do ... while to avoid calling
   // shared_mutex_detail::getMaxDeferredReaders() unless necessary
   uint32_t i = 0;
@@ -1677,8 +1637,7 @@ bool SharedMutexImpl<
     auto slotValue = slotPtr->load(std::memory_order_relaxed);
     if (slotValue == tokenlessSlotValue() &&
         slotPtr->compare_exchange_strong(slotValue, 0)) {
-      make_atomic_ref(tls_lastTokenlessSlot)
-          .store(bestSlot ^ i, std::memory_order_relaxed);
+      tls_lastTokenlessSlot().store(bestSlot ^ i, std::memory_order_relaxed);
       return true;
     }
     ++i;
@@ -1689,7 +1648,8 @@ bool SharedMutexImpl<
 template <
     bool ReaderPriority,
     typename Tag_,
-    template <typename> class Atom,
+    template <typename>
+    class Atom,
     bool BlockImmediately,
     bool AnnotateForThreadSanitizer,
     bool TrackThreadId>
@@ -1710,8 +1670,8 @@ bool SharedMutexImpl<
       return false;
     }
 
-    uint32_t slot = make_atomic_ref(tls_lastDeferredReaderSlot)
-                        .load(std::memory_order_relaxed);
+    uint32_t slot =
+        tls_lastDeferredReaderSlot().load(std::memory_order_relaxed);
     uintptr_t slotValue = 1; // any non-zero value will do
 
     bool canAlreadyDefer = (state & kMayDefer) != 0;
@@ -1735,8 +1695,7 @@ bool SharedMutexImpl<
           slotValue = deferredReader(slot)->load(std::memory_order_relaxed);
           if (slotValue == 0) {
             // found empty slot
-            make_atomic_ref(tls_lastDeferredReaderSlot)
-                .store(slot, std::memory_order_relaxed);
+            tls_lastDeferredReaderSlot().store(slot, std::memory_order_relaxed);
             break;
           }
         }
@@ -1787,8 +1746,7 @@ bool SharedMutexImpl<
     }
 
     if (token == nullptr) {
-      make_atomic_ref(tls_lastTokenlessSlot)
-          .store(slot, std::memory_order_relaxed);
+      tls_lastTokenlessSlot().store(slot, std::memory_order_relaxed);
     }
 
     if ((state & kMayDefer) != 0) {

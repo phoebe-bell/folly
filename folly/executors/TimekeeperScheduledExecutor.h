@@ -16,8 +16,9 @@
 
 #pragma once
 
-#include <glog/logging.h>
 #include <atomic>
+
+#include <glog/logging.h>
 
 #include <folly/executors/ScheduledExecutor.h>
 #include <folly/futures/Future.h>
@@ -47,8 +48,8 @@ class TimekeeperScheduledExecutor : public ScheduledExecutor {
 
   virtual void add(Func func) override;
 
-  virtual void scheduleAt(Func&& func, ScheduledExecutor::TimePoint const& t)
-      override;
+  virtual void scheduleAt(
+      Func&& func, ScheduledExecutor::TimePoint const& t) override;
 
  protected:
   bool keepAliveAcquire() noexcept override;

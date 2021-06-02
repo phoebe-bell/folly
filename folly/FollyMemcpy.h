@@ -14,25 +14,11 @@
  * limitations under the License.
  */
 
-#pragma once
+// @author: Logan Evans <lpe@fb.com>
 
-#include <cstddef>
+#include <stdlib.h>
 
-#if __has_include(<demangle.h>)
-#define FOLLY_DETAIL_HAVE_DEMANGLE_H 1
-#else
-#define FOLLY_DETAIL_HAVE_DEMANGLE_H 0
-#endif
-
-namespace folly {
-namespace detail {
-
-extern int cplus_demangle_v3_callback_wrapper(
-    char const* mangled,
-    void (*cbref)(char const*, std::size_t, void*),
-    void* opaque);
-
-extern char* cplus_demangle_v3_wrapper(const char* mangled);
-
-} // namespace detail
-} // namespace folly
+extern "C" {
+void* __folly_memcpy(
+    void* __restrict dst, const void* __restrict src, size_t size);
+}

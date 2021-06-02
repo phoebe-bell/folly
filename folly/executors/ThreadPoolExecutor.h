@@ -20,6 +20,8 @@
 #include <mutex>
 #include <queue>
 
+#include <glog/logging.h>
+
 #include <folly/DefaultKeepAliveExecutor.h>
 #include <folly/Memory.h>
 #include <folly/SharedMutex.h>
@@ -30,8 +32,6 @@
 #include <folly/portability/GFlags.h>
 #include <folly/synchronization/AtomicStruct.h>
 #include <folly/synchronization/Baton.h>
-
-#include <glog/logging.h>
 
 namespace folly {
 
@@ -75,8 +75,8 @@ class ThreadPoolExecutor : public DefaultKeepAliveExecutor {
   ~ThreadPoolExecutor() override;
 
   void add(Func func) override = 0;
-  virtual void
-  add(Func func, std::chrono::milliseconds expiration, Func expireCallback);
+  virtual void add(
+      Func func, std::chrono::milliseconds expiration, Func expireCallback);
 
   void setThreadFactory(std::shared_ptr<ThreadFactory> threadFactory) {
     CHECK(numThreads() == 0);
@@ -242,42 +242,30 @@ class ThreadPoolExecutor : public DefaultKeepAliveExecutor {
   class ThreadList {
    public:
     void add(const ThreadPtr& state) {
-      auto it = std::lower_bound(
-          vec_.begin(),
-          vec_.end(),
-          state,
-          // compare method is a static method of class
-          // and therefore cannot be inlined by compiler
-          // as a template predicate of the STL algorithm
-          // but wrapped up with the lambda function (lambda will be inlined)
-          // compiler can inline compare method as well
-          [&](const ThreadPtr& ts1, const ThreadPtr& ts2) -> bool { // inline
-            return compare(ts1, ts2);
-          });
+      auto it = std::lower_bound(vec_.begin(), vec_.end(), state, Compare{});
       vec_.insert(it, state);
     }
 
     void remove(const ThreadPtr& state) {
-      auto itPair = std::equal_range(
-          vec_.begin(),
-          vec_.end(),
-          state,
-          // the same as above
-          [&](const ThreadPtr& ts1, const ThreadPtr& ts2) -> bool { // inline
-            return compare(ts1, ts2);
-          });
+      auto itPair =
+          std::equal_range(vec_.begin(), vec_.end(), state, Compare{});
       CHECK(itPair.first != vec_.end());
       CHECK(std::next(itPair.first) == itPair.second);
       vec_.erase(itPair.first);
     }
 
+    bool contains(const ThreadPtr& ts) const {
+      return std::binary_search(vec_.cbegin(), vec_.cend(), ts, Compare{});
+    }
+
     const std::vector<ThreadPtr>& get() const { return vec_; }
 
    private:
-    static bool compare(const ThreadPtr& ts1, const ThreadPtr& ts2) {
-      return ts1->id < ts2->id;
-    }
-
+    struct Compare {
+      bool operator()(const ThreadPtr& ts1, const ThreadPtr& ts2) const {
+        return ts1->id < ts2->id;
+      }
+    };
     std::vector<ThreadPtr> vec_;
   };
 

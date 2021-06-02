@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
+#include <folly/experimental/symbolizer/Elf.h>
+
 #include <folly/FileUtil.h>
 #include <folly/experimental/TestUtil.h>
-#include <folly/experimental/symbolizer/Elf.h>
 #include <folly/experimental/symbolizer/detail/Debug.h>
 #include <folly/portability/GTest.h>
-#include <sys/auxv.h>
+
+#if FOLLY_HAVE_ELF
 
 using folly::symbolizer::ElfFile;
 
@@ -105,3 +107,5 @@ TEST_F(ElfTest, FailToOpenLargeFilename) {
       elfFile->openNoThrow(largeNonExistingName.c_str()));
   EXPECT_EQ(ElfFile::kSuccess, elfFile->openNoThrow(kDefaultElf));
 }
+
+#endif

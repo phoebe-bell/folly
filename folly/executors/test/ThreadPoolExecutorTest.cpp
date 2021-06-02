@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+#include <folly/DefaultKeepAliveExecutor.h>
+#include <folly/executors/CPUThreadPoolExecutor.h>
+#include <folly/executors/ThreadPoolExecutor.h>
+
 #include <atomic>
 #include <memory>
 #include <thread>
@@ -26,7 +30,6 @@
 #include <folly/executors/EDFThreadPoolExecutor.h>
 #include <folly/executors/FutureExecutor.h>
 #include <folly/executors/IOThreadPoolExecutor.h>
-#include <folly/executors/ThreadPoolExecutor.h>
 #include <folly/executors/task_queue/LifoSemMPMCQueue.h>
 #include <folly/executors/task_queue/UnboundedBlockingQueue.h>
 #include <folly/executors/thread_factory/InitThreadFactory.h>
@@ -348,11 +351,12 @@ static void futureExecutor() {
     c++;
     EXPECT_NO_THROW(t.value());
   });
-  fe.addFuture([]() { throw std::runtime_error("oops"); })
-      .then([&](Try<Unit>&& t) {
-        c++;
-        EXPECT_THROW(t.value(), std::runtime_error);
-      });
+  fe.addFuture([]() {
+      throw std::runtime_error("oops");
+    }).then([&](Try<Unit>&& t) {
+    c++;
+    EXPECT_THROW(t.value(), std::runtime_error);
+  });
   // Test doing actual async work
   folly::Baton<> baton;
   fe.addFuture([&]() {
@@ -363,12 +367,11 @@ static void futureExecutor() {
       });
       t.detach();
       return p->getFuture();
-    })
-      .then([&](Try<int>&& t) {
-        EXPECT_EQ(42, t.value());
-        c++;
-        baton.post();
-      });
+    }).then([&](Try<int>&& t) {
+    EXPECT_EQ(42, t.value());
+    c++;
+    baton.post();
+  });
   baton.wait();
   fe.join();
   EXPECT_EQ(6, c);
@@ -589,19 +592,27 @@ class TestData : public folly::RequestData {
 };
 
 TEST(ThreadPoolExecutorTest, RequestContext) {
-  CPUThreadPoolExecutor executor(1);
-
   RequestContextScopeGuard rctx; // create new request context for this scope
   EXPECT_EQ(nullptr, RequestContext::get()->getContextData("test"));
   RequestContext::get()->setContextData("test", std::make_unique<TestData>(42));
   auto data = RequestContext::get()->getContextData("test");
   EXPECT_EQ(42, dynamic_cast<TestData*>(data)->data_);
 
-  executor.add([] {
-    auto data2 = RequestContext::get()->getContextData("test");
-    ASSERT_TRUE(data2 != nullptr);
-    EXPECT_EQ(42, dynamic_cast<TestData*>(data2)->data_);
-  });
+  struct VerifyRequestContext {
+    ~VerifyRequestContext() {
+      auto data2 = RequestContext::get()->getContextData("test");
+      EXPECT_TRUE(data2 != nullptr);
+      if (data2 != nullptr) {
+        EXPECT_EQ(42, dynamic_cast<TestData*>(data2)->data_);
+      }
+    }
+  };
+
+  {
+    CPUThreadPoolExecutor executor(1);
+    executor.add([] { VerifyRequestContext(); });
+    executor.add([x = VerifyRequestContext()] {});
+  }
 }
 
 std::atomic<int> g_sequence{};
@@ -925,7 +936,7 @@ static void WeakRefTest() {
             .via(&fe)
             .thenValue([](auto&&) { burnMs(100)(); })
             .thenValue([&](auto&&) { ++counter; })
-            .via(fe.weakRef())
+            .via(getWeakRef(fe))
             .thenValue([](auto&&) { burnMs(100)(); })
             .thenValue([&](auto&&) { ++counter; });
   }
@@ -975,6 +986,13 @@ static void virtualExecutorTest() {
   EXPECT_EQ(2, counter);
 }
 
+class SingleThreadedCPUThreadPoolExecutor : public CPUThreadPoolExecutor,
+                                            public SequencedExecutor {
+ public:
+  explicit SingleThreadedCPUThreadPoolExecutor(size_t)
+      : CPUThreadPoolExecutor(1) {}
+};
+
 TEST(ThreadPoolExecutorTest, WeakRefTestIO) {
   WeakRefTest<IOThreadPoolExecutor>();
 }
@@ -985,6 +1003,18 @@ TEST(ThreadPoolExecutorTest, WeakRefTestCPU) {
 
 TEST(ThreadPoolExecutorTest, WeakRefTestEDF) {
   WeakRefTest<EDFThreadPoolExecutor>();
+}
+
+TEST(ThreadPoolExecutorTest, WeakRefTestSingleThreadedCPU) {
+  WeakRefTest<SingleThreadedCPUThreadPoolExecutor>();
+}
+
+TEST(ThreadPoolExecutorTest, WeakRefTestSequential) {
+  SingleThreadedCPUThreadPoolExecutor ex(1);
+  auto weakRef = getWeakRef(ex);
+  EXPECT_TRUE((std::is_same_v<
+               decltype(weakRef),
+               Executor::KeepAlive<SequencedExecutor>>));
 }
 
 TEST(ThreadPoolExecutorTest, VirtualExecutorTestIO) {
@@ -1003,10 +1033,10 @@ TEST(ThreadPoolExecutorTest, VirtualExecutorTestEDF) {
 template <class TPE>
 static void currentThreadTest(folly::StringPiece executorName) {
   folly::Optional<ExecutorBlockingContext> ctx{};
-  TPE tpe(1);
+  TPE tpe(1, std::make_shared<NamedThreadFactory>(executorName));
   tpe.add([&ctx]() { ctx = getExecutorBlockingContext(); });
   tpe.join();
-  EXPECT_EQ(ctx->name, executorName);
+  EXPECT_EQ(ctx->tag, executorName);
 }
 
 // Test the nesting of the permit guard
@@ -1014,7 +1044,7 @@ template <class TPE>
 static void currentThreadTestDisabled(folly::StringPiece executorName) {
   folly::Optional<ExecutorBlockingContext> ctxPermit{};
   folly::Optional<ExecutorBlockingContext> ctxForbid{};
-  TPE tpe(1);
+  TPE tpe(1, std::make_shared<NamedThreadFactory>(executorName));
   tpe.add([&]() {
     {
       // Nest the guard that permits blocking
@@ -1025,20 +1055,20 @@ static void currentThreadTestDisabled(folly::StringPiece executorName) {
   });
   tpe.join();
   EXPECT_TRUE(!ctxPermit.has_value());
-  EXPECT_EQ(ctxForbid->name, executorName);
+  EXPECT_EQ(ctxForbid->tag, executorName);
 }
 
 TEST(ThreadPoolExecutorTest, CPUCurrentThreadExecutor) {
-  currentThreadTest<CPUThreadPoolExecutor>("CPUThreadPoolExecutor");
-  currentThreadTestDisabled<CPUThreadPoolExecutor>("CPUThreadPoolExecutor");
+  currentThreadTest<CPUThreadPoolExecutor>("CPU-ExecutorName");
+  currentThreadTestDisabled<CPUThreadPoolExecutor>("CPU-ExecutorName");
 }
 
 TEST(ThreadPoolExecutorTest, IOCurrentThreadExecutor) {
-  currentThreadTest<IOThreadPoolExecutor>("EventBase");
-  currentThreadTestDisabled<IOThreadPoolExecutor>("EventBase");
+  currentThreadTest<IOThreadPoolExecutor>("IO-ExecutorName");
+  currentThreadTestDisabled<IOThreadPoolExecutor>("IO-ExecutorName");
 }
 
 TEST(ThreadPoolExecutorTest, EDFCurrentThreadExecutor) {
-  currentThreadTest<EDFThreadPoolExecutor>("EDFThreadPoolExecutor");
-  currentThreadTestDisabled<EDFThreadPoolExecutor>("EDFThreadPoolExecutor");
+  currentThreadTest<EDFThreadPoolExecutor>("EDF-ExecutorName");
+  currentThreadTestDisabled<EDFThreadPoolExecutor>("EDF-ExecutorName");
 }

@@ -16,6 +16,11 @@
 
 #pragma once
 
+#include <fcntl.h>
+#include <sys/types.h>
+
+#include <list>
+
 #include <folly/SocketAddress.h>
 #include <folly/experimental/TestUtil.h>
 #include <folly/io/async/AsyncSSLSocket.h>
@@ -28,10 +33,6 @@
 #include <folly/portability/GTest.h>
 #include <folly/portability/Sockets.h>
 #include <folly/portability/Unistd.h>
-
-#include <fcntl.h>
-#include <sys/types.h>
-#include <list>
 
 namespace folly {
 
@@ -55,14 +56,14 @@ class SSLServerAcceptCallbackBase : public AsyncServerSocket::AcceptCallback {
 
   ~SSLServerAcceptCallbackBase() override { EXPECT_EQ(STATE_SUCCEEDED, state); }
 
-  void acceptError(const std::exception& ex) noexcept override {
-    LOG(WARNING) << "SSLServerAcceptCallbackBase::acceptError " << ex.what();
+  void acceptError(folly::exception_wrapper ex) noexcept override {
+    LOG(WARNING) << "SSLServerAcceptCallbackBase::acceptError " << ex;
     state = STATE_FAILED;
   }
 
   void connectionAccepted(
       folly::NetworkSocket fd,
-      const SocketAddress& /* clientAddr */) noexcept override {
+      const SocketAddress& clientAddr) noexcept override {
     if (socket_) {
       socket_->detachEventBase();
     }
@@ -70,7 +71,13 @@ class SSLServerAcceptCallbackBase : public AsyncServerSocket::AcceptCallback {
     try {
       // Create a AsyncSSLSocket object with the fd. The socket should be
       // added to the event base and in the state of accepting SSL connection.
-      socket_ = AsyncSSLSocket::newSocket(ctx_, base_, fd);
+      socket_ = AsyncSSLSocket::newSocket(
+          ctx_,
+          base_,
+          fd,
+          /*server=*/true,
+          /*deferSecurityNegotiation=*/false,
+          &clientAddr);
     } catch (const std::exception& e) {
       LOG(ERROR) << "Exception %s caught while creating a AsyncSSLSocket "
                     "object with socket "
@@ -103,8 +110,7 @@ class TestSSLServer {
   // Create a TestSSLServer.
   // This immediately starts listening on the given port.
   explicit TestSSLServer(
-      SSLServerAcceptCallbackBase* acb,
-      bool enableTFO = false);
+      SSLServerAcceptCallbackBase* acb, bool enableTFO = false);
   explicit TestSSLServer(
       SSLServerAcceptCallbackBase* acb,
       std::shared_ptr<SSLContext> ctx,

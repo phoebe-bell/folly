@@ -16,15 +16,16 @@
 
 #pragma once
 
-#include <folly/Function.h>
-#include <folly/Range.h>
-#include <folly/hash/Hash.h>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#include <folly/Function.h>
+#include <folly/Range.h>
+#include <folly/hash/Hash.h>
 
 namespace folly {
 
@@ -346,8 +347,7 @@ class FunctionScheduler {
   // Return true if the current function is being canceled
   bool cancelAllFunctionsWithLock(std::unique_lock<std::mutex>& lock);
   bool cancelFunctionWithLock(
-      std::unique_lock<std::mutex>& lock,
-      StringPiece nameID);
+      std::unique_lock<std::mutex>& lock, StringPiece nameID);
 
   std::thread thread_;
 

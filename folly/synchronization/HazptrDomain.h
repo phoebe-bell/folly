@@ -16,18 +16,17 @@
 
 #pragma once
 
-#include <folly/synchronization/Hazptr-fwd.h>
-#include <folly/synchronization/HazptrObj.h>
-#include <folly/synchronization/HazptrRec.h>
-#include <folly/synchronization/HazptrThrLocal.h>
+#include <atomic>
+#include <unordered_set>
 
 #include <folly/Memory.h>
 #include <folly/Portability.h>
 #include <folly/executors/QueuedImmediateExecutor.h>
 #include <folly/synchronization/AsymmetricMemoryBarrier.h>
-
-#include <atomic>
-#include <unordered_set> // for hash set in bulk_reclaim
+#include <folly/synchronization/Hazptr-fwd.h>
+#include <folly/synchronization/HazptrObj.h>
+#include <folly/synchronization/HazptrRec.h>
+#include <folly/synchronization/HazptrThrLocal.h>
 
 ///
 /// Classes related to hazard pointer domains.
@@ -37,6 +36,8 @@ namespace folly {
 
 namespace detail {
 
+/** Threshold for the number of retired objects to trigger
+    asynchronous reclamation. */
 constexpr int hazptr_domain_rcount_threshold() {
   return 1000;
 }
@@ -50,58 +51,46 @@ constexpr int hazptr_domain_rcount_threshold() {
  *
  *  Most user code need not specify any domains.
  *
- *  Notes on destruction order, tagged objects, locking and deadlock
- *  avoidance:
- *  - Tagged objects support reclamation order guarantees. A call to
- *    cleanup_cohort_tag(tag) guarantees that all objects with the
- *    specified tag are reclaimed before the function returns.
- *  - Due to the strict order, access to the set of tagged objects
- *    needs synchronization and care must be taken to avoid deadlock.
+ *  Notes on destruction order and tagged objects:
+ *  - Tagged objects support reclamation order guarantees (i.e.,
+ *    synchronous reclamation). A call to cleanup_cohort_tag(tag)
+ *    guarantees that all objects with the specified tag are reclaimed
+ *    before the function returns.
  *  - There are two types of reclamation operations to consider:
- *   - Type A: A Type A reclamation operation is triggered by meeting
- *     some threshold. Reclaimed objects may have different
- *     tags. Hazard pointers are checked and only unprotected objects
- *     are reclaimed. This type is expected to be expensive but
- *     infrequent and the cost is amortized over a large number of
- *     reclaimed objects. This type is needed to guarantee an upper
- *     bound on unreclaimed reclaimable objects.
- *   - Type B: A Type B reclamation operation is triggered by a call
- *     to the function cleanup_cohort_tag for a specific tag. All
- *     objects with the specified tag must be reclaimed
- *     unconditionally before returning from such a function
- *     call. Hazard pointers are not checked. This type of reclamation
- *     operation is expected to be inexpensive and may be invoked more
- *     frequently than Type A.
- *  - Tagged retired objects are kept in a single list in the domain
- *    structure, named tagged_.
- *  - Both Type A and Type B of reclamation pop all the objects in
- *    tagged_ and sort them into two sets of reclaimable and
- *    unreclaimable objects. The objects in the reclaimable set are
- *    reclaimed and the objects in the unreclaimable set are pushed
- *    back in tagged_.
- *  - The tagged_ list is locked between popping all objects and
+ *   - Asynchronous reclamation: It is triggered by meeting some
+ *     threshold for the number of retired objects or the time since
+ *     the last asynchronous reclamation. Reclaimed objects may have
+ *     different tags or no tags. Hazard pointers are checked and only
+ *     unprotected objects are reclaimed. This type is expected to be
+ *     expensive but infrequent and the cost is amortized over a large
+ *     number of reclaimed objects. This type is needed to guarantee
+ *     an upper bound on unreclaimed reclaimable objects.
+ *   - Synchronous reclamation: It is invoked by calling
+ *     cleanup_cohort_tag for a specific tag. All objects with the
+ *     specified tag must be reclaimed unconditionally before
+ *     returning from such a function call. Hazard pointers are not
+ *     checked. This type of reclamation operation is expected to be
+ *     inexpensive and may be invoked more frequently than
+ *     asynchronous reclamation.
+ *  - Tagged retired objects are kept in a sharded list in the domain
+ *    structure.
+ *  - Both asynchronous and synchronous reclamation pop all the
+ *    objects in the tagged list(s) and sort them into two sets of
+ *    reclaimable and unreclaimable objects. The objects in the
+ *    reclaimable set are reclaimed and the objects in the
+ *    unreclaimable set are pushed back in the tagged list(s).
+ *  - The tagged list(s) are locked between popping all objects and
  *    pushing back unreclaimable objects, in order to guarantee that
- *    Type B operations do not miss any objects that match the
- *    specified tag.
- *  - A Type A operation cannot release the lock on the tagged_ list
- *    before reclaiming reclaimable objects, to prevent concurrent
- *    Type B operations from returning before the reclamation of
- *    objects with matching tags.
- *  - A Type B operation can release the lock on tagged_ before
- *    reclaiming objects because the set of reclaimable objects by
- *    Type B operations are disjoint.
- *  - The lock on the tagged_ list is re-entrant, to prevent deadlock
- *    when reclamation in a Type A operation requires a Type B
- *    reclamation operation to complete.
- *  - The implementation allows only one pattern of re-entrance: An
- *    inner Type B inside an outer Type A.
- *  - An inner Type B operation must have access and ability to modify
- *    the outer Type A operation's set of reclaimable objects and
- *    their children objects in order not to miss objects that match
- *    the specified tag. Hence, Type A operations use data members,
- *    unprotected_ and children_, to keep track of these objects
- *    between reclamation steps and to provide inner Type B operations
- *    access to these objects.
+ *    synchronous reclamation operations do not miss any objects.
+ *  - Asynchronous reclamation can release the lock(s) on the tagged
+ *    list(s) before reclaiming reclaimable objects, because it pushes
+ *    reclaimable tagged objects in their respective cohorts, which
+ *    would handle concurrent synchronous reclamation of such objects
+ *    properly.
+ *  - Synchronous reclamation operations can release the lock on the
+ *    tagged list shard before reclaiming objects because the sets of
+ *    reclaimable objects by different synchronous reclamation
+ *    operations are disjoint.
  */
 template <template <typename> class Atom>
 class hazptr_domain {
@@ -121,8 +110,7 @@ class hazptr_domain {
   static constexpr int kNumShards = 8;
   static constexpr int kShardMask = kNumShards - 1;
   static_assert(
-      (kNumShards & kShardMask) == 0,
-      "kNumShards must be a power of 2");
+      (kNumShards & kShardMask) == 0, "kNumShards must be a power of 2");
 
   static folly::Executor* get_default_executor() {
     return &folly::QueuedImmediateExecutor::instance();
@@ -156,7 +144,11 @@ class hazptr_domain {
     shutdown_ = true;
     reclaim_all_objects();
     free_hazptr_recs();
-    DCHECK(tagged_empty());
+    if (kIsDebug && !tagged_empty()) {
+      LOG(WARNING)
+          << "Tagged objects remain. This may indicate a higher-level leak "
+          << "of object(s) that use hazptr_obj_cohort.";
+    }
   }
 
   hazptr_domain(const hazptr_domain&) = delete;
@@ -211,8 +203,8 @@ class hazptr_domain {
     }
   }
 
-  void
-  list_match_tag(uintptr_t tag, Obj* obj, ObjList& match, ObjList& nomatch) {
+  void list_match_tag(
+      uintptr_t tag, Obj* obj, ObjList& match, ObjList& nomatch) {
     list_match_condition(
         obj, match, nomatch, [tag](Obj* o) { return o->cohort_tag() == tag; });
   }
@@ -223,12 +215,9 @@ class hazptr_domain {
       FixedAlign<alignof(hazptr_rec<Atom>)>>;
 
   friend void hazptr_domain_push_list<Atom>(
-      hazptr_obj_list<Atom>&,
-      hazptr_domain<Atom>&) noexcept;
+      hazptr_obj_list<Atom>&, hazptr_domain<Atom>&) noexcept;
   friend void hazptr_domain_push_retired<Atom>(
-      hazptr_obj_list<Atom>&,
-      bool check,
-      hazptr_domain<Atom>&) noexcept;
+      hazptr_obj_list<Atom>&, bool check, hazptr_domain<Atom>&) noexcept;
   friend class hazptr_holder<Atom>;
   friend class hazptr_obj<Atom>;
   friend class hazptr_obj_cohort<Atom>;
@@ -487,10 +476,7 @@ class hazptr_domain {
   /** list_match_condition */
   template <typename Cond>
   void list_match_condition(
-      Obj* obj,
-      ObjList& match,
-      ObjList& nomatch,
-      const Cond& cond) {
+      Obj* obj, ObjList& match, ObjList& nomatch, const Cond& cond) {
     while (obj) {
       auto next = obj->next();
       DCHECK_NE(obj, next);
@@ -567,7 +553,7 @@ class hazptr_domain {
 
   void free_hazptr_recs() {
     /* Leak the hazard pointers for the default domain to avoid
-       destruction order issues with thread caches.  */
+       destruction order issues with thread caches. */
     if (this == &default_hazptr_domain<Atom>()) {
       return;
     }
@@ -636,7 +622,7 @@ class hazptr_domain {
       /*** Full fence ***/ asymmetricHeavyBarrier(AMBFlags::EXPEDITED);
       auto rec = hazptrs_.load(std::memory_order_acquire);
       /* Part 1 - read hazard pointer values into private search structure */
-      std::unordered_set<const void*> hashset; // TOTO: lock-free fixed hash set
+      std::unordered_set<const void*> hashset;
       for (; rec; rec = rec->next()) {
         hashset.insert(rec->hazptr());
       }
@@ -649,8 +635,7 @@ class hazptr_domain {
   }
 
   bool bulk_lookup_and_reclaim(
-      hazptr_obj<Atom>* obj,
-      const std::unordered_set<const void*>& hashset) {
+      hazptr_obj<Atom>* obj, const std::unordered_set<const void*>& hashset) {
     hazptr_obj_list<Atom> children;
     hazptr_obj_list<Atom> matched;
     while (obj) {
@@ -729,25 +714,41 @@ class hazptr_domain {
   void invoke_reclamation_in_executor(int rcount) {
     auto fn = exec_fn_.load(std::memory_order_acquire);
     auto ex = fn ? fn() : get_default_executor();
-    if (ex == get_default_executor()) {
-      hazptr_warning_using_inline_executor();
-    }
     auto backlog = exec_backlog_.fetch_add(1, std::memory_order_relaxed);
     if (ex) {
-      ex->add([this, rcount] {
+      auto recl_fn = [this, rcount] {
         exec_backlog_.store(0, std::memory_order_relaxed);
         do_reclamation(rcount);
-      });
+      };
+      if (ex == get_default_executor()) {
+        invoke_reclamation_may_deadlock(ex, recl_fn);
+      } else {
+        ex->add(recl_fn);
+      }
     } else {
-      LOG(INFO) << "Skip asynchronous reclamation by hazptr executor";
+      if (kIsDebug) {
+        LOG(INFO) << "Skip asynchronous reclamation by hazptr executor";
+      }
     }
     if (backlog >= 10) {
       hazptr_warning_executor_backlog(backlog);
     }
   }
 
-  FOLLY_EXPORT FOLLY_NOINLINE void
-  hazptr_warning_list_too_large(uintptr_t tag, size_t shard, int count) {
+  template <typename Func>
+  void invoke_reclamation_may_deadlock(folly::Executor* ex, Func recl_fn) {
+    ex->add(recl_fn);
+    // This program is using the default inline executor, which is an
+    // inline executor. This is not necessarily a problem. But if this
+    // program encounters deadlock, then this may be the cause. Most
+    // likely this program did not call
+    // folly::enable_hazptr_thread_pool_executor (which is normally
+    // called by folly::init). If this is a problem check if your
+    // program is missing a call to folly::init or an alternative.
+  }
+
+  FOLLY_EXPORT FOLLY_NOINLINE void hazptr_warning_list_too_large(
+      uintptr_t tag, size_t shard, int count) {
     static std::atomic<uint64_t> warning_count{0};
     if ((warning_count++ % 10000) == 0) {
       LOG(WARNING) << "Hazptr retired list too large:"
@@ -763,21 +764,6 @@ class hazptr_domain {
       LOG(WARNING) << backlog
                    << " request backlog for hazptr asynchronous "
                       "reclamation executor";
-    }
-  }
-
-  FOLLY_EXPORT FOLLY_NOINLINE void hazptr_warning_using_inline_executor() {
-    static std::atomic<uint64_t> warning_count{0};
-    if ((warning_count++ % 10000) == 0) {
-      LOG(INFO) << "Using the default inline executor. "
-                   "This is not necessarily a problem. "
-                   "But if this program encounters deadlock, "
-                   "then this may be the cause. "
-                   "Most likely this program did not call "
-                   "folly::enable_hazptr_thread_pool_executor "
-                   "(which is normally called by folly::init). "
-                   "If this is a problem check if your program is missing "
-                   "a call to folly::init or an alternative.";
     }
   }
 }; // hazptr_domain
@@ -820,8 +806,7 @@ void hazptr_domain_push_retired(
 /** hazptr_domain_push_list */
 template <template <typename> class Atom>
 void hazptr_domain_push_list(
-    hazptr_obj_list<Atom>& l,
-    hazptr_domain<Atom>& domain) noexcept {
+    hazptr_obj_list<Atom>& l, hazptr_domain<Atom>& domain) noexcept {
   domain.push_list(l);
 }
 

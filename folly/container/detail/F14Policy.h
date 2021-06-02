@@ -313,8 +313,8 @@ struct BasePolicy
   }
 
   template <typename P>
-  bool
-  beforeBuild(std::size_t /*size*/, std::size_t /*capacity*/, P&& /*rhs*/) {
+  bool beforeBuild(
+      std::size_t /*size*/, std::size_t /*capacity*/, P&& /*rhs*/) {
     return false;
   }
 
@@ -469,11 +469,13 @@ class ValueContainerIterator : public ValueContainerIteratorBase<ValuePtr> {
     return cur;
   }
 
-  bool operator==(ValueContainerIterator<ValueConstPtr> const& rhs) const {
-    return underlying_ == rhs.underlying_;
+  friend bool operator==(
+      ValueContainerIterator const& lhs, ValueContainerIterator const& rhs) {
+    return lhs.underlying_ == rhs.underlying_;
   }
-  bool operator!=(ValueContainerIterator<ValueConstPtr> const& rhs) const {
-    return !(*this == rhs);
+  friend bool operator!=(
+      ValueContainerIterator const& lhs, ValueContainerIterator const& rhs) {
+    return !(lhs == rhs);
   }
 
  private:
@@ -698,11 +700,13 @@ class NodeContainerIterator : public BaseIter<ValuePtr, NonConstPtr<ValuePtr>> {
     return cur;
   }
 
-  bool operator==(NodeContainerIterator<ValueConstPtr> const& rhs) const {
-    return underlying_ == rhs.underlying_;
+  friend bool operator==(
+      NodeContainerIterator const& lhs, NodeContainerIterator const& rhs) {
+    return lhs.underlying_ == rhs.underlying_;
   }
-  bool operator!=(NodeContainerIterator<ValueConstPtr> const& rhs) const {
-    return !(*this == rhs);
+  friend bool operator!=(
+      NodeContainerIterator const& lhs, NodeContainerIterator const& rhs) {
+    return !(lhs == rhs);
   }
 
  private:
@@ -936,11 +940,13 @@ class VectorContainerIterator : public BaseIter<ValuePtr, uint32_t> {
     return cur;
   }
 
-  bool operator==(VectorContainerIterator<ValueConstPtr> const& rhs) const {
-    return current_ == rhs.current_;
+  friend bool operator==(
+      VectorContainerIterator const& lhs, VectorContainerIterator const& rhs) {
+    return lhs.current_ == rhs.current_;
   }
-  bool operator!=(VectorContainerIterator<ValueConstPtr> const& rhs) const {
-    return !(*this == rhs);
+  friend bool operator!=(
+      VectorContainerIterator const& lhs, VectorContainerIterator const& rhs) {
+    return !(lhs == rhs);
   }
 
  private:
@@ -1045,9 +1051,7 @@ class VectorContainerPolicy : public BasePolicy<
 
  public:
   VectorContainerPolicy(
-      Hasher const& hasher,
-      KeyEqual const& keyEqual,
-      Alloc const& alloc)
+      Hasher const& hasher, KeyEqual const& keyEqual, Alloc const& alloc)
       : Super{hasher, keyEqual, alloc} {}
 
   VectorContainerPolicy(VectorContainerPolicy const& rhs) : Super{rhs} {
@@ -1065,8 +1069,7 @@ class VectorContainerPolicy : public BasePolicy<
   }
 
   VectorContainerPolicy(
-      VectorContainerPolicy&& rhs,
-      Alloc const& alloc) noexcept
+      VectorContainerPolicy&& rhs, Alloc const& alloc) noexcept
       : Super{std::move(rhs), alloc} {
     if (kAllocIsAlwaysEqual || this->alloc() == rhs.alloc()) {
       // common case
@@ -1125,8 +1128,8 @@ class VectorContainerPolicy : public BasePolicy<
     return this->computeKeyHash(keyForValue(values_[item]));
   }
 
-  bool keyMatchesItem(VectorContainerIndexSearch const& key, Item const& item)
-      const {
+  bool keyMatchesItem(
+      VectorContainerIndexSearch const& key, Item const& item) const {
     return key.index_ == item;
   }
 
@@ -1149,9 +1152,7 @@ class VectorContainerPolicy : public BasePolicy<
 
   template <typename Table>
   void constructValueAtItem(
-      Table&&,
-      Item* itemAddr,
-      VectorContainerIndexSearch arg) {
+      Table&&, Item* itemAddr, VectorContainerIndexSearch arg) {
     *itemAddr = arg.index_;
   }
 
@@ -1279,9 +1280,7 @@ class VectorContainerPolicy : public BasePolicy<
   }
 
   bool beforeBuild(
-      std::size_t size,
-      std::size_t /*capacity*/,
-      VectorContainerPolicy&& rhs) {
+      std::size_t size, std::size_t /*capacity*/, VectorContainerPolicy&& rhs) {
     return beforeBuildImpl(
         size, rhs, [](Value& v) { return Super::moveValue(v); });
   }
@@ -1315,8 +1314,7 @@ class VectorContainerPolicy : public BasePolicy<
   // Returns the total number of bytes that should be allocated to store
   // prefixBytes of Chunks and valueCapacity values.
   static std::size_t allocSize(
-      std::size_t prefixBytes,
-      std::size_t valueCapacity) {
+      std::size_t prefixBytes, std::size_t valueCapacity) {
     return valuesOffset(prefixBytes) + sizeof(Value) * valueCapacity;
   }
 

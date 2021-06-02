@@ -15,12 +15,12 @@
  */
 
 #include <folly/io/async/ssl/OpenSSLUtils.h>
+
 #include <folly/String.h>
 #include <folly/portability/GTest.h>
 #include <folly/portability/OpenSSL.h>
 #include <folly/ssl/OpenSSLPtrTypes.h>
 
-using namespace ::testing;
 using namespace folly::ssl;
 
 namespace folly {

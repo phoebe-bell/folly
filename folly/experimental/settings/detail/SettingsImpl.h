@@ -22,10 +22,12 @@
 #include <typeindex>
 
 #include <folly/Conv.h>
+#include <folly/Function.h>
 #include <folly/Range.h>
 #include <folly/SharedMutex.h>
 #include <folly/ThreadLocal.h>
 #include <folly/Utility.h>
+#include <folly/container/F14Set.h>
 #include <folly/experimental/settings/SettingsMetadata.h>
 #include <folly/lang/Aligned.h>
 
@@ -60,9 +62,7 @@ class SettingCoreBase {
   using Version = uint64_t;
 
   virtual void setFromString(
-      StringPiece newValue,
-      StringPiece reason,
-      SnapshotBase* snapshot) = 0;
+      StringPiece newValue, StringPiece reason, SnapshotBase* snapshot) = 0;
   virtual std::pair<std::string, std::string> getAsString(
       const SnapshotBase* snapshot) const = 0;
   virtual void resetToDefault(SnapshotBase* snapshot) = 0;
@@ -151,8 +151,7 @@ void saveValueForOutstandingSnapshots(
  * @returns a pointer to a saved value at or before the given version
  */
 const BoxedValue* getSavedValue(
-    SettingCoreBase::Key key,
-    SettingCoreBase::Version at);
+    SettingCoreBase::Key key, SettingCoreBase::Version at);
 
 class SnapshotBase {
  public:
@@ -176,9 +175,7 @@ class SnapshotBase {
    * @throws std::runtime_error  If there's a conversion error.
    */
   virtual bool setFromString(
-      StringPiece settingName,
-      StringPiece newValue,
-      StringPiece reason) = 0;
+      StringPiece settingName, StringPiece newValue, StringPiece reason) = 0;
 
   /**
    * @return If the setting exists, the current setting information.
@@ -199,9 +196,8 @@ class SnapshotBase {
    * func(meta, to<string>(value), reason) for each.
    */
   virtual void forEachSetting(
-      const std::function<
-          void(const SettingMetadata&, StringPiece, StringPiece)>& func)
-      const = 0;
+      const std::function<void(
+          const SettingMetadata&, StringPiece, StringPiece)>& func) const = 0;
 
   virtual ~SnapshotBase();
 
@@ -294,8 +290,8 @@ class SettingCore : public SettingCoreBase {
   /**
    * Non-SmallPOD version: read the thread local shared_ptr
    */
-  const T& getImpl(std::false_type, std::atomic<uint64_t>& /* ignored */)
-      const {
+  const T& getImpl(
+      std::false_type, std::atomic<uint64_t>& /* ignored */) const {
     return const_cast<SettingCore*>(this)->tlValue()->value;
   }
 
@@ -308,22 +304,57 @@ class SettingCore : public SettingCoreBase {
       return;
     }
 
-    SharedMutex::WriteHolder lg(globalLock_);
+    {
+      SharedMutex::WriteHolder lg(globalLock_);
 
-    if (globalValue_) {
-      saveValueForOutstandingSnapshots(
-          getKey(), *settingVersion_, BoxedValue(*globalValue_));
+      if (globalValue_) {
+        saveValueForOutstandingSnapshots(
+            getKey(), *settingVersion_, BoxedValue(*globalValue_));
+      }
+      globalValue_ = std::make_shared<Contents>(reason.str(), t);
+      if (IsSmallPOD<T>::value) {
+        uint64_t v = 0;
+        std::memcpy(&v, &t, sizeof(T));
+        trivialStorage_.store(v);
+      }
+      *settingVersion_ = nextGlobalVersion();
     }
-    globalValue_ = std::make_shared<Contents>(reason.str(), t);
-    if (IsSmallPOD<T>::value) {
-      uint64_t v = 0;
-      std::memcpy(&v, &t, sizeof(T));
-      trivialStorage_.store(v);
-    }
-    *settingVersion_ = nextGlobalVersion();
+    invokeCallbacks(Contents(reason.str(), t));
   }
 
   const T& defaultValue() const { return defaultValue_; }
+
+  using UpdateCallback = folly::Function<void(const Contents&)>;
+  class CallbackHandle {
+   public:
+    CallbackHandle(
+        std::shared_ptr<UpdateCallback> callback, SettingCore<T>& setting)
+        : callback_(std::move(callback)), setting_(setting) {}
+    ~CallbackHandle() {
+      if (callback_) {
+        SharedMutex::WriteHolder lg(setting_.globalLock_);
+        setting_.callbacks_.erase(callback_);
+      }
+    }
+    CallbackHandle(const CallbackHandle&) = delete;
+    CallbackHandle& operator=(const CallbackHandle&) = delete;
+    CallbackHandle(CallbackHandle&&) = default;
+    CallbackHandle& operator=(CallbackHandle&&) = default;
+
+   private:
+    std::shared_ptr<UpdateCallback> callback_;
+    SettingCore<T>& setting_;
+  };
+  CallbackHandle addCallback(UpdateCallback callback) {
+    auto callbackPtr = copy_to_shared_ptr(std::move(callback));
+
+    auto copiedPtr = callbackPtr;
+    {
+      SharedMutex::WriteHolder lg(globalLock_);
+      callbacks_.emplace(std::move(copiedPtr));
+    }
+    return CallbackHandle(std::move(callbackPtr), *this);
+  }
 
   SettingCore(
       SettingMetadata meta,
@@ -350,6 +381,8 @@ class SettingCore : public SettingCoreBase {
 
   std::atomic<uint64_t>& trivialStorage_;
 
+  folly::F14FastSet<std::shared_ptr<UpdateCallback>> callbacks_;
+
   /* Thread local versions start at 0, this will force a read on first access.
    */
   cacheline_aligned<std::atomic<Version>> settingVersion_{in_place, 1};
@@ -374,6 +407,20 @@ class SettingCore : public SettingCoreBase {
       value.second = globalValue_;
     }
     return value.second;
+  }
+
+  void invokeCallbacks(const Contents& contents) {
+    auto callbacksSnapshot = invoke([&] {
+      SharedMutex::ReadHolder lg(globalLock_);
+      // invoking arbitrary user code under the lock is dangerous
+      return std::vector<std::shared_ptr<UpdateCallback>>(
+          callbacks_.begin(), callbacks_.end());
+    });
+
+    for (auto& callbackPtr : callbacksSnapshot) {
+      auto& callback = *callbackPtr;
+      callback(contents);
+    }
   }
 };
 

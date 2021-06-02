@@ -16,15 +16,15 @@
 
 #include <folly/Portability.h>
 
-#if FOLLY_HAS_COROUTINES
-
-#include <folly/experimental/coro/Error.h>
+#include <folly/experimental/coro/Result.h>
 
 #include <type_traits>
 
 #include <folly/ExceptionWrapper.h>
 #include <folly/Utility.h>
 #include <folly/portability/GTest.h>
+
+#if FOLLY_HAS_COROUTINES
 
 class CoErrorTest : public testing::Test {};
 

@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include <folly/io/async/AtomicNotificationQueue.h>
-#include <folly/io/async/EventBase.h>
-#include <folly/portability/GTest.h>
-
 #include <functional>
 #include <utility>
 #include <vector>
+
+#include <folly/io/async/EventBase.h>
+#include <folly/io/async/EventBaseAtomicNotificationQueue.h>
+#include <folly/portability/GTest.h>
 
 using namespace folly;
 using namespace std;
@@ -44,7 +44,8 @@ struct AtomicNotificationQueueConsumer {
 TEST(AtomicNotificationQueueTest, TryPutMessage) {
   vector<int> data;
   AtomicNotificationQueueConsumer<int> consumer{data};
-  AtomicNotificationQueue<int, decltype(consumer)> queue{std::move(consumer)};
+  EventBaseAtomicNotificationQueue<int, decltype(consumer)> queue{
+      std::move(consumer)};
 
   constexpr uint32_t kMaxSize = 10;
 
@@ -86,7 +87,8 @@ TEST(AtomicNotificationQueueTest, DiscardDequeuedTasks) {
   vector<int> data;
   Consumer consumer{data};
 
-  AtomicNotificationQueue<TaskWithExpiry, Consumer> queue{std::move(consumer)};
+  EventBaseAtomicNotificationQueue<TaskWithExpiry, Consumer> queue{
+      std::move(consumer)};
   queue.setMaxReadAtOnce(10);
 
   vector<TaskWithExpiry> tasks = {
@@ -128,4 +130,50 @@ TEST(AtomicNotificationQueueTest, DiscardDequeuedTasks) {
 
   EXPECT_EQ(data.size(), 1);
   EXPECT_EQ(data.at(0), 15);
+}
+
+TEST(AtomicNotificationQueueTest, PutMessage) {
+  struct Data {
+    int datum;
+    bool isExpired;
+
+    explicit Data(int datum, bool isExpired)
+        : datum(datum), isExpired(isExpired) {}
+
+    bool operator==(const Data& data) const {
+      return datum == data.datum && isExpired == data.isExpired;
+    }
+  };
+
+  struct Consumer {
+    explicit Consumer(vector<Data>& data) : data(data) {}
+    void operator()(Data&& task) noexcept { data.push_back(task); }
+    vector<Data>& data;
+  };
+
+  vector<Data> expected =
+                   {Data(10, false),
+                    Data(20, true),
+                    Data(-8, true),
+                    Data(0, false)},
+               actual;
+  Consumer consumer{actual};
+
+  EventBaseAtomicNotificationQueue<Data, decltype(consumer)> queue{
+      std::move(consumer)};
+  queue.setMaxReadAtOnce(0);
+
+  EventBase eventBase;
+  queue.startConsuming(&eventBase);
+
+  for (auto& t : expected) {
+    queue.putMessage(t.datum, t.isExpired);
+  }
+
+  eventBase.loopOnce();
+
+  EXPECT_EQ(expected.size(), actual.size());
+  for (unsigned i = 0; i < expected.size(); ++i) {
+    EXPECT_EQ(expected[i], actual[i]);
+  }
 }

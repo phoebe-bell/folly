@@ -16,12 +16,12 @@
 
 #include <folly/detail/MemoryIdler.h>
 
+#include <memory>
+#include <thread>
+
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
 #include <folly/synchronization/Baton.h>
-
-#include <memory>
-#include <thread>
 
 using namespace folly;
 using namespace folly::detail;
@@ -91,8 +91,8 @@ struct MockAtom : public std::atomic<T> {
       FutexResult(uint32_t, const MockClock::time_point&, uint32_t));
 };
 
-FutexResult
-futexWait(const Futex<MockAtom>* futex, uint32_t expected, uint32_t waitMask) {
+FutexResult futexWait(
+    const Futex<MockAtom>* futex, uint32_t expected, uint32_t waitMask) {
   return futex->futexWait(expected, waitMask);
 }
 template <typename Clock, typename Duration>

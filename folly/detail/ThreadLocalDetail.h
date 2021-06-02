@@ -34,25 +34,12 @@
 #include <folly/SharedMutex.h>
 #include <folly/container/Foreach.h>
 #include <folly/detail/AtFork.h>
+#include <folly/detail/StaticSingletonManager.h>
 #include <folly/lang/Exception.h>
 #include <folly/memory/Malloc.h>
 #include <folly/portability/PThread.h>
 #include <folly/synchronization/MicroSpinLock.h>
 #include <folly/system/ThreadId.h>
-
-#include <folly/detail/StaticSingletonManager.h>
-
-// In general, emutls cleanup is not guaranteed to play nice with the way
-// StaticMeta mixes direct pthread calls and the use of __thread. This has
-// caused problems on multiple platforms so don't use __thread there.
-//
-// XXX: Ideally we would instead determine if emutls is in use at runtime as it
-// is possible to configure glibc on Linux to use emutls regardless.
-#if !FOLLY_MOBILE && !defined(__APPLE__) && !defined(_MSC_VER)
-#define FOLLY_TLD_USE_FOLLY_TLS 1
-#else
-#undef FOLLY_TLD_USE_FOLLY_TLS
-#endif
 
 namespace folly {
 
@@ -300,6 +287,14 @@ class PthreadKeyUnregister {
 };
 
 struct StaticMetaBase {
+  // In general, emutls cleanup is not guaranteed to play nice with the way
+  // StaticMeta mixes direct pthread calls and the use of __thread. This has
+  // caused problems on multiple platforms so don't use __thread there.
+  //
+  // XXX: Ideally we would instead determine if emutls is in use at runtime as
+  // it is possible to configure glibc on Linux to use emutls regardless.
+  static constexpr bool kUseThreadLocal = !kIsMobile && !kIsApple && !kMscVer;
+
   // Represents an ID of a thread local object. Initially set to the maximum
   // uint. This representation allows us to avoid a branch in accessing TLS data
   // (because if you test capacity > id if id = maxint then the test will always
@@ -373,8 +368,8 @@ struct StaticMetaBase {
   // returns != nullptr if the ThreadEntry::elements was reallocated
   // nullptr if the ThreadEntry::elements was just extended
   // and throws stdd:bad_alloc if memory cannot be allocated
-  static ElementWrapper*
-  reallocate(ThreadEntry* threadEntry, uint32_t idval, size_t& newCapacity);
+  static ElementWrapper* reallocate(
+      ThreadEntry* threadEntry, uint32_t idval, size_t& newCapacity);
 
   uint32_t nextId_;
   std::vector<uint32_t> freeIds_;
@@ -394,7 +389,7 @@ struct StaticMetaBase {
 // for threads that use ThreadLocalPtr objects collide on a lock inside
 // StaticMeta; you can specify multiple Tag types to break that lock.
 template <class Tag, class AccessMode>
-struct StaticMeta final : StaticMetaBase {
+struct FOLLY_EXPORT StaticMeta final : StaticMetaBase {
   StaticMeta()
       : StaticMetaBase(
             &StaticMeta::getThreadEntrySlow,
@@ -416,13 +411,15 @@ struct StaticMeta final : StaticMetaBase {
     // Eliminate as many branches and as much extra code as possible in the
     // cached fast path, leaving only one branch here and one indirection below.
     uint32_t id = ent->getOrInvalid();
-#ifdef FOLLY_TLD_USE_FOLLY_TLS
-    static FOLLY_TLS ThreadEntry* threadEntry{};
-    static FOLLY_TLS size_t capacity{};
-#else
-    ThreadEntry* threadEntry{};
-    size_t capacity{};
-#endif
+
+    static thread_local ThreadEntry* threadEntryTL{};
+    ThreadEntry* threadEntryNonTL{};
+    auto& threadEntry = kUseThreadLocal ? threadEntryTL : threadEntryNonTL;
+
+    static thread_local size_t capacityTL{};
+    size_t capacityNonTL{};
+    auto& capacity = kUseThreadLocal ? capacityTL : capacityNonTL;
+
     if (FOLLY_UNLIKELY(capacity <= id)) {
       getSlowReserveAndCache(ent, id, threadEntry, capacity);
     }
@@ -430,10 +427,7 @@ struct StaticMeta final : StaticMetaBase {
   }
 
   FOLLY_NOINLINE static void getSlowReserveAndCache(
-      EntryID* ent,
-      uint32_t& id,
-      ThreadEntry*& threadEntry,
-      size_t& capacity) {
+      EntryID* ent, uint32_t& id, ThreadEntry*& threadEntry, size_t& capacity) {
     auto& inst = instance();
     threadEntry = inst.threadEntry_();
     if (UNLIKELY(threadEntry->getElementsCapacity() <= id)) {
@@ -451,12 +445,12 @@ struct StaticMeta final : StaticMetaBase {
         static_cast<ThreadEntry*>(pthread_getspecific(key));
     if (!threadEntry) {
       ThreadEntryList* threadEntryList = StaticMeta::getThreadEntryList();
-#ifdef FOLLY_TLD_USE_FOLLY_TLS
-      static FOLLY_TLS ThreadEntry threadEntrySingleton;
-      threadEntry = &threadEntrySingleton;
-#else
-      threadEntry = new ThreadEntry();
-#endif
+      if (kUseThreadLocal) {
+        static thread_local ThreadEntry threadEntrySingleton;
+        threadEntry = &threadEntrySingleton;
+      } else {
+        threadEntry = new ThreadEntry();
+      }
       // if the ThreadEntry already exists
       // but pthread_getspecific returns NULL
       // do not add the same entry twice to the list

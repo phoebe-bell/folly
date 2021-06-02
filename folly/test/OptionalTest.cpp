@@ -15,9 +15,6 @@
  */
 
 #include <folly/Optional.h>
-#include <folly/Portability.h>
-#include <folly/portability/GMock.h>
-#include <folly/portability/GTest.h>
 
 #include <algorithm>
 #include <initializer_list>
@@ -30,6 +27,10 @@
 #include <vector>
 
 #include <boost/optional.hpp>
+
+#include <folly/Portability.h>
+#include <folly/portability/GMock.h>
+#include <folly/portability/GTest.h>
 
 using std::shared_ptr;
 using std::unique_ptr;
@@ -601,8 +602,7 @@ class ConstructibleWithArgsOnly {
 class ConstructibleWithInitializerListAndArgsOnly {
  public:
   ConstructibleWithInitializerListAndArgsOnly(
-      std::initializer_list<int>,
-      double) {}
+      std::initializer_list<int>, double) {}
 
   ConstructibleWithInitializerListAndArgsOnly() = delete;
   ConstructibleWithInitializerListAndArgsOnly(
@@ -814,5 +814,29 @@ TEST(Optional, NoneMatchesNullopt) {
   op = none;
   EXPECT_FALSE(op.has_value());
 }
+
+#if __cplusplus >= 201703L && __has_include(<optional>)
+TEST(Optional, StdOptionalConversions) {
+  folly::Optional<int> f = 42;
+  std::optional<int> s = static_cast<std::optional<int>>(f);
+  EXPECT_EQ(*s, 42);
+  EXPECT_TRUE(f);
+  f = static_cast<folly::Optional<int>>(s);
+  EXPECT_EQ(*f, 42);
+  EXPECT_TRUE(s);
+
+  const folly::Optional<int> fc = 12;
+  s = static_cast<std::optional<int>>(fc);
+  EXPECT_EQ(*s, 12);
+
+  folly::Optional<std::unique_ptr<int>> fp = std::make_unique<int>(42);
+  std::optional<std::unique_ptr<int>> sp(std::move(fp));
+  EXPECT_EQ(**sp, 42);
+  EXPECT_FALSE(fp);
+  fp = static_cast<folly::Optional<std::unique_ptr<int>>>(std::move(sp));
+  EXPECT_EQ(**fp, 42);
+  EXPECT_FALSE(sp);
+}
+#endif
 
 } // namespace folly

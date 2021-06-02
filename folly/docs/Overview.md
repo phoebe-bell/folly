@@ -109,7 +109,7 @@ processing sequences of values efficiently in C++ akin to C#'s LINQ.
 encoding](http://www.ir.uwaterloo.ca/book/addenda-06-index-compression.html)
 for 32-bit values.
 
-#### `IpAddress.h`
+#### `IPAddress.h`
 
 A collection of utilities to deal with IPAddresses, including ipv4 and ipv6.
 
@@ -213,8 +213,9 @@ Collections similar to `std::map` but implemented as sorted vectors.
 
 #### `stats/`
 
-A collection of efficient utilities for collecting statistics (often of
-time series data).
+A collection of efficient utilities for collecting statistics:
+* time series counters, gauges, histograms, and quantiles;
+* single-pass mean and variance.
 
 #### `StlAllocator.h`
 

@@ -41,13 +41,17 @@ class SimpleQuantileEstimator {
   SimpleQuantileEstimator();
 
   QuantileEstimates estimateQuantiles(
-      Range<const double*> quantiles,
-      TimePoint now = ClockT::now());
+      Range<const double*> quantiles, TimePoint now = ClockT::now());
 
   void addValue(double value, TimePoint now = ClockT::now());
 
   /// Flush buffered values
   void flush() { bufferedDigest_.flush(); }
+
+  // Get point-in-time TDigest
+  TDigest getDigest(TimePoint now = ClockT::now()) {
+    return bufferedDigest_.get(now);
+  }
 
  private:
   detail::BufferedDigest<TDigest, ClockT> bufferedDigest_;
@@ -63,17 +67,20 @@ class SlidingWindowQuantileEstimator {
   using TimePoint = typename ClockT::time_point;
 
   SlidingWindowQuantileEstimator(
-      std::chrono::seconds windowDuration,
-      size_t nWindows = 60);
+      std::chrono::seconds windowDuration, size_t nWindows = 60);
 
   QuantileEstimates estimateQuantiles(
-      Range<const double*> quantiles,
-      TimePoint now = ClockT::now());
+      Range<const double*> quantiles, TimePoint now = ClockT::now());
 
   void addValue(double value, TimePoint now = ClockT::now());
 
   /// Flush buffered values
   void flush() { bufferedSlidingWindow_.flush(); }
+
+  // Get point-in-time TDigest
+  TDigest getDigest(TimePoint now = ClockT::now()) {
+    return TDigest::merge(bufferedSlidingWindow_.get(now));
+  }
 
  private:
   detail::BufferedSlidingWindow<TDigest, ClockT> bufferedSlidingWindow_;

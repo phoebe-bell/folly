@@ -18,13 +18,16 @@
  *  A benchmark comparing SparseByteSet to bitset<256> and bool[256].
  */
 
-#include <folly/Benchmark.h>
-#include <folly/Format.h>
 #include <folly/container/SparseByteSet.h>
-#include <folly/portability/GFlags.h>
+
 #include <bitset>
 #include <random>
 #include <vector>
+
+#include <fmt/core.h>
+#include <folly/Benchmark.h>
+#include <folly/Format.h>
+#include <folly/portability/GFlags.h>
 
 using namespace std;
 using namespace folly;
@@ -115,23 +118,23 @@ void setup_rand_bench() {
     tie(size_add, size_contains) = kvp;
     addBenchmark(
         __FILE__,
-        sformat("bitset_rand_bench({}, {})", size_add, size_contains).c_str(),
+        fmt::format("bitset_rand_bench({}, {})", size_add, size_contains),
         [=](int iters) {
           rand_bench<BitSetWrapper>(iters, size_add, size_contains);
           return iters;
         });
     addBenchmark(
         __FILE__,
-        sformat("%bool_array_set_rand_bench({}, {})", size_add, size_contains)
-            .c_str(),
+        fmt::format(
+            "%bool_array_set_rand_bench({}, {})", size_add, size_contains),
         [=](int iters) {
           rand_bench<BoolArraySet>(iters, size_add, size_contains);
           return iters;
         });
     addBenchmark(
         __FILE__,
-        sformat("%sparse_byte_set_rand_bench({}, {})", size_add, size_contains)
-            .c_str(),
+        fmt::format(
+            "%sparse_byte_set_rand_bench({}, {})", size_add, size_contains),
         [=](int iters) {
           rand_bench<SparseByteSet>(iters, size_add, size_contains);
           return iters;

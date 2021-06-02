@@ -16,25 +16,29 @@
 
 #pragma once
 
-#include <folly/SocketAddress.h>
-#include <folly/String.h>
-#include <folly/io/ShutdownSocketSet.h>
-#include <folly/io/async/AsyncSocketBase.h>
-#include <folly/io/async/AsyncTimeout.h>
-#include <folly/io/async/AtomicNotificationQueue.h>
-#include <folly/io/async/DelayedDestruction.h>
-#include <folly/io/async/EventBase.h>
-#include <folly/io/async/EventHandler.h>
-#include <folly/net/NetOps.h>
-#include <folly/net/NetworkSocket.h>
-#include <folly/portability/Sockets.h>
-
 #include <limits.h>
 #include <stddef.h>
+
 #include <chrono>
 #include <exception>
 #include <memory>
 #include <vector>
+#include <boost/variant.hpp>
+
+#include <folly/ExceptionWrapper.h>
+#include <folly/SocketAddress.h>
+#include <folly/String.h>
+#include <folly/experimental/observer/Observer.h>
+#include <folly/io/ShutdownSocketSet.h>
+#include <folly/io/async/AsyncSocketBase.h>
+#include <folly/io/async/AsyncTimeout.h>
+#include <folly/io/async/DelayedDestruction.h>
+#include <folly/io/async/EventBase.h>
+#include <folly/io/async/EventBaseAtomicNotificationQueue.h>
+#include <folly/io/async/EventHandler.h>
+#include <folly/net/NetOps.h>
+#include <folly/net/NetworkSocket.h>
+#include <folly/portability/Sockets.h>
 
 // Due to the way kernel headers are included, this may or may not be defined.
 // Number pulled from 3.10 kernel headers.
@@ -86,8 +90,7 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
      * is accepted using the system accept()/accept4() APIs.
      */
     virtual void onConnectionAccepted(
-        const NetworkSocket socket,
-        const SocketAddress& addr) noexcept = 0;
+        const NetworkSocket socket, const SocketAddress& addr) noexcept = 0;
 
     /**
      * onConnectionAcceptError() is called when an error occurred accepting
@@ -100,24 +103,21 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
      * probably because of some error encountered.
      */
     virtual void onConnectionDropped(
-        const NetworkSocket socket,
-        const SocketAddress& addr) noexcept = 0;
+        const NetworkSocket socket, const SocketAddress& addr) noexcept = 0;
 
     /**
      * onConnectionEnqueuedForAcceptorCallback() is called when the
      * connection is successfully enqueued for an AcceptCallback to pick up.
      */
     virtual void onConnectionEnqueuedForAcceptorCallback(
-        const NetworkSocket socket,
-        const SocketAddress& addr) noexcept = 0;
+        const NetworkSocket socket, const SocketAddress& addr) noexcept = 0;
 
     /**
      * onConnectionDequeuedByAcceptorCallback() is called when the
      * connection is successfully dequeued by an AcceptCallback.
      */
     virtual void onConnectionDequeuedByAcceptorCallback(
-        const NetworkSocket socket,
-        const SocketAddress& addr) noexcept = 0;
+        const NetworkSocket socket, const SocketAddress& addr) noexcept = 0;
 
     /**
      * onBackoffStarted is called when the socket has successfully started
@@ -159,8 +159,7 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
      *                    remain valid until connectionAccepted() returns.
      */
     virtual void connectionAccepted(
-        NetworkSocket fd,
-        const SocketAddress& clientAddr) noexcept = 0;
+        NetworkSocket fd, const SocketAddress& clientAddr) noexcept = 0;
 
     /**
      * acceptError() is called if an error occurs while accepting.
@@ -172,7 +171,19 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
      *
      * @param ex  An exception representing the error.
      */
-    virtual void acceptError(const std::exception& ex) noexcept = 0;
+
+    // TODO(T81599451): Remove the acceptError(const std::exception&)
+    // after migration and remove compile warning supression.
+    FOLLY_PUSH_WARNING
+    FOLLY_GNU_DISABLE_WARNING("-Woverloaded-virtual")
+    virtual void acceptError(exception_wrapper ew) noexcept {
+      auto ex = ew.get_exception<std::exception>();
+      FOLLY_SAFE_CHECK(ex, "no exception");
+      acceptError(*ex);
+    }
+
+    virtual void acceptError(const std::exception& /* unused */) noexcept {}
+    FOLLY_POP_WARNING
 
     /**
      * acceptStarted() will be called in the callback's EventBase thread
@@ -210,6 +221,7 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
   static const uint32_t kDefaultMaxAcceptAtOnce = 30;
   static const uint32_t kDefaultCallbackAcceptAtOnce = 5;
   static const uint32_t kDefaultMaxMessagesInQueue = 1024;
+
   /**
    * Create a new AsyncServerSocket with the specified EventBase.
    *
@@ -327,6 +339,8 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
    */
   bool setZeroCopy(bool enable);
 
+  using IPAddressIfNamePair = std::pair<IPAddress, std::string>;
+
   /**
    * Bind to the specified address.
    *
@@ -337,6 +351,15 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
   virtual void bind(const SocketAddress& address);
 
   /**
+   * Bind to the specified address/if name
+   *
+   * This must be called from the primary EventBase thread.
+   *
+   * Throws AsyncSocketException on error.
+   */
+  virtual void bind(const SocketAddress& address, const std::string& ifName);
+
+  /**
    * Bind to the specified port for the specified addresses.
    *
    * This must be called from the primary EventBase thread.
@@ -344,6 +367,16 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
    * Throws AsyncSocketException on error.
    */
   virtual void bind(const std::vector<IPAddress>& ipAddresses, uint16_t port);
+
+  /**
+   * Bind to the specified port for the specified addresses/if names.
+   *
+   * This must be called from the primary EventBase thread.
+   *
+   * Throws AsyncSocketException on error.
+   */
+  virtual void bind(
+      const std::vector<IPAddressIfNamePair>& addresses, uint16_t port);
 
   /**
    * Bind to the specified port.
@@ -545,7 +578,10 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
    * Get the duration after which new connection messages will be dropped from
    * the NotificationQueue if it has not started processing yet.
    */
-  std::chrono::nanoseconds getQueueTimeout() const { return queueTimeout_; }
+  const folly::observer::AtomicObserver<std::chrono::nanoseconds>&
+  getQueueTimeout() const {
+    return queueTimeout_;
+  }
 
   /**
    * Set the duration after which new connection messages will be dropped from
@@ -557,8 +593,12 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
    *
    * The default value (of 0) means that messages will never expire.
    */
-  void setQueueTimeout(std::chrono::nanoseconds duration) {
+  void setQueueTimeout(
+      folly::observer::Observer<std::chrono::nanoseconds> duration) {
     queueTimeout_ = duration;
+  }
+  void setQueueTimeout(std::chrono::nanoseconds duration) {
+    setQueueTimeout(folly::observer::makeStaticObserver(duration));
   }
 
   /**
@@ -736,21 +776,31 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
   ~AsyncServerSocket() override;
 
  private:
-  enum class MessageType { MSG_NEW_CONN = 0, MSG_ERROR = 1 };
+  class RemoteAcceptor;
 
-  struct QueueMessage {
-    MessageType type;
+  struct NewConnMessage {
     NetworkSocket fd;
-    int err;
-    SocketAddress address;
-    std::string msg;
+    SocketAddress clientAddr;
     std::chrono::steady_clock::time_point deadline;
 
     bool isExpired() const {
       return deadline.time_since_epoch().count() != 0 &&
           std::chrono::steady_clock::now() > deadline;
     }
+
+    AtomicNotificationQueueTaskStatus operator()(
+        RemoteAcceptor& acceptor) noexcept;
   };
+
+  struct ErrorMessage {
+    int err;
+    std::string msg;
+
+    AtomicNotificationQueueTaskStatus operator()(
+        RemoteAcceptor& acceptor) noexcept;
+  };
+
+  using QueueMessage = boost::variant<NewConnMessage, ErrorMessage>;
 
   /**
    * A class to receive notifications to invoke AcceptCallback objects
@@ -763,14 +813,21 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
    */
   class RemoteAcceptor {
     struct Consumer {
-      AtomicNotificationQueueTaskStatus operator()(QueueMessage&& msg) noexcept;
+      AtomicNotificationQueueTaskStatus operator()(
+          QueueMessage&& msg) noexcept {
+        return boost::apply_visitor(
+            [this](auto&& visitMsg) { return visitMsg(acceptor_); }, msg);
+      }
 
       explicit Consumer(RemoteAcceptor& acceptor) : acceptor_(acceptor) {}
       RemoteAcceptor& acceptor_;
     };
 
+    friend NewConnMessage;
+    friend ErrorMessage;
+
    public:
-    using Queue = AtomicNotificationQueue<QueueMessage, Consumer>;
+    using Queue = EventBaseAtomicNotificationQueue<QueueMessage, Consumer>;
 
     explicit RemoteAcceptor(
         AcceptCallback* callback,
@@ -806,15 +863,17 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
 
   class BackoffTimeout;
 
-  virtual void
-  handlerReady(uint16_t events, NetworkSocket fd, sa_family_t family) noexcept;
+  virtual void handlerReady(
+      uint16_t events, NetworkSocket fd, sa_family_t family) noexcept;
 
   NetworkSocket createSocket(int family);
   void setupSocket(NetworkSocket fd, int family);
+  void bindInternal(const SocketAddress& address, const std::string& ifName);
   void bindSocket(
       NetworkSocket fd,
       const SocketAddress& address,
-      bool isExistingSocket);
+      bool isExistingSocket,
+      const std::string& ifName);
   void dispatchSocket(NetworkSocket socket, SocketAddress&& address);
   void dispatchError(const char* msg, int errnoValue);
   void enterBackoff();
@@ -898,7 +957,8 @@ class AsyncServerSocket : public DelayedDestruction, public AsyncSocketBase {
   ConnectionEventCallback* connectionEventCallback_{nullptr};
   bool tosReflect_{false};
   bool zeroCopyVal_{false};
-  std::chrono::nanoseconds queueTimeout_{0};
+  folly::observer::AtomicObserver<std::chrono::nanoseconds> queueTimeout_{
+      folly::observer::makeStaticObserver(std::chrono::nanoseconds::zero())};
 };
 
 } // namespace folly

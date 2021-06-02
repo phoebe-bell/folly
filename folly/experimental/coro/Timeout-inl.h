@@ -18,26 +18,28 @@
 #include <folly/experimental/coro/Baton.h>
 #include <folly/experimental/coro/WithCancellation.h>
 
+#if FOLLY_HAS_COROUTINES
+
 namespace folly::coro {
 
 template <typename SemiAwaitable, typename Duration>
-Task<semi_await_result_t<SemiAwaitable>>
-timeout(SemiAwaitable semiAwaitable, Duration timeoutDuration, Timekeeper* tk) {
+Task<typename semi_await_try_result_t<SemiAwaitable>::element_type> timeout(
+    SemiAwaitable semiAwaitable, Duration timeoutDuration, Timekeeper* tk) {
   CancellationSource cancelSource;
   folly::coro::Baton baton;
   exception_wrapper timeoutResult;
   auto sleepFuture =
       folly::futures::sleep(timeoutDuration, tk).toUnsafeFuture();
-  sleepFuture.setCallback_([&](
-      Executor::KeepAlive<>&&, Try<Unit> && result) noexcept {
-    if (result.hasException()) {
-      timeoutResult = std::move(result.exception());
-    } else {
-      timeoutResult = folly::make_exception_wrapper<FutureTimeout>();
-    }
-    cancelSource.requestCancellation();
-    baton.post();
-  });
+  sleepFuture.setCallback_(
+      [&](Executor::KeepAlive<>&&, Try<Unit>&& result) noexcept {
+        if (result.hasException()) {
+          timeoutResult = std::move(result.exception());
+        } else {
+          timeoutResult = folly::make_exception_wrapper<FutureTimeout>();
+        }
+        cancelSource.requestCancellation();
+        baton.post();
+      });
 
   bool isSleepCancelled = false;
   auto tryCancelSleep = [&]() noexcept {
@@ -102,3 +104,5 @@ timeout(SemiAwaitable semiAwaitable, Duration timeoutDuration, Timekeeper* tk) {
 }
 
 } // namespace folly::coro
+
+#endif // FOLLY_HAS_COROUTINES

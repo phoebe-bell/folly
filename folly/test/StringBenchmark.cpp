@@ -14,14 +14,15 @@
  * limitations under the License.
  */
 
-#include <fmt/format.h>
-#include <folly/Format.h>
-#include <folly/String.h>
-
 #include <boost/algorithm/string.hpp>
-#include <folly/Benchmark.h>
-#include <folly/Random.h>
+
 #include <random>
+
+#include <fmt/format.h>
+#include <folly/Benchmark.h>
+#include <folly/Format.h>
+#include <folly/Random.h>
+#include <folly/String.h>
 
 using namespace folly;
 using namespace std;
@@ -134,7 +135,7 @@ void follyFmtOutputSize(int iters, int param) {
   BENCHMARK_SUSPEND { buffer.resize(param, 'x'); }
 
   for (int64_t i = 0; i < iters; ++i) {
-    string s = format("msg: {}, {}, {}", 10, 20, buffer).str();
+    string s = sformat("msg: {}, {}, {}", 10, 20, buffer);
   }
 }
 
@@ -147,19 +148,6 @@ BENCHMARK_PARAM(follyFmtOutputSize, 16)
 BENCHMARK_PARAM(follyFmtOutputSize, 64)
 BENCHMARK_PARAM(follyFmtOutputSize, 256)
 BENCHMARK_PARAM(follyFmtOutputSize, 1024)
-
-// Benchmark simple fmt append behavior; intended as a comparison
-// against stringAppendf.
-BENCHMARK(follyFmtAppendfBenchmark, iters) {
-  for (size_t i = 0; i < iters; ++i) {
-    string s;
-    BENCHMARK_SUSPEND { s.reserve(kAppendBufSize); }
-    for (size_t j = 0; j < kAppendBufSize; ++j) {
-      format("{}", 1).appendTo(s);
-    }
-    DCHECK_EQ(s.size(), kAppendBufSize);
-  }
-}
 
 namespace {
 fbstring cbmString;

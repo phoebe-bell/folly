@@ -14,12 +14,13 @@
  * limitations under the License.
  */
 
+#include <folly/gen/String.h>
+
 #include <iosfwd>
 #include <map>
 #include <vector>
 
 #include <folly/functional/ApplyTuple.h>
-#include <folly/gen/String.h>
 #include <folly/portability/GTest.h>
 
 using namespace folly::gen;
@@ -275,10 +276,7 @@ TEST(StringGen, EachToPair) {
 }
 
 void checkResplitMaxLength(
-    vector<string> ins,
-    char delim,
-    uint64_t maxLength,
-    vector<string> outs) {
+    vector<string> ins, char delim, uint64_t maxLength, vector<string> outs) {
   vector<std::string> pieces;
   auto splitter = streamSplitter(
       delim,

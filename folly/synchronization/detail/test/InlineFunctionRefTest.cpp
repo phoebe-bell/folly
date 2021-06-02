@@ -16,9 +16,10 @@
 
 #include <folly/synchronization/detail/InlineFunctionRef.h>
 
-#include <folly/portability/GTest.h>
-
+#include <array>
 #include <cstring>
+
+#include <folly/portability/GTest.h>
 
 namespace folly {
 namespace detail {

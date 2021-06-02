@@ -29,7 +29,7 @@ endif()
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
   # clang only rejects unknown warning flags if -Werror=unknown-warning-option
   # is also specified.
-  CHECK_CXX_COMPILER_FLAG(
+  check_cxx_compiler_flag(
     -Werror=unknown-warning-option
     COMPILER_HAS_UNKNOWN_WARNING_OPTION)
   if (COMPILER_HAS_UNKNOWN_WARNING_OPTION)
@@ -37,8 +37,8 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
       "${CMAKE_REQUIRED_FLAGS} -Werror=unknown-warning-option")
   endif()
 
-  CHECK_CXX_COMPILER_FLAG(-Wshadow-local COMPILER_HAS_W_SHADOW_LOCAL)
-  CHECK_CXX_COMPILER_FLAG(
+  check_cxx_compiler_flag(-Wshadow-local COMPILER_HAS_W_SHADOW_LOCAL)
+  check_cxx_compiler_flag(
     -Wshadow-compatible-local
     COMPILER_HAS_W_SHADOW_COMPATIBLE_LOCAL)
   if (COMPILER_HAS_W_SHADOW_LOCAL AND COMPILER_HAS_W_SHADOW_COMPATIBLE_LOCAL)
@@ -46,31 +46,31 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Windows")
     list(APPEND FOLLY_CXX_FLAGS -Wshadow-compatible-local)
   endif()
 
-  CHECK_CXX_COMPILER_FLAG(-Wnoexcept-type COMPILER_HAS_W_NOEXCEPT_TYPE)
+  check_cxx_compiler_flag(-Wnoexcept-type COMPILER_HAS_W_NOEXCEPT_TYPE)
   if (COMPILER_HAS_W_NOEXCEPT_TYPE)
     list(APPEND FOLLY_CXX_FLAGS -Wno-noexcept-type)
   endif()
 
-  CHECK_CXX_COMPILER_FLAG(
+  check_cxx_compiler_flag(
       -Wnullability-completeness
       COMPILER_HAS_W_NULLABILITY_COMPLETENESS)
   if (COMPILER_HAS_W_NULLABILITY_COMPLETENESS)
     list(APPEND FOLLY_CXX_FLAGS -Wno-nullability-completeness)
   endif()
 
-  CHECK_CXX_COMPILER_FLAG(
+  check_cxx_compiler_flag(
       -Winconsistent-missing-override
       COMPILER_HAS_W_INCONSISTENT_MISSING_OVERRIDE)
   if (COMPILER_HAS_W_INCONSISTENT_MISSING_OVERRIDE)
     list(APPEND FOLLY_CXX_FLAGS -Wno-inconsistent-missing-override)
   endif()
 
-  CHECK_CXX_COMPILER_FLAG(-faligned-new COMPILER_HAS_F_ALIGNED_NEW)
+  check_cxx_compiler_flag(-faligned-new COMPILER_HAS_F_ALIGNED_NEW)
   if (COMPILER_HAS_F_ALIGNED_NEW)
     list(APPEND FOLLY_CXX_FLAGS -faligned-new)
   endif()
 
-  CHECK_CXX_COMPILER_FLAG(-fopenmp COMPILER_HAS_F_OPENMP)
+  check_cxx_compiler_flag(-fopenmp COMPILER_HAS_F_OPENMP)
   if (COMPILER_HAS_F_OPENMP)
       list(APPEND FOLLY_CXX_FLAGS -fopenmp)
   endif()
@@ -85,9 +85,6 @@ string(REGEX REPLACE
 
 check_symbol_exists(pthread_atfork pthread.h FOLLY_HAVE_PTHREAD_ATFORK)
 
-# Unfortunately check_symbol_exists() does not work for memrchr():
-# it fails complaining that there are multiple overloaded versions of memrchr()
-check_function_exists(memrchr FOLLY_HAVE_MEMRCHR)
 check_symbol_exists(accept4 sys/socket.h FOLLY_HAVE_ACCEPT4)
 check_symbol_exists(getrandom sys/random.h FOLLY_HAVE_GETRANDOM)
 check_symbol_exists(preadv sys/uio.h FOLLY_HAVE_PREADV)
@@ -131,10 +128,11 @@ check_cxx_source_compiles("
   }"
   FOLLY_HAVE_VLA
 )
-check_cxx_source_compiles("
-  extern \"C\" void configure_link_extern_weak_test() __attribute__((weak));
+check_cxx_source_runs("
+  extern \"C\" int folly_example_undefined_weak_symbol() __attribute__((weak));
   int main(int argc, char** argv) {
-    return configure_link_extern_weak_test == nullptr;
+    auto f = folly_example_undefined_weak_symbol; // null pointer
+    return f ? f() : 0; // must compile, link, and run with null pointer
   }"
   FOLLY_HAVE_WEAK_SYMBOLS
 )

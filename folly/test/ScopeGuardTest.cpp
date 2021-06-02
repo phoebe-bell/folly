@@ -16,15 +16,16 @@
 
 #include <folly/ScopeGuard.h>
 
-#include <glog/logging.h>
-
 #include <condition_variable>
 #include <functional>
 #include <stdexcept>
 #include <thread>
 
+#include <glog/logging.h>
+
 #include <folly/portability/GTest.h>
 
+using folly::makeDismissedGuard;
 using folly::makeGuard;
 using std::vector;
 
@@ -171,6 +172,22 @@ void testUndoAction(bool failure) {
 TEST(ScopeGuard, UndoAction) {
   testUndoAction(true);
   testUndoAction(false);
+}
+
+TEST(ScopeGuard, MakeDismissedGuard) {
+  auto test = [](bool shouldFire) {
+    bool fired = false;
+    {
+      auto guard = makeDismissedGuard([&] { fired = true; });
+      if (shouldFire) {
+        guard.rehire();
+      }
+    }
+    EXPECT_EQ(shouldFire, fired);
+  };
+
+  test(true);
+  test(false);
 }
 
 /**

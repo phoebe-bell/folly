@@ -132,18 +132,14 @@ CalledProcessError::CalledProcessError(ProcessReturnCode rc)
     : SubprocessError(rc.str()), returnCode_(rc) {}
 
 static inline std::string toSubprocessSpawnErrorMessage(
-    char const* executable,
-    int errCode,
-    int errnoValue) {
+    char const* executable, int errCode, int errnoValue) {
   auto prefix = errCode == kExecFailure ? "failed to execute "
                                         : "error preparing to execute ";
   return to<std::string>(prefix, executable, ": ", errnoStr(errnoValue));
 }
 
 SubprocessSpawnError::SubprocessSpawnError(
-    const char* executable,
-    int errCode,
-    int errnoValue)
+    const char* executable, int errCode, int errnoValue)
     : SubprocessError(
           toSubprocessSpawnErrorMessage(executable, errCode, errnoValue)),
       errnoValue_(errnoValue) {}
@@ -565,7 +561,7 @@ int Subprocess::prepareChild(
   // any fds in options.fdActions_, and don't touch stdin, stdout, stderr.
   // Ignore errors.
   if (options.closeOtherFds_) {
-    for (int fd = getdtablesize() - 1; fd >= 3; --fd) {
+    for (int fd = sysconf(_SC_OPEN_MAX) - 1; fd >= 3; --fd) {
       if (options.fdActions_.count(fd) == 0) {
         ::close(fd);
       }
@@ -744,8 +740,7 @@ void Subprocess::sendSignal(int signal) {
 }
 
 ProcessReturnCode Subprocess::waitOrTerminateOrKill(
-    TimeoutDuration waitTimeout,
-    TimeoutDuration sigtermTimeout) {
+    TimeoutDuration waitTimeout, TimeoutDuration sigtermTimeout) {
   returnCode_.enforce(ProcessReturnCode::RUNNING);
   DCHECK_GT(pid_, 0) << "The subprocess has been waited already";
 
@@ -906,8 +901,7 @@ std::pair<IOBufQueue, IOBufQueue> Subprocess::communicateIOBuf(
 }
 
 void Subprocess::communicate(
-    FdCallback readCallback,
-    FdCallback writeCallback) {
+    FdCallback readCallback, FdCallback writeCallback) {
   // This serves to prevent wait() followed by communicate(), but if you
   // legitimately need that, send a patch to delete this line.
   returnCode_.enforce(ProcessReturnCode::RUNNING);

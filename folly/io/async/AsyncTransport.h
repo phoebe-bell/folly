@@ -16,8 +16,10 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 
+#include <folly/Optional.h>
 #include <folly/io/IOBuf.h>
 #include <folly/io/async/AsyncSocketBase.h>
 #include <folly/io/async/AsyncTransportCertificate.h>
@@ -81,6 +83,10 @@ enum class WriteFlags : uint32_t {
    * Request timestamp when entire buffer has entered packet scheduler.
    */
   TIMESTAMP_SCHED = 0x40,
+  /*
+   * Request timestamp when entire buffer has been written to system socket.
+   */
+  TIMESTAMP_WRITE = 0x80,
 };
 
 /*
@@ -136,21 +142,38 @@ constexpr bool isSet(WriteFlags a, WriteFlags b) {
   return (a & b) == b;
 }
 
+/**
+ * Write flags that are related to timestamping.
+ */
+constexpr WriteFlags kWriteFlagsForTimestamping = WriteFlags::TIMESTAMP_SCHED |
+    WriteFlags::TIMESTAMP_TX | WriteFlags::TIMESTAMP_ACK;
+
 class AsyncReader {
  public:
   class ReadCallback {
    public:
+    enum class ReadMode : uint8_t {
+      ReadBuffer = 0,
+      ReadVec = 1,
+    };
+
     virtual ~ReadCallback() = default;
 
+    ReadMode getReadMode() const noexcept { return readMode_; }
+
+    void setReadMode(ReadMode readMode) noexcept { readMode_ = readMode; }
+
     /**
-     * When data becomes available, getReadBuffer() will be invoked to get the
-     * buffer into which data should be read.
+     * When data becomes available, getReadBuffer()/getReadBuffers() will be
+     * invoked to get the buffer/buffers into which data should be read.
      *
-     * This method allows the ReadCallback to delay buffer allocation until
+     * These methods allows the ReadCallback to delay buffer allocation until
      * data becomes available.  This allows applications to manage large
      * numbers of idle connections, without having to maintain a separate read
      * buffer for each idle connection.
-     *
+     */
+
+    /**
      * It is possible that in some cases, getReadBuffer() may be called
      * multiple times before readDataAvailable() is invoked.  In this case, the
      * data will be written to the buffer returned from the most recent call to
@@ -176,8 +199,36 @@ class AsyncReader {
     virtual void getReadBuffer(void** bufReturn, size_t* lenReturn) = 0;
 
     /**
+     * It is possible that in some cases, getReadBuffers() may be called
+     * multiple times before readDataAvailable() is invoked.  In this case, the
+     * data will be written to the buffer returned from the most recent call to
+     * readDataAvailable().  If the previous calls to readDataAvailable()
+     * returned different buffers, the ReadCallback is responsible for ensuring
+     * that they are not leaked.
+     *
+     * If getReadBuffera() throws an exception or returns a zero length array
+     * the ReadCallback will be uninstalled and its readError() method will be
+     * invoked.
+     *
+     * getReadBuffers() is not allowed to change the transport state before it
+     * returns.  (For example, it should never uninstall the read callback, or
+     * set a different read callback.)
+     *
+     * @param iovs      getReadBuffers() will copy up to num iovec entries into
+     *                  iovs. iovs cannot be nullptr unless num is 0
+     * @param num       number of iovec entries in the iovs array
+     * @return          number of entried copied to the iovs array
+     *                  this is less than or equal to num
+     */
+    virtual size_t getReadBuffers(
+        FOLLY_MAYBE_UNUSED struct iovec* iovs, FOLLY_MAYBE_UNUSED size_t num) {
+      return 0;
+    }
+
+    /**
      * readDataAvailable() will be invoked when data has been successfully read
-     * into the buffer returned by the last call to getReadBuffer().
+     * into the buffer(s) returned by the last call to
+     * getReadBuffer()/getReadBuffers()
      *
      * The read callback remains installed after readDataAvailable() returns.
      * It must be explicitly uninstalled to stop receiving read events.
@@ -259,6 +310,9 @@ class AsyncReader {
      * @param ex        An exception describing the error that occurred.
      */
     virtual void readErr(const AsyncSocketException& ex) noexcept = 0;
+
+   protected:
+    ReadMode readMode_{ReadMode::ReadBuffer};
   };
 
   // Read methods that aren't part of AsyncTransport.
@@ -303,8 +357,7 @@ class AsyncWriter {
      * @param ex                An exception describing the error that occurred.
      */
     virtual void writeErr(
-        size_t bytesWritten,
-        const AsyncSocketException& ex) noexcept = 0;
+        size_t bytesWritten, const AsyncSocketException& ex) noexcept = 0;
 
     virtual ReleaseIOBufCallback* getReleaseIOBufCallback() noexcept {
       return nullptr;
@@ -635,6 +688,26 @@ class AsyncTransport : public DelayedDestruction,
   }
 
   /**
+   * Hints to transport implementations that the associated certificate is no
+   * longer required by the application. The transport implementation may
+   * choose to free up resources associated with the peer certificate.
+   *
+   * After this call, `getPeerCertificate()` may return nullptr, even if it
+   * previously returned non-null
+   */
+  virtual void dropPeerCertificate() noexcept {}
+
+  /**
+   * Hints to transport implementations that the associated certificate is no
+   * longer required by the application. The transport implementation may
+   * choose to free up resources associated with the self certificate.
+   *
+   * After this call, `getPeerCertificate()` may return nullptr, even if it
+   * previously returned non-null
+   */
+  virtual void dropSelfCertificate() noexcept {}
+
+  /**
    * Get the certificate information of this transport, if any
    */
   virtual const AsyncTransportCertificate* getSelfCertificate() const {
@@ -724,9 +797,96 @@ class AsyncTransport : public DelayedDestruction,
     }
   }
 
+  /**
+   * Structure used to communicate ByteEvents, such as TX and ACK timestamps.
+   */
+  struct ByteEvent {
+    enum Type : uint8_t { WRITE = 1, SCHED = 2, TX = 3, ACK = 4 };
+    // type
+    Type type;
+
+    // offset of corresponding byte in raw byte stream
+    uint64_t offset{0};
+
+    // transport timestamp, as recorded by AsyncTransport implementation
+    std::chrono::steady_clock::time_point ts = {
+        std::chrono::steady_clock::now()};
+
+    // kernel software timestamp; for Linux this is CLOCK_REALTIME
+    // see https://www.kernel.org/doc/Documentation/networking/timestamping.txt
+    folly::Optional<std::chrono::nanoseconds> maybeSoftwareTs;
+
+    // hardware timestamp; see kernel documentation
+    // see https://www.kernel.org/doc/Documentation/networking/timestamping.txt
+    folly::Optional<std::chrono::nanoseconds> maybeHardwareTs;
+
+    // for WRITE ByteEvents, additional WriteFlags passed
+    folly::Optional<WriteFlags> maybeWriteFlags;
+
+    /**
+     * For WRITE events, returns if SCHED timestamp requested.
+     */
+    bool schedTimestampRequested() const {
+      CHECK_EQ(Type::WRITE, type);
+      CHECK(maybeWriteFlags.has_value());
+      return isSet(*maybeWriteFlags, WriteFlags::TIMESTAMP_SCHED);
+    }
+
+    /**
+     * For WRITE events, returns if TX timestamp requested.
+     */
+    bool txTimestampRequested() const {
+      CHECK_EQ(Type::WRITE, type);
+      CHECK(maybeWriteFlags.has_value());
+      return isSet(*maybeWriteFlags, WriteFlags::TIMESTAMP_TX);
+    }
+
+    /**
+     * For WRITE events, returns if ACK timestamp requested.
+     */
+    bool ackTimestampRequested() const {
+      CHECK_EQ(Type::WRITE, type);
+      CHECK(maybeWriteFlags.has_value());
+      return isSet(*maybeWriteFlags, WriteFlags::TIMESTAMP_ACK);
+    }
+  };
+
+  /**
+   * Observer of transport events.
+   */
   class LifecycleObserver {
    public:
+    /**
+     * Observer configuration.
+     *
+     * Specifies events observer wants to receive. Cannot be changed post
+     * initialization because the transport may turn on / off instrumentation
+     * when observers are added / removed, based on the observer configuration.
+     */
+    struct Config {
+      // enables full support for ByteEvents
+      bool byteEvents{false};
+    };
+
+    /**
+     * Constructor for observer, uses default config (instrumentation disabled).
+     */
+    LifecycleObserver() : LifecycleObserver(Config()) {}
+
+    /**
+     * Constructor for observer.
+     *
+     * @param config      Config, defaults to auxilary instrumentaton disabled.
+     */
+    explicit LifecycleObserver(const Config& observerConfig)
+        : observerConfig_(observerConfig) {}
+
     virtual ~LifecycleObserver() = default;
+
+    /**
+     * Returns observers configuration.
+     */
+    const Config& getConfig() { return observerConfig_; }
 
     /**
      * observerAttach() will be invoked when an observer is added.
@@ -775,26 +935,75 @@ class AsyncTransport : public DelayedDestruction,
     virtual void connect(AsyncTransport* /* transport */) noexcept = 0;
 
     /**
-     * Called when the socket has been attached to a new EVB
-     * and is called from within the new EVB's thread
+     * Invoked when the transport is being attached to an EventBase.
      *
-     * @param socket    The socket on which the new EVB was attached.
-     * @param evb       The new event base that is being attached.
+     * Called from within the EventBase thread being attached.
+     *
+     * @param transport   Transport with EventBase change.
+     * @param evb         The EventBase being attached.
      */
-    virtual void evbAttach(AsyncTransport* /* socket */, EventBase* /* evb */) {
-      // do nothing
-    }
+    virtual void evbAttach(
+        AsyncTransport* /* transport */, EventBase* /* evb */) {}
 
     /**
-     * Called when the socket is detached from an EVB and
-     * is called from the existing EVB's thread.
+     * Invoked when the transport is being detached from an EventBase.
      *
-     * @param socket    The socket from which the EVB was detached.
-     * @param evb       The existing evb that is being detached.
+     * Called from within the EventBase thread being detached.
+     *
+     * @param transport   Transport with EventBase change.
+     * @param evb         The EventBase that is being detached.
      */
-    virtual void evbDetach(AsyncTransport* /* socket */, EventBase* /* evb */) {
-      // do nothing
-    }
+    virtual void evbDetach(
+        AsyncTransport* /* transport */, EventBase* /* evb */) {}
+
+    /**
+     * Invoked each time a ByteEvent is available.
+     *
+     * Multiple ByteEvent may be generated for the same byte offset and event.
+     * For instance, kernel software and hardware TX timestamps for the same
+     * are delivered in separate CMsg, and thus will result in separate
+     * ByteEvent.
+     *
+     * @param transport   Transport that ByteEvent is available for.
+     * @param event       ByteEvent (WRITE, SCHED, TX, ACK).
+     */
+    virtual void byteEvent(
+        AsyncTransport* /* transport */,
+        const ByteEvent& /* event */) noexcept {}
+
+    /**
+     * Invoked if ByteEvents are enabled.
+     *
+     * Only called if the observer's configuration requested ByteEvents. May
+     * be invoked multiple times if ByteEvent configuration changes (i.e., if
+     * ByteEvents are enabled without hardware timestamps, and then enabled
+     * with them).
+     *
+     * @param transport    Transport that ByteEvents are enabled for.
+     */
+    virtual void byteEventsEnabled(AsyncTransport* /* transport */) noexcept {}
+
+    /**
+     * Invoked if ByteEvents could not be enabled, or if an error occurred that
+     * will prevent further delivery of ByteEvents.
+     *
+     * An observer may be waiting to receive a ByteEvent, such as an ACK event
+     * confirming delivery of the last byte of a payload, before closing the
+     * transport. If the transport has become unhealthy then this ByteEvent may
+     * never occur, yet the handler may be unaware that the transport is
+     * unhealthy if reads have been shutdown and no writes are occurring; this
+     * observer signal breaks this 'deadlock'.
+     *
+     * @param transport   Transport that ByteEvents are now unavailable for.
+     * @param ex          Details on why ByteEvents are now unavailable.
+     */
+    virtual void byteEventsUnavailable(
+        AsyncTransport* /* transport */,
+        const AsyncSocketException& /* ex */) noexcept {}
+
+   protected:
+    // observer configuration; cannot be changed post instantiation
+    const Config observerConfig_;
   };
 
   /**

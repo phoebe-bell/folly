@@ -20,10 +20,10 @@
 #include <folly/ExceptionWrapper.h>
 #include <folly/Traits.h>
 #include <folly/Try.h>
+#include <folly/experimental/coro/Coroutine.h>
 #include <folly/experimental/coro/CurrentExecutor.h>
-#include <folly/experimental/coro/Error.h>
 #include <folly/experimental/coro/Invoke.h>
-#include <folly/experimental/coro/Utils.h>
+#include <folly/experimental/coro/Result.h>
 #include <folly/experimental/coro/ViaIfAsync.h>
 #include <folly/experimental/coro/WithAsyncStack.h>
 #include <folly/experimental/coro/WithCancellation.h>
@@ -33,9 +33,10 @@
 
 #include <glog/logging.h>
 
-#include <experimental/coroutine>
 #include <iterator>
 #include <type_traits>
+
+#if FOLLY_HAS_COROUTINES
 
 namespace folly {
 namespace coro {
@@ -50,8 +51,8 @@ class AsyncGeneratorPromise {
   class YieldAwaiter {
    public:
     bool await_ready() noexcept { return false; }
-    std::experimental::coroutine_handle<> await_suspend(
-        std::experimental::coroutine_handle<AsyncGeneratorPromise> h) noexcept {
+    coroutine_handle<> await_suspend(
+        coroutine_handle<AsyncGeneratorPromise> h) noexcept {
       AsyncGeneratorPromise& promise = h.promise();
       // Pop AsyncStackFrame first as clearContext() clears the frame state.
       folly::popAsyncStackFrameCallee(promise.getAsyncFrame());
@@ -91,7 +92,7 @@ class AsyncGeneratorPromise {
 
   AsyncGenerator<Reference, Value> get_return_object() noexcept;
 
-  std::experimental::suspend_always initial_suspend() noexcept { return {}; }
+  suspend_always initial_suspend() noexcept { return {}; }
 
   YieldAwaiter final_suspend() noexcept {
     DCHECK(!hasValue());
@@ -133,6 +134,25 @@ class AsyncGeneratorPromise {
     return {};
   }
 
+  YieldAwaiter yield_value(co_result<Value>&& res) noexcept {
+    if (res.result().hasValue()) {
+      return yield_value(std::move(res.result().value()));
+    } else if (res.result().hasException()) {
+      return yield_value(co_error(res.result().exception()));
+    } else {
+      return_void();
+      return {};
+    }
+  }
+
+  variant_awaitable<YieldAwaiter, ready_awaitable<>> await_transform(
+      co_safe_point_t) noexcept {
+    if (cancelToken_.isCancellationRequested()) {
+      return yield_value(co_cancelled);
+    }
+    return ready_awaitable<>{};
+  }
+
   void unhandled_exception() noexcept {
     DCHECK(state_ == State::INVALID);
     folly::coro::detail::activate(exceptionPtr_, std::current_exception());
@@ -153,11 +173,11 @@ class AsyncGeneratorPromise {
   }
 
   auto await_transform(folly::coro::co_current_executor_t) noexcept {
-    return AwaitableReady<folly::Executor*>{executor_.get()};
+    return ready_awaitable<folly::Executor*>{executor_.get()};
   }
 
   auto await_transform(folly::coro::co_current_cancellation_token_t) noexcept {
-    return AwaitableReady<const folly::CancellationToken&>{cancelToken_};
+    return ready_awaitable<const folly::CancellationToken&>{cancelToken_};
   }
 
   void setCancellationToken(folly::CancellationToken cancelToken) noexcept {
@@ -170,11 +190,11 @@ class AsyncGeneratorPromise {
   }
 
   void setExecutor(folly::Executor::KeepAlive<> executor) noexcept {
+    DCHECK(executor);
     executor_ = std::move(executor);
   }
 
-  void setContinuation(
-      std::experimental::coroutine_handle<> continuation) noexcept {
+  void setContinuation(coroutine_handle<> continuation) noexcept {
     continuation_ = continuation;
   }
 
@@ -232,7 +252,7 @@ class AsyncGeneratorPromise {
     DONE,
   };
 
-  std::experimental::coroutine_handle<> continuation_;
+  coroutine_handle<> continuation_;
   folly::AsyncStackFrame asyncFrame_;
   folly::Executor::KeepAlive<> executor_;
   folly::CancellationToken cancelToken_;
@@ -345,7 +365,7 @@ class FOLLY_NODISCARD AsyncGenerator {
   using promise_type = detail::AsyncGeneratorPromise<Reference, Value>;
 
  private:
-  using handle_t = std::experimental::coroutine_handle<promise_type>;
+  using handle_t = coroutine_handle<promise_type>;
 
  public:
   using value_type = Value;
@@ -440,13 +460,13 @@ class FOLLY_NODISCARD AsyncGenerator {
 
     decltype(auto) operator*() const&& { return std::move(*this).value(); }
 
-    decltype(auto) operator-> () {
+    decltype(auto) operator->() {
       DCHECK(has_value());
       auto&& x = value_.get();
       return std::addressof(x);
     }
 
-    decltype(auto) operator-> () const {
+    decltype(auto) operator->() const {
       DCHECK(has_value());
       auto&& x = value_.get();
       return std::addressof(x);
@@ -468,7 +488,7 @@ class FOLLY_NODISCARD AsyncGenerator {
 
     template <typename Promise>
     FOLLY_NOINLINE auto await_suspend(
-        std::experimental::coroutine_handle<Promise> continuation) noexcept {
+        coroutine_handle<Promise> continuation) noexcept {
       auto& promise = coro_.promise();
 
       promise.setContinuation(continuation);
@@ -514,8 +534,7 @@ class FOLLY_NODISCARD AsyncGenerator {
     explicit NextAwaitable(handle_t coro) noexcept : coro_(coro) {}
 
     friend NextAwaitable tag_invoke(
-        cpo_t<co_withAsyncStack>,
-        NextAwaitable awaitable) noexcept {
+        cpo_t<co_withAsyncStack>, NextAwaitable awaitable) noexcept {
       return NextAwaitable{awaitable.coro_};
     }
 
@@ -532,8 +551,7 @@ class FOLLY_NODISCARD AsyncGenerator {
     }
 
     friend NextSemiAwaitable co_withCancellation(
-        CancellationToken cancelToken,
-        NextSemiAwaitable&& awaitable) {
+        CancellationToken cancelToken, NextSemiAwaitable&& awaitable) {
       if (awaitable.coro_) {
         awaitable.coro_.promise().setCancellationToken(std::move(cancelToken));
       }
@@ -554,8 +572,8 @@ class FOLLY_NODISCARD AsyncGenerator {
   }
 
   template <typename F, typename... A, typename F_, typename... A_>
-  friend AsyncGenerator
-  folly_co_invoke(tag_t<AsyncGenerator, F, A...>, F_ f, A_... a) {
+  friend AsyncGenerator tag_invoke(
+      tag_t<co_invoke_fn>, tag_t<AsyncGenerator, F, A...>, F_ f, A_... a) {
     auto r = invoke(static_cast<F&&>(f), static_cast<A&&>(a)...);
     while (auto v = co_await r.next()) {
       co_yield std::move(v).value();
@@ -565,11 +583,10 @@ class FOLLY_NODISCARD AsyncGenerator {
  private:
   friend class detail::AsyncGeneratorPromise<Reference, Value>;
 
-  explicit AsyncGenerator(
-      std::experimental::coroutine_handle<promise_type> coro) noexcept
+  explicit AsyncGenerator(coroutine_handle<promise_type> coro) noexcept
       : coro_(coro) {}
 
-  std::experimental::coroutine_handle<promise_type> coro_;
+  coroutine_handle<promise_type> coro_;
 };
 
 namespace detail {
@@ -577,11 +594,14 @@ namespace detail {
 template <typename Reference, typename Value>
 AsyncGenerator<Reference, Value>
 AsyncGeneratorPromise<Reference, Value>::get_return_object() noexcept {
-  return AsyncGenerator<Reference, Value>{std::experimental::coroutine_handle<
-      AsyncGeneratorPromise<Reference, Value>>::from_promise(*this)};
+  return AsyncGenerator<Reference, Value>{
+      coroutine_handle<AsyncGeneratorPromise<Reference, Value>>::from_promise(
+          *this)};
 }
 
 } // namespace detail
 
 } // namespace coro
 } // namespace folly
+
+#endif

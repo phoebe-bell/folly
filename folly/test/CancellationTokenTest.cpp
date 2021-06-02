@@ -16,11 +16,12 @@
 
 #include <folly/CancellationToken.h>
 
+#include <chrono>
+#include <thread>
+
 #include <folly/Optional.h>
 #include <folly/portability/GTest.h>
 #include <folly/synchronization/Baton.h>
-#include <chrono>
-#include <thread>
 
 using namespace folly;
 using namespace std::literals::chrono_literals;
@@ -259,4 +260,35 @@ TEST(CancellationTokenTest, NonCancellableSource) {
   CHECK(!src.canBeCancelled());
   CHECK(!src.isCancellationRequested());
   CHECK(token == CancellationToken{});
+}
+
+TEST(CancellationTokenTest, MergedToken) {
+  CancellationSource src1, src2;
+
+  auto token = CancellationToken::merge(src1.getToken(), src2.getToken());
+
+  EXPECT_TRUE(token.canBeCancelled());
+  EXPECT_FALSE(token.isCancellationRequested());
+
+  bool callbackExecuted = false;
+  CancellationCallback cb{token, [&] { callbackExecuted = true; }};
+
+  EXPECT_FALSE(callbackExecuted);
+  EXPECT_FALSE(token.isCancellationRequested());
+
+  src1.requestCancellation();
+
+  EXPECT_TRUE(callbackExecuted);
+  EXPECT_TRUE(token.isCancellationRequested());
+
+  src2.requestCancellation();
+
+  EXPECT_TRUE(callbackExecuted);
+  EXPECT_TRUE(token.isCancellationRequested());
+
+  token = CancellationToken::merge();
+  EXPECT_FALSE(token.canBeCancelled());
+
+  token = CancellationToken::merge(CancellationToken());
+  EXPECT_FALSE(token.canBeCancelled());
 }

@@ -16,13 +16,19 @@
 
 #pragma once
 
-#include <folly/ScopeGuard.h>
-#include <folly/io/IOBuf.h>
-
 #include <stdexcept>
 #include <string>
 
+#include <folly/ScopeGuard.h>
+#include <folly/io/IOBuf.h>
+
 namespace folly {
+
+namespace io {
+enum class CursorAccess;
+template <CursorAccess>
+class RWCursor;
+} // namespace io
 
 /**
  * An IOBufQueue encapsulates a chain of IOBufs and provides
@@ -34,6 +40,9 @@ namespace folly {
  */
 class IOBufQueue {
  private:
+  template <io::CursorAccess>
+  friend class io::RWCursor;
+
   /**
    * This guard should be taken by any method that intends to do any changes
    * to in data_ (e.g. appending to it).
@@ -634,9 +643,7 @@ class IOBufQueue {
   }
 
   std::pair<void*, std::size_t> preallocateSlow(
-      std::size_t min,
-      std::size_t newAllocationSize,
-      std::size_t max);
+      std::size_t min, std::size_t newAllocationSize, std::size_t max);
 };
 
 } // namespace folly

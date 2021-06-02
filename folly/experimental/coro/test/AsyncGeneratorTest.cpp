@@ -16,8 +16,6 @@
 
 #include <folly/Portability.h>
 
-#if FOLLY_HAS_COROUTINES
-
 #include <folly/ScopeGuard.h>
 #include <folly/Traits.h>
 #include <folly/experimental/coro/AsyncGenerator.h>
@@ -36,6 +34,8 @@
 #include <map>
 #include <string>
 #include <tuple>
+
+#if FOLLY_HAS_COROUTINES
 
 class AsyncGeneratorTest : public testing::Test {};
 
@@ -162,8 +162,7 @@ TEST_F(AsyncGeneratorTest, ThrowExceptionAfterFirstYield) {
 }
 
 TEST_F(
-    AsyncGeneratorTest,
-    ConsumingManySynchronousElementsDoesNotOverflowStack) {
+    AsyncGeneratorTest, ConsumingManySynchronousElementsDoesNotOverflowStack) {
   auto makeGenerator = []() -> folly::coro::AsyncGenerator<std::uint64_t> {
     for (std::uint64_t i = 0; i < 1'000'000; ++i) {
       co_yield i;
@@ -365,7 +364,7 @@ TEST_F(AsyncGeneratorTest, ExplicitValueType) {
                                  std::tuple<const std::string&, std::string&>,
                                  std::tuple<std::string, std::string>> {
     for (auto& [k, v] : items) {
-      co_yield{k, v};
+      co_yield {k, v};
     }
   };
 
@@ -500,8 +499,80 @@ TEST(AsyncGenerator, YieldCoError) {
     try {
       (void)co_await gen.next();
       CHECK(false);
-    } catch (SomeError) {
+    } catch (const SomeError&) {
     }
+  }());
+}
+
+TEST(AsyncGenerator, YieldCoResult) {
+  folly::coro::blockingWait([]() -> folly::coro::Task<void> {
+    auto gen = []() -> folly::coro::AsyncGenerator<std::string> {
+      co_yield folly::coro::co_result(folly::Try<std::string>("foo"));
+      co_yield folly::coro::co_result(folly::Try<std::string>("bar"));
+      co_yield folly::coro::co_result(folly::Try<std::string>(SomeError{}));
+      ADD_FAILURE();
+    }();
+
+    auto item1 = co_await gen.next();
+    CHECK(item1.value() == "foo");
+    auto item2 = co_await gen.next();
+    CHECK(item2.value() == "bar");
+
+    EXPECT_THROW(co_await gen.next(), SomeError);
+
+    gen = []() -> folly::coro::AsyncGenerator<std::string> {
+      co_yield folly::coro::co_result(folly::Try<std::string>("foo"));
+      co_yield folly::coro::co_result(folly::Try<std::string>("bar"));
+      co_yield folly::coro::co_result(folly::Try<std::string>());
+      ADD_FAILURE();
+    }();
+
+    item1 = co_await gen.next();
+    CHECK(item1.value() == "foo");
+    item2 = co_await gen.next();
+    CHECK(item2.value() == "bar");
+    EXPECT_FALSE(co_await gen.next());
+  }());
+}
+
+TEST(AsyncGenerator, CoResultProxyExample) {
+  folly::coro::blockingWait([]() -> folly::coro::Task<void> {
+    auto makeProxy = [](folly::coro::AsyncGenerator<int> gen)
+        -> folly::coro::AsyncGenerator<int> {
+      while (true) {
+        auto t = co_await folly::coro::co_awaitTry(gen.next());
+        co_yield folly::coro::co_result(std::move(t));
+      }
+    };
+
+    auto gen = []() -> folly::coro::AsyncGenerator<int> {
+      for (int i = 0; i < 5; ++i) {
+        co_yield i;
+      }
+    }();
+
+    auto proxy = makeProxy(std::move(gen));
+
+    for (int i = 0; i < 5; ++i) {
+      auto val = co_await proxy.next();
+      EXPECT_EQ(*val, i);
+    }
+    EXPECT_FALSE(co_await proxy.next());
+
+    gen = []() -> folly::coro::AsyncGenerator<int> {
+      for (int i = 0; i < 5; ++i) {
+        co_yield i;
+      }
+      throw SomeError();
+    }();
+
+    proxy = makeProxy(std::move(gen));
+
+    for (int i = 0; i < 5; ++i) {
+      auto val = co_await proxy.next();
+      EXPECT_EQ(*val, i);
+    }
+    EXPECT_THROW(co_await proxy.next(), SomeError);
   }());
 }
 
@@ -524,6 +595,38 @@ TEST(AsyncGeneraor, CoAwaitTry) {
     auto item3 = co_await folly::coro::co_awaitTry(gen.next());
     CHECK(item3.hasException());
     CHECK(item3.exception().is_compatible_with<SomeError>());
+  }());
+}
+
+TEST(AsyncGenerator, SafePoint) {
+  folly::coro::blockingWait([]() -> folly::coro::Task<void> {
+    enum class step_type {
+      init,
+      before_continue_sp,
+      after_continue_sp,
+      before_cancel_sp,
+      after_cancel_sp,
+    };
+    step_type step = step_type::init;
+
+    folly::CancellationSource cancelSrc;
+    auto gen =
+        folly::coro::co_invoke([&]() -> folly::coro::AsyncGenerator<int> {
+          step = step_type::before_continue_sp;
+          co_await folly::coro::co_safe_point;
+          step = step_type::after_continue_sp;
+
+          cancelSrc.requestCancellation();
+
+          step = step_type::before_cancel_sp;
+          co_await folly::coro::co_safe_point;
+          step = step_type::after_cancel_sp;
+        });
+
+    auto result = co_await folly::coro::co_awaitTry(
+        folly::coro::co_withCancellation(cancelSrc.getToken(), gen.next()));
+    EXPECT_THROW(result.value(), folly::OperationCancelled);
+    EXPECT_EQ(step_type::before_cancel_sp, step);
   }());
 }
 

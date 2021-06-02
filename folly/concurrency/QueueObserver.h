@@ -24,11 +24,13 @@
 
 namespace folly {
 
+class RequestContext;
+
 class QueueObserver {
  public:
   virtual ~QueueObserver() {}
 
-  virtual intptr_t onEnqueued() = 0;
+  virtual intptr_t onEnqueued(const RequestContext*) = 0;
   virtual void onDequeued(intptr_t) = 0;
 };
 
@@ -38,8 +40,7 @@ class QueueObserverFactory {
   virtual std::unique_ptr<QueueObserver> create(int8_t pri) = 0;
 
   static std::unique_ptr<QueueObserverFactory> make(
-      const std::string& context,
-      size_t numPriorities);
+      const std::string& context, size_t numPriorities);
 };
 
 using MakeQueueObserverFactory =

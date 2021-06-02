@@ -16,6 +16,11 @@
 
 #pragma once
 
+#include <exception>
+#include <stdexcept>
+#include <type_traits>
+#include <utility>
+
 #include <folly/ExceptionWrapper.h>
 #include <folly/Likely.h>
 #include <folly/Memory.h>
@@ -24,10 +29,6 @@
 #include <folly/Utility.h>
 #include <folly/functional/Invoke.h>
 #include <folly/lang/Exception.h>
-#include <exception>
-#include <stdexcept>
-#include <type_traits>
-#include <utility>
 
 namespace folly {
 
@@ -51,8 +52,7 @@ class FOLLY_EXPORT UsingUninitializedTry : public TryException {
 template <class T>
 class Try {
   static_assert(
-      !std::is_reference<T>::value,
-      "Try may not be used with reference types");
+      !std::is_reference<T>::value, "Try may not be used with reference types");
 
   enum class Contains {
     VALUE,
@@ -150,42 +150,55 @@ class Try {
       std::is_nothrow_constructible<exception_wrapper, Args&&...>::value);
 
   /*
-   * Get a mutable reference to the contained value. If the Try contains an
-   * exception it will be rethrown.
+   * Get a mutable reference to the contained value.
+   * [Re]throws if the Try contains an exception or is empty.
    *
    * @returns mutable reference to the contained value
    */
   T& value() &;
   /*
-   * Get a rvalue reference to the contained value. If the Try contains an
-   * exception it will be rethrown.
+   * Get a rvalue reference to the contained value.
+   * [Re]throws if the Try contains an exception or is empty.
    *
    * @returns rvalue reference to the contained value
    */
   T&& value() &&;
   /*
-   * Get a const reference to the contained value. If the Try contains an
-   * exception it will be rethrown.
+   * Get a const reference to the contained value.
+   * [Re]throws if the Try contains an exception or is empty.
    *
    * @returns const reference to the contained value
    */
   const T& value() const&;
   /*
-   * Get a const rvalue reference to the contained value. If the Try contains an
-   * exception it will be rethrown.
+   * Get a const rvalue reference to the contained value.
+   * [Re]throws if the Try contains an exception or is empty.
    *
    * @returns const rvalue reference to the contained value
    */
   const T&& value() const&&;
 
   /*
-   * If the Try contains an exception, rethrow it. Otherwise do nothing.
+   * Returns a copy of the contained value if *this has a value,
+   * otherwise returns a value constructed from defaultValue.
+   *
+   * The selected constructor of the return value may throw exceptions.
    */
-  void throwIfFailed() const;
+  template <class U>
+  T value_or(U&& defaultValue) const&;
+  template <class U>
+  T value_or(U&& defaultValue) &&;
 
   /*
-   * Const dereference operator. If the Try contains an exception it will be
-   * rethrown.
+   * [Re]throw if the Try contains an exception or is empty. Otherwise do
+   * nothing.
+   */
+  void throwUnlessValue() const;
+  [[deprecated("Replaced by throwUnlessValue")]] void throwIfFailed() const;
+
+  /*
+   * Const dereference operator.
+   * [Re]throws if the Try contains an exception or is empty.
    *
    * @returns const reference to the contained value
    */
@@ -212,8 +225,8 @@ class Try {
   const T&& operator*() const&& { return std::move(value()); }
 
   /*
-   * Const arrow operator. If the Try contains an exception it will be
-   * rethrown.
+   * Const arrow operator.
+   * [Re]throws if the Try contains an exception or is empty.
    *
    * @returns const reference to the contained value
    */
@@ -438,6 +451,7 @@ class Try<void> {
 
   // If the Try contains an exception, throws it
   inline void throwIfFailed() const;
+  inline void throwUnlessValue() const;
 
   // @returns False if the Try contains an exception, true otherwise
   bool hasValue() const { return hasValue_; }

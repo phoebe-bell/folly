@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
+#include <folly/futures/detail/Core.h>
+
 #include <new>
 
-#include <folly/futures/detail/Core.h>
 #include <folly/lang/Assume.h>
 
 namespace folly {
@@ -477,8 +478,7 @@ void CoreBase::setProxy_(CoreBase* proxy) {
 
 // May be called at most once.
 void CoreBase::doCallback(
-    Executor::KeepAlive<>&& completingKA,
-    State priorState) {
+    Executor::KeepAlive<>&& completingKA, State priorState) {
   DCHECK(state_ == State::Done);
 
   auto executor = std::exchange(executor_, KeepAliveOrDeferred{});

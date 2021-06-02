@@ -23,8 +23,7 @@ template <typename Tag, typename VaultTag>
 struct SingletonHolder<T>::Impl : SingletonHolder<T> {
   Impl()
       : SingletonHolder<T>(
-            {typeid(T), typeid(Tag)},
-            *SingletonVault::singleton<VaultTag>()) {}
+            {typeid(T), typeid(Tag)}, *SingletonVault::singleton<VaultTag>()) {}
 };
 
 template <typename T>
@@ -74,7 +73,8 @@ void SingletonHolder<T>::registerSingletonMock(CreateFunc c, TeardownFunc t) {
   if (state_ == SingletonHolderState::NotRegistered) {
     detail::singletonWarnRegisterMockEarlyAndAbort(type());
   }
-  if (state_ == SingletonHolderState::Living) {
+  if (state_ == SingletonHolderState::Living ||
+      state_ == SingletonHolderState::LivingInChildAfterFork) {
     destroyInstance();
   }
 
@@ -171,6 +171,16 @@ void SingletonHolder<T>::preDestroyInstance(
 
 template <typename T>
 void SingletonHolder<T>::destroyInstance() {
+  if (state_.load(std::memory_order_relaxed) ==
+      SingletonHolderState::LivingInChildAfterFork) {
+    if (vault_.failOnUseAfterFork_) {
+      LOG(DFATAL) << "Attempting to destroy singleton " << type().name()
+                  << " in child process after fork";
+    } else {
+      LOG(ERROR) << "Attempting to destroy singleton " << type().name()
+                 << " in child process after fork";
+    }
+  }
   state_ = SingletonHolderState::Dead;
   instance_.reset();
   instance_copy_.reset();
@@ -192,9 +202,18 @@ void SingletonHolder<T>::destroyInstance() {
 }
 
 template <typename T>
+void SingletonHolder<T>::inChildAfterFork() {
+  auto expected = SingletonHolderState::Living;
+  state_.compare_exchange_strong(
+      expected,
+      SingletonHolderState::LivingInChildAfterFork,
+      std::memory_order_relaxed,
+      std::memory_order_relaxed);
+}
+
+template <typename T>
 SingletonHolder<T>::SingletonHolder(
-    TypeDescriptor typeDesc,
-    SingletonVault& vault) noexcept
+    TypeDescriptor typeDesc, SingletonVault& vault) noexcept
     : SingletonHolderBase(typeDesc), vault_(vault) {}
 
 template <typename T>
@@ -224,6 +243,23 @@ void SingletonHolder<T>::createInstance() {
   if (state_.load(std::memory_order_acquire) == SingletonHolderState::Living) {
     return;
   }
+  if (state_.load(std::memory_order_relaxed) ==
+      SingletonHolderState::LivingInChildAfterFork) {
+    if (vault_.failOnUseAfterFork_) {
+      LOG(DFATAL) << "Attempting to use singleton " << type().name()
+                  << " in child process after fork";
+    } else {
+      LOG(ERROR) << "Attempting to use singleton " << type().name()
+                 << " in child process after fork";
+    }
+    auto expected = SingletonHolderState::LivingInChildAfterFork;
+    state_.compare_exchange_strong(
+        expected,
+        SingletonHolderState::Living,
+        std::memory_order_relaxed,
+        std::memory_order_relaxed);
+    return;
+  }
   if (state_.load(std::memory_order_acquire) ==
       SingletonHolderState::NotRegistered) {
     detail::singletonWarnCreateUnregisteredAndAbort(type());
@@ -243,7 +279,8 @@ void SingletonHolder<T>::createInstance() {
   creating_thread_.store(std::this_thread::get_id(), std::memory_order_release);
 
   auto state = vault_.state_.rlock();
-  if (vault_.type_ != SingletonVault::Type::Relaxed &&
+  if (vault_.type_.load(std::memory_order_relaxed) !=
+          SingletonVault::Type::Relaxed &&
       !state->registrationComplete) {
     detail::singletonWarnCreateBeforeRegistrationCompleteAndAbort(type());
   }

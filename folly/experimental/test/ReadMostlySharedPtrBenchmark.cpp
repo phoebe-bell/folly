@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-/* -*- Mode: C++; tab-width: 2; c-basic-offset: 2; indent-tabs-mode: nil -*- */
-
 #include <folly/experimental/ReadMostlySharedPtr.h>
 
 #include <iostream>
@@ -26,8 +24,10 @@
 #include <folly/portability/GFlags.h>
 
 template <
-    template <typename> class MainPtr,
-    template <typename> class WeakPtr,
+    template <typename>
+    class MainPtr,
+    template <typename>
+    class WeakPtr,
     size_t threadCount>
 void benchmark(size_t n) {
   MainPtr<int> mainPtr(std::make_unique<int>(42));

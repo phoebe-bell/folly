@@ -16,17 +16,18 @@
 
 #pragma once
 
-#include <folly/Likely.h>
-#include <glog/logging.h>
 #include <algorithm>
 #include <stdexcept>
+
+#include <glog/logging.h>
+
+#include <folly/Likely.h>
 
 namespace folly {
 
 template <typename VT, typename CT>
 BucketedTimeSeries<VT, CT>::BucketedTimeSeries(
-    size_t nBuckets,
-    Duration maxDuration)
+    size_t nBuckets, Duration maxDuration)
     : firstTime_(Duration(1)), latestTime_(), duration_(maxDuration) {
   // For tracking all-time data we only use total_, and don't need to bother
   // with buckets_
@@ -85,17 +86,13 @@ bool BucketedTimeSeries<VT, CT>::addValue(TimePoint now, const ValueType& val) {
 
 template <typename VT, typename CT>
 bool BucketedTimeSeries<VT, CT>::addValue(
-    TimePoint now,
-    const ValueType& val,
-    uint64_t times) {
+    TimePoint now, const ValueType& val, uint64_t times) {
   return addValueAggregated(now, val * ValueType(times), times);
 }
 
 template <typename VT, typename CT>
 bool BucketedTimeSeries<VT, CT>::addValueAggregated(
-    TimePoint now,
-    const ValueType& total,
-    uint64_t nsamples) {
+    TimePoint now, const ValueType& total, uint64_t nsamples) {
   if (isAllTime()) {
     if (UNLIKELY(empty())) {
       firstTime_ = now;
@@ -265,8 +262,7 @@ typename CT::duration BucketedTimeSeries<VT, CT>::elapsed() const {
 
 template <typename VT, typename CT>
 typename CT::duration BucketedTimeSeries<VT, CT>::elapsed(
-    TimePoint start,
-    TimePoint end) const {
+    TimePoint start, TimePoint end) const {
   if (empty()) {
     return Duration(0);
   }
@@ -294,8 +290,8 @@ VT BucketedTimeSeries<VT, CT>::sum(TimePoint start, TimePoint end) const {
 }
 
 template <typename VT, typename CT>
-uint64_t BucketedTimeSeries<VT, CT>::count(TimePoint start, TimePoint end)
-    const {
+uint64_t BucketedTimeSeries<VT, CT>::count(
+    TimePoint start, TimePoint end) const {
   uint64_t sample_count = 0;
   forEachBucket(
       start,
@@ -313,8 +309,8 @@ uint64_t BucketedTimeSeries<VT, CT>::count(TimePoint start, TimePoint end)
 
 template <typename VT, typename CT>
 template <typename ReturnType>
-ReturnType BucketedTimeSeries<VT, CT>::avg(TimePoint start, TimePoint end)
-    const {
+ReturnType BucketedTimeSeries<VT, CT>::avg(
+    TimePoint start, TimePoint end) const {
   ValueType total = ValueType();
   uint64_t sample_count = 0;
   forEachBucket(
@@ -513,9 +509,7 @@ ReturnType BucketedTimeSeries<VT, CT>::rangeAdjust(
 template <typename VT, typename CT>
 template <typename Function>
 void BucketedTimeSeries<VT, CT>::forEachBucket(
-    TimePoint start,
-    TimePoint end,
-    Function fn) const {
+    TimePoint start, TimePoint end, Function fn) const {
   forEachBucket(
       [&start, &end, &fn](
           const Bucket& bucket,

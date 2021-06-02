@@ -14,7 +14,6 @@
  * limitations under the License.
  */
 
-/* -*- Mode: C++; tab-width: 2; c-basic-offset: 2; indent-tabs-mode: nil -*- */
 #pragma once
 
 #include <atomic>
@@ -463,57 +462,49 @@ class ReadMostlyMainPtrDeleter {
 
 template <typename T, typename RefCount>
 inline bool operator==(
-    const ReadMostlyMainPtr<T, RefCount>& ptr,
-    std::nullptr_t) {
+    const ReadMostlyMainPtr<T, RefCount>& ptr, std::nullptr_t) {
   return ptr.get() == nullptr;
 }
 
 template <typename T, typename RefCount>
 inline bool operator==(
-    std::nullptr_t,
-    const ReadMostlyMainPtr<T, RefCount>& ptr) {
+    std::nullptr_t, const ReadMostlyMainPtr<T, RefCount>& ptr) {
   return ptr.get() == nullptr;
 }
 
 template <typename T, typename RefCount>
 inline bool operator==(
-    const ReadMostlySharedPtr<T, RefCount>& ptr,
-    std::nullptr_t) {
+    const ReadMostlySharedPtr<T, RefCount>& ptr, std::nullptr_t) {
   return ptr.get() == nullptr;
 }
 
 template <typename T, typename RefCount>
 inline bool operator==(
-    std::nullptr_t,
-    const ReadMostlySharedPtr<T, RefCount>& ptr) {
+    std::nullptr_t, const ReadMostlySharedPtr<T, RefCount>& ptr) {
   return ptr.get() == nullptr;
 }
 
 template <typename T, typename RefCount>
 inline bool operator!=(
-    const ReadMostlyMainPtr<T, RefCount>& ptr,
-    std::nullptr_t) {
+    const ReadMostlyMainPtr<T, RefCount>& ptr, std::nullptr_t) {
   return !(ptr == nullptr);
 }
 
 template <typename T, typename RefCount>
 inline bool operator!=(
-    std::nullptr_t,
-    const ReadMostlyMainPtr<T, RefCount>& ptr) {
+    std::nullptr_t, const ReadMostlyMainPtr<T, RefCount>& ptr) {
   return !(ptr == nullptr);
 }
 
 template <typename T, typename RefCount>
 inline bool operator!=(
-    const ReadMostlySharedPtr<T, RefCount>& ptr,
-    std::nullptr_t) {
+    const ReadMostlySharedPtr<T, RefCount>& ptr, std::nullptr_t) {
   return !(ptr == nullptr);
 }
 
 template <typename T, typename RefCount>
 inline bool operator!=(
-    std::nullptr_t,
-    const ReadMostlySharedPtr<T, RefCount>& ptr) {
+    std::nullptr_t, const ReadMostlySharedPtr<T, RefCount>& ptr) {
   return !(ptr == nullptr);
 }
 } // namespace folly

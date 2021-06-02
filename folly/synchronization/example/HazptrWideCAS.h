@@ -16,9 +16,9 @@
 
 #pragma once
 
-#include <folly/synchronization/Hazptr.h>
-
 #include <string>
+
+#include <folly/synchronization/Hazptr.h>
 
 namespace folly {
 
@@ -49,7 +49,7 @@ class HazptrWideCAS {
         return false;
       }
       if (node_.compare_exchange_weak(
-              p, n, std::memory_order_relaxed, std::memory_order_release)) {
+              p, n, std::memory_order_release, std::memory_order_relaxed)) {
         break;
       }
     }

@@ -29,10 +29,10 @@
 #include <string>
 
 #include <folly/Demangle.h>
-#include <folly/Format.h>
 #include <folly/ScopeGuard.h>
 #include <folly/detail/SingletonStackTrace.h>
 #include <folly/portability/Config.h>
+#include <folly/portability/FmtCompile.h>
 
 #if !defined(_WIN32) && !defined(__APPLE__) && !defined(__ANDROID__)
 #define FOLLY_SINGLETON_HAVE_DLSYM 1
@@ -158,9 +158,9 @@ void singletonPrintDestructionStackTrace(const TypeDescriptor& type) {
 }
 
 [[noreturn]] void singletonThrowNullCreator(const std::type_info& type) {
-  auto const msg = sformat(
-      "nullptr_t should be passed if you want {} to be default constructed",
-      demangle(type));
+  auto const msg = fmt::format(FOLLY_FMT_COMPILE(
+      "nullptr_t should be passed if you want {} to be default constructed"),
+      folly::StringPiece(demangle(type)));
   throw std::logic_error(msg);
 }
 
@@ -204,7 +204,34 @@ FatalHelper __attribute__((__init_priority__(101))) fatalHelper;
 
 } // namespace
 
+SingletonVault::SingletonVault(Type type) noexcept : type_(type) {
+  detail::AtFork::registerHandler(
+      this,
+      /*prepare*/
+      [this]() {
+        auto singletons = singletons_.rlock();
+        auto creationOrder = creationOrder_.rlock();
+
+        CHECK_GE(singletons->size(), creationOrder->size());
+
+        for (const auto& singletonType : *creationOrder) {
+          liveSingletonsPreFork_.insert(singletons->at(singletonType));
+        }
+
+        return true;
+      },
+      /*parent*/ [this]() { liveSingletonsPreFork_.clear(); },
+      /*child*/
+      [this]() {
+        for (auto singleton : liveSingletonsPreFork_) {
+          singleton->inChildAfterFork();
+        }
+        liveSingletonsPreFork_.clear();
+      });
+}
+
 SingletonVault::~SingletonVault() {
+  detail::AtFork::unregisterHandler(this);
   destroyInstances();
 }
 
@@ -212,7 +239,8 @@ void SingletonVault::registerSingleton(detail::SingletonHolderBase* entry) {
   auto state = state_.rlock();
   state->check(detail::SingletonVaultState::Type::Running);
 
-  if (UNLIKELY(state->registrationComplete)) {
+  if (UNLIKELY(state->registrationComplete) &&
+      type_.load(std::memory_order_relaxed) == Type::Strict) {
     LOG(ERROR) << "Registering singleton after registrationComplete().";
   }
 
@@ -225,7 +253,8 @@ void SingletonVault::addEagerInitSingleton(detail::SingletonHolderBase* entry) {
   auto state = state_.rlock();
   state->check(detail::SingletonVaultState::Type::Running);
 
-  if (UNLIKELY(state->registrationComplete)) {
+  if (UNLIKELY(state->registrationComplete) &&
+      type_.load(std::memory_order_relaxed) == Type::Strict) {
     LOG(ERROR) << "Registering for eager-load after registrationComplete().";
   }
 
@@ -246,7 +275,7 @@ void SingletonVault::registrationComplete() {
   }
 
   auto singletons = singletons_.rlock();
-  if (type_ == Type::Strict) {
+  if (type_.load(std::memory_order_relaxed) == Type::Strict) {
     for (const auto& p : *singletons) {
       if (p.second->hasLiveInstance()) {
         throw std::runtime_error(

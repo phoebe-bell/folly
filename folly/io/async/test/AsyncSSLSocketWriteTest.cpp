@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
+#include <string>
+#include <vector>
+
 #include <folly/io/Cursor.h>
 #include <folly/io/async/AsyncSSLSocket.h>
 #include <folly/io/async/AsyncSocket.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/portability/GMock.h>
 #include <folly/portability/GTest.h>
-
-#include <string>
-#include <vector>
 
 using namespace testing;
 
@@ -31,8 +31,7 @@ namespace folly {
 class MockAsyncSSLSocket : public AsyncSSLSocket {
  public:
   static std::shared_ptr<MockAsyncSSLSocket> newSocket(
-      const std::shared_ptr<SSLContext>& ctx,
-      EventBase* evb) {
+      const std::shared_ptr<SSLContext>& ctx, EventBase* evb) {
     auto sock = std::shared_ptr<MockAsyncSSLSocket>(
         new MockAsyncSSLSocket(ctx, evb), Destructor());
     sock->ssl_.reset(SSL_new(ctx->getSSLCtx()));
@@ -59,9 +58,7 @@ class MockAsyncSSLSocket : public AsyncSSLSocket {
   MOCK_METHOD3(
       sendSocketMessage,
       AsyncSocket::WriteResult(
-          NetworkSocket fd,
-          struct msghdr* msg,
-          int msg_flags));
+          NetworkSocket fd, struct msghdr* msg, int msg_flags));
 
   // mock the calls to getRawBytesWritten()
   MOCK_CONST_METHOD0(getRawBytesWritten, size_t());

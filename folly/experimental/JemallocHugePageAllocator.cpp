@@ -16,11 +16,12 @@
 
 #include <folly/experimental/JemallocHugePageAllocator.h>
 
+#include <sstream>
+
 #include <folly/portability/Malloc.h>
 #include <folly/portability/String.h>
-#include <glog/logging.h>
 
-#include <sstream>
+#include <glog/logging.h>
 
 #if (defined(MADV_HUGEPAGE) || defined(MAP_ALIGNED_SUPER)) && \
     defined(FOLLY_USE_JEMALLOC) && !FOLLY_SANITIZE
@@ -44,14 +45,8 @@ bool folly::JemallocHugePageAllocator::hugePagesSupported{true};
 
 #if !defined(JEMALLOC_VERSION_MAJOR) || (JEMALLOC_VERSION_MAJOR < 5)
 typedef struct extent_hooks_s extent_hooks_t;
-typedef void*(extent_alloc_t)(
-    extent_hooks_t*,
-    void*,
-    size_t,
-    size_t,
-    bool*,
-    bool*,
-    unsigned);
+typedef void*(
+    extent_alloc_t)(extent_hooks_t*, void*, size_t, size_t, bool*, bool*, unsigned);
 struct extent_hooks_s {
   extent_alloc_t* alloc;
 };

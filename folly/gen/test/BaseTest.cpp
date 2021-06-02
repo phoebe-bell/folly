@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include <glog/logging.h>
+#include <folly/gen/Base.h>
 
 #include <iosfwd>
 #include <memory>
@@ -22,13 +22,14 @@
 #include <set>
 #include <vector>
 
+#include <glog/logging.h>
+
 #include <folly/FBVector.h>
 #include <folly/MapUtil.h>
 #include <folly/Memory.h>
 #include <folly/String.h>
 #include <folly/dynamic.h>
 #include <folly/experimental/TestUtil.h>
-#include <folly/gen/Base.h>
 #include <folly/portability/GFlags.h>
 #include <folly/portability/GTest.h>
 
@@ -877,6 +878,14 @@ TEST(Gen, VirtualGen) {
   v = v | take(5);
   EXPECT_EQ(55, v | sum);
   EXPECT_EQ(30, v | take(4) | sum);
+}
+
+TEST(Gen, VirtualGenMoveOnly) {
+  VirtualGenMoveOnly<int> v(seq(1, 10));
+  EXPECT_EQ(55, std::move(v) | sum);
+  v = seq(1, 10) | virtualize;
+  v = std::move(v) | map(square);
+  EXPECT_EQ(385, std::move(v) | sum);
 }
 
 TEST(Gen, CustomType) {

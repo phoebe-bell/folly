@@ -28,7 +28,7 @@
 namespace folly {
 namespace symbolizer {
 
-#if FOLLY_HAVE_DWARF
+#if FOLLY_HAVE_DWARF && FOLLY_HAVE_ELF
 
 namespace detail {
 
@@ -117,24 +117,25 @@ class Dwarf {
   class LineNumberVM;
 
   /**
-   * Finds location info (file and line) for a given address in the given
-   * compilation unit. Invokes `eachParameterName`, if set, for each parameter
-   * of the given function.
+   * Find the @locationInfo for @address in the compilation unit @cu.
+   *
+   * Best effort:
+   * - fills @inlineFrames if mode == FULL_WITH_INLINE,
+   * - calls @eachParameterName on the function parameters.
    */
   bool findLocation(
       uintptr_t address,
       const LocationInfoMode mode,
       detail::CompilationUnit& cu,
       LocationInfo& info,
-      folly::Range<SymbolizedFrame*> inlineFrames = {},
-      folly::FunctionRef<void(folly::StringPiece)> eachParameterName = {})
-      const;
+      folly::Range<SymbolizedFrame*> inlineFrames,
+      folly::FunctionRef<void(folly::StringPiece)> eachParameterName) const;
 
   /**
    * Finds a subprogram debugging info entry that contains a given address among
    * children of given die. Depth first search.
    */
-  void findSubProgramDieForAddress(
+  bool findSubProgramDieForAddress(
       const detail::CompilationUnit& cu,
       const detail::Die& die,
       uint64_t address,
@@ -154,22 +155,21 @@ class Dwarf {
       folly::Range<detail::CallLocation*> locations,
       size_t& numFound) const;
 
-  static bool
-  findDebugInfoOffset(uintptr_t address, StringPiece aranges, uint64_t& offset);
+  static bool findDebugInfoOffset(
+      uintptr_t address, StringPiece aranges, uint64_t& offset);
 
   /** Get an ELF section by name. */
   folly::StringPiece getSection(const char* name) const;
 
   /** cu must exist during the life cycle of created detail::Die. */
-  detail::Die getDieAtOffset(const detail::CompilationUnit& cu, uint64_t offset)
-      const;
+  detail::Die getDieAtOffset(
+      const detail::CompilationUnit& cu, uint64_t offset) const;
 
   /**
    * Find the actual definition DIE instead of declaration for the given die.
    */
   detail::Die findDefinitionDie(
-      const detail::CompilationUnit& cu,
-      const detail::Die& die) const;
+      const detail::CompilationUnit& cu, const detail::Die& die) const;
 
   /**
    * Iterates over all children of a debugging info entry, calling the given
@@ -246,8 +246,7 @@ class Dwarf::Section {
 class Dwarf::LineNumberVM {
  public:
   LineNumberVM(
-      folly::StringPiece data,
-      folly::StringPiece compilationDirectory);
+      folly::StringPiece data, folly::StringPiece compilationDirectory);
 
   bool findAddress(uintptr_t target, Path& file, uint64_t& line);
 

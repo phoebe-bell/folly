@@ -15,9 +15,9 @@
  */
 
 #include <folly/lang/UncaughtExceptions.h>
+
 #include <folly/Conv.h>
 #include <folly/portability/GTest.h>
-#include <glog/logging.h>
 
 /*
  * Test helper class, when goes out of scope it validaes that
@@ -34,8 +34,6 @@ class Validator {
 
   // Invoke to validate explicitly.
   void validate() {
-    LOG(INFO) << msg_ << ", expected " << expectedCount_ << ", is "
-              << folly::uncaught_exceptions();
     EXPECT_EQ(expectedCount_, folly::uncaught_exceptions()) << msg_;
   }
 
@@ -110,11 +108,8 @@ struct ThrowInDestructor {
       (void)stackObjectThrowingOnUnwind;
       Validator validator(
           N - I + 1, "validating in " + folly::to<std::string>(I));
-      LOG(INFO) << "throwing in ~ThrowInDestructor " << I;
       throw std::logic_error("inner");
     } catch (const std::logic_error&) {
-      LOG(INFO) << "catching in ~ThrowInDestructor " << I << " expecting "
-                << N - I << ", it is " << folly::uncaught_exceptions();
       EXPECT_EQ(N - I, folly::uncaught_exceptions());
     }
   }

@@ -32,17 +32,13 @@
 #include <folly/Utility.h>
 #include <folly/executors/DrivableExecutor.h>
 #include <folly/executors/TimedDrivableExecutor.h>
+#include <folly/experimental/coro/Traits.h>
 #include <folly/fibers/Baton.h>
 #include <folly/functional/Invoke.h>
 #include <folly/futures/Portability.h>
 #include <folly/futures/Promise.h>
 #include <folly/futures/detail/Types.h>
 #include <folly/lang/Exception.h>
-
-#if FOLLY_HAS_COROUTINES
-#include <folly/experimental/coro/Traits.h>
-#include <experimental/coroutine>
-#endif
 
 // boring predeclarations and details
 #include <folly/futures/Future-pre.h>
@@ -443,8 +439,7 @@ void detachOnGlobalCPUExecutor(folly::SemiFuture<T>&& fut);
 // shutdown will cleanly drop the work.
 template <class T>
 void maybeDetachOnGlobalExecutorAfter(
-    HighResDuration dur,
-    folly::SemiFuture<T>&& fut);
+    HighResDuration dur, folly::SemiFuture<T>&& fut);
 
 // Detach the SemiFuture with no executor.
 // NOTE: If there is deferred work of any sort on this SemiFuture
@@ -912,8 +907,7 @@ class SemiFuture : private futures::detail::FutureBase<T> {
   // Customise the co_viaIfAsync() operator so that SemiFuture<T> can be
   // directly awaited within a folly::coro::Task coroutine.
   friend Future<T> co_viaIfAsync(
-      folly::Executor::KeepAlive<> executor,
-      SemiFuture<T>&& future) noexcept {
+      folly::Executor::KeepAlive<> executor, SemiFuture<T>&& future) noexcept {
     return std::move(future).via(std::move(executor));
   }
 
@@ -1242,8 +1236,7 @@ class Future : private futures::detail::FutureBase<T> {
   /// - `RESULT.valid() == true`
   template <typename R, typename Caller, typename... Args>
   Future<typename isFuture<R>::Inner> then(
-      R (Caller::*func)(Args...),
-      Caller* instance) &&;
+      R (Caller::*func)(Args...), Caller* instance) &&;
 
   /// Execute the callback via the given Executor. The executor doesn't stick.
   ///
@@ -1504,12 +1497,12 @@ class Future : private futures::detail::FutureBase<T> {
   /// Example:
   ///
   ///   makeFuture()
-  ///     .thenValue([] {
+  ///     .thenValue([](folly::Unit&&) {
   ///       throw std::runtime_error("oh no!");
   ///       return 42;
   ///     })
-  ///     .thenError<std::runtime_error>([] (std::runtime_error& e) {
-  ///       LOG(INFO) << "std::runtime_error: " << e.what();
+  ///     .thenError([](folly::exception_wrapper&& e) {
+  ///       LOG(INFO) << "std::runtime_error: " << e.get_exception()->what();
   ///       return -1; // or makeFuture<int>(-1)
   ///     });
   ///
@@ -1676,8 +1669,8 @@ class Future : private futures::detail::FutureBase<T> {
   ///   i.e., as if `*this` was moved into RESULT.
   /// - `RESULT.valid() == true`
   template <class E>
-  Future<T>
-  within(HighResDuration dur, E exception, Timekeeper* tk = nullptr) &&;
+  Future<T> within(
+      HighResDuration dur, E exception, Timekeeper* tk = nullptr) &&;
 
   /// Delay the completion of this Future for at least this duration from
   /// now. The optional Timekeeper is as with futures::sleep().
@@ -1901,8 +1894,7 @@ class Future : private futures::detail::FutureBase<T> {
   // Overload needed to customise behaviour of awaiting a Future<T>
   // inside a folly::coro::Task coroutine.
   friend Future<T> co_viaIfAsync(
-      folly::Executor::KeepAlive<> executor,
-      Future<T>&& future) noexcept {
+      folly::Executor::KeepAlive<> executor, Future<T>&& future) noexcept {
     return std::move(future).via(std::move(executor));
   }
 
@@ -1934,14 +1926,12 @@ class Future : private futures::detail::FutureBase<T> {
 
   template <class FT>
   friend Future<FT> futures::detail::convertFuture(
-      SemiFuture<FT>&& sf,
-      const Future<FT>& f);
+      SemiFuture<FT>&& sf, const Future<FT>& f);
 
   using Base::detach;
   template <class T2>
   friend void futures::detachOn(
-      folly::Executor::KeepAlive<> exec,
-      folly::SemiFuture<T2>&& fut);
+      folly::Executor::KeepAlive<> exec, folly::SemiFuture<T2>&& fut);
 };
 
 /// A Timekeeper handles the details of keeping time and fulfilling delay
@@ -2067,8 +2057,8 @@ template <
     class F,
     class ItT = typename std::iterator_traits<It>::value_type,
     class Tag = std::enable_if_t<is_invocable_v<F, typename ItT::value_type&&>>,
-    class Result = typename decltype(
-        std::declval<ItT>().thenValue(std::declval<F>()))::value_type>
+    class Result = typename decltype(std::declval<ItT>().thenValue(
+        std::declval<F>()))::value_type>
 std::vector<Future<Result>> mapValue(It first, It last, F func);
 
 /**
@@ -2081,8 +2071,8 @@ template <
     class ItT = typename std::iterator_traits<It>::value_type,
     class Tag =
         std::enable_if_t<!is_invocable_v<F, typename ItT::value_type&&>>,
-    class Result = typename decltype(
-        std::declval<ItT>().thenTry(std::declval<F>()))::value_type>
+    class Result = typename decltype(std::declval<ItT>().thenTry(
+        std::declval<F>()))::value_type>
 std::vector<Future<Result>> mapTry(It first, It last, F func, int = 0);
 
 /**
@@ -2116,8 +2106,8 @@ template <
         typename decltype(std::move(std::declval<ItT>())
                               .via(std::declval<Executor*>())
                               .thenTry(std::declval<F>()))::value_type>
-std::vector<Future<Result>>
-mapTry(Executor& exec, It first, It last, F func, int = 0);
+std::vector<Future<Result>> mapTry(
+    Executor& exec, It first, It last, F func, int = 0);
 
 // Sugar for the most common case
 template <class Collection, class F>
@@ -2523,8 +2513,8 @@ template <
     class ItT = typename std::iterator_traits<
         typename Collection::iterator>::value_type,
     class Result = typename invoke_result_t<F, ItT&&>::value_type>
-std::vector<Future<Result>>
-window(Executor::KeepAlive<> executor, Collection input, F func, size_t n);
+std::vector<Future<Result>> window(
+    Executor::KeepAlive<> executor, Collection input, F func, size_t n);
 
 template <typename F, typename T, typename ItT>
 using MaybeTryArg = typename std::
@@ -2546,10 +2536,7 @@ Future<T> reduce(It first, It last, T&& initial, F&& func);
 /// Sugar for the most common case
 template <class Collection, class T, class F>
 auto reduce(Collection&& c, T&& initial, F&& func) -> decltype(folly::reduce(
-    c.begin(),
-    c.end(),
-    static_cast<T&&>(initial),
-    static_cast<F&&>(func))) {
+    c.begin(), c.end(), static_cast<T&&>(initial), static_cast<F&&>(func))) {
   return folly::reduce(
       c.begin(), c.end(), static_cast<T&&>(initial), static_cast<F&&>(func));
 }
@@ -2624,7 +2611,7 @@ class FutureAwaiter {
   }
 
   FOLLY_CORO_AWAIT_SUSPEND_NONTRIVIAL_ATTRIBUTES void await_suspend(
-      std::experimental::coroutine_handle<> h) {
+      coro::coroutine_handle<> h) {
     // FutureAwaiter may get destroyed as soon as the callback is executed.
     // Make sure the future object doesn't get destroyed until setCallback_
     // returns.

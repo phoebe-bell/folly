@@ -15,14 +15,15 @@
  */
 
 #include <folly/tracing/AsyncStack.h>
-#include <folly/BenchmarkUtil.h>
-#include <folly/Likely.h>
-
-#include <glog/logging.h>
 
 #include <atomic>
 #include <cassert>
 #include <mutex>
+
+#include <glog/logging.h>
+
+#include <folly/BenchmarkUtil.h>
+#include <folly/Likely.h>
 
 #if defined(__linux__)
 #define FOLLY_ASYNC_STACK_ROOT_USE_PTHREAD 1
@@ -116,8 +117,7 @@ AsyncStackRoot* exchangeCurrentAsyncStackRoot(
 namespace detail {
 
 ScopedAsyncStackRoot::ScopedAsyncStackRoot(
-    void* framePointer,
-    void* returnAddress) noexcept {
+    void* framePointer, void* returnAddress) noexcept {
   root_.setStackFrameContext(framePointer, returnAddress);
   root_.nextRoot = currentThreadAsyncStackRoot.get();
   currentThreadAsyncStackRoot.set(&root_);
@@ -172,8 +172,7 @@ AsyncStackFrame& getDetachedRootAsyncStackFrame() noexcept {
 #if FOLLY_HAS_COROUTINES
 
 FOLLY_NOINLINE void resumeCoroutineWithNewAsyncStackRoot(
-    std::experimental::coroutine_handle<> h,
-    folly::AsyncStackFrame& frame) noexcept {
+    coro::coroutine_handle<> h, folly::AsyncStackFrame& frame) noexcept {
   detail::ScopedAsyncStackRoot root;
   root.activateFrame(frame);
   h.resume();

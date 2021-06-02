@@ -16,12 +16,12 @@
 
 #include <folly/stats/TDigest.h>
 
+#include <algorithm>
+#include <limits>
+
 #include <glog/logging.h>
 
 #include <folly/stats/detail/DoubleRadixSort.h>
-
-#include <algorithm>
-#include <limits>
 
 namespace folly {
 
@@ -126,8 +126,8 @@ TDigest TDigest::merge(Range<const double*> unsortedValues) const {
   return merge(sorted_equivalent, Range<const double*>(in, in + n));
 }
 
-TDigest TDigest::merge(sorted_equivalent_t, Range<const double*> sortedValues)
-    const {
+TDigest TDigest::merge(
+    sorted_equivalent_t, Range<const double*> sortedValues) const {
   if (sortedValues.empty()) {
     return *this;
   }

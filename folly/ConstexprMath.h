@@ -47,8 +47,8 @@ constexpr T constexpr_min(T a, T b, Ts... ts) {
 }
 
 template <typename T, typename Less>
-constexpr T const&
-constexpr_clamp(T const& v, T const& lo, T const& hi, Less less) {
+constexpr T const& constexpr_clamp(
+    T const& v, T const& lo, T const& hi, Less less) {
   return less(v, lo) ? lo : less(hi, v) ? hi : v;
 }
 template <typename T>
@@ -131,11 +131,10 @@ constexpr T constexpr_ceil(T t, T round) {
 
 template <typename T>
 constexpr T constexpr_pow(T base, std::size_t exp) {
-  return exp == 0
-      ? T(1)
-      : exp == 1 ? base
-                 : detail::constexpr_square_(constexpr_pow(base, exp / 2)) *
-              (exp % 2 ? base : T(1));
+  return exp == 0 ? T(1)
+      : exp == 1  ? base
+                  : detail::constexpr_square_(constexpr_pow(base, exp / 2)) *
+          (exp % 2 ? base : T(1));
 }
 
 /// constexpr_find_last_set
@@ -150,8 +149,8 @@ constexpr std::size_t constexpr_find_last_set(T const t) {
 
 namespace detail {
 template <typename U>
-constexpr std::size_t
-constexpr_find_first_set_(std::size_t s, std::size_t a, U const u) {
+constexpr std::size_t constexpr_find_first_set_(
+    std::size_t s, std::size_t a, U const u) {
   return s == 0 ? a
                 : constexpr_find_first_set_(
                       s / 2, a + s * bool((u >> a) % (U(1) << s) == U(0)), u);

@@ -21,9 +21,10 @@
 #include <string>
 #include <vector>
 
+#include <glog/logging.h>
+
 #include <folly/String.h>
 #include <folly/stats/BucketedTimeSeries.h>
-#include <glog/logging.h>
 
 namespace folly {
 
@@ -70,13 +71,10 @@ class MultiLevelTimeSeries {
    * an all-time level is provided, it MUST be the last level present.
    */
   MultiLevelTimeSeries(
-      size_t numBuckets,
-      size_t numLevels,
-      const Duration levelDurations[]);
+      size_t numBuckets, size_t numLevels, const Duration levelDurations[]);
 
   MultiLevelTimeSeries(
-      size_t numBuckets,
-      std::initializer_list<Duration> durations);
+      size_t numBuckets, std::initializer_list<Duration> durations);
 
   /*
    * Return the number of buckets used to track time series at each level.
@@ -375,8 +373,8 @@ class MultiLevelTimeSeries {
    * Adds the value 'total' at time 'now' to all levels as the sum of
    * 'nsamples' samples.
    */
-  void
-  addValueAggregated(TimePoint now, const ValueType& total, uint64_t nsamples);
+  void addValueAggregated(
+      TimePoint now, const ValueType& total, uint64_t nsamples);
 
   /*
    * Update all the levels to the specified time, doing all the necessary
@@ -413,8 +411,8 @@ class MultiLevelTimeSeries {
   void addValue(Duration now, const ValueType& value, uint64_t times) {
     addValue(TimePoint(now), value, times);
   }
-  void
-  addValueAggregated(Duration now, const ValueType& total, uint64_t nsamples) {
+  void addValueAggregated(
+      Duration now, const ValueType& total, uint64_t nsamples) {
     addValueAggregated(TimePoint(now), total, nsamples);
   }
 

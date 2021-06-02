@@ -141,8 +141,14 @@ class AsyncUDPSocket : public EventHandler {
     WriteOptions() = default;
     WriteOptions(int gsoVal, bool zerocopyVal)
         : gso(gsoVal), zerocopy(zerocopyVal) {}
-    int gso{1};
+    int gso{0};
     bool zerocopy{false};
+    std::chrono::microseconds txTime{0};
+  };
+
+  struct TXTime {
+    int clockid{-1};
+    bool deadline{false};
   };
 
   /**
@@ -164,9 +170,10 @@ class AsyncUDPSocket : public EventHandler {
    * Contains options to pass to bind.
    */
   struct BindOptions {
-    constexpr BindOptions() noexcept {}
+    BindOptions() noexcept {}
     // Whether IPV6_ONLY should be set on the socket.
     bool bindV6Only{true};
+    std::string ifName;
   };
 
   /**
@@ -176,8 +183,7 @@ class AsyncUDPSocket : public EventHandler {
    * returns. The parameter BindOptions contains parameters for the bind.
    */
   virtual void bind(
-      const folly::SocketAddress& address,
-      BindOptions options = BindOptions());
+      const folly::SocketAddress& address, BindOptions options = BindOptions());
 
   /**
    * Connects the UDP socket to a remote destination address provided in
@@ -418,6 +424,11 @@ class AsyncUDPSocket : public EventHandler {
 
   bool setGRO(bool bVal);
 
+  // TX time
+  TXTime getTXTime();
+
+  bool setTXTime(TXTime txTime);
+
   // packet timestamping
   int getTimestamping();
   bool setTimestamping(int val);
@@ -431,8 +442,7 @@ class AsyncUDPSocket : public EventHandler {
   void setTrafficClass(int tclass);
 
   void applyOptions(
-      const SocketOptionMap& options,
-      SocketOptionKey::ApplyPos pos);
+      const SocketOptionMap& options, SocketOptionKey::ApplyPos pos);
 
  protected:
   struct full_sockaddr_storage {
@@ -440,8 +450,8 @@ class AsyncUDPSocket : public EventHandler {
     socklen_t len;
   };
 
-  virtual ssize_t
-  sendmsg(NetworkSocket socket, const struct msghdr* message, int flags) {
+  virtual ssize_t sendmsg(
+      NetworkSocket socket, const struct msghdr* message, int flags) {
     return netops::sendmsg(socket, message, flags);
   }
 
@@ -520,6 +530,10 @@ class AsyncUDPSocket : public EventHandler {
   // generic receive offload value, if available
   // See https://lwn.net/Articles/770978/ for more details
   folly::Optional<int> gro_;
+
+  // multi release pacing for UDP GSO
+  // See https://lwn.net/Articles/822726/ for more details
+  folly::Optional<TXTime> txTime_;
 
   // packet timestamping
   folly::Optional<int> ts_;

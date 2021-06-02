@@ -24,6 +24,7 @@
 #include <folly/Optional.h>
 #include <folly/Range.h>
 #include <folly/Utility.h>
+#include <folly/lang/Exception.h>
 
 namespace folly {
 
@@ -229,6 +230,11 @@ class Executor {
     return getKeepAliveToken(&executor);
   }
 
+  template <typename F>
+  FOLLY_ERASE static void invokeCatchingExns(char const* p, F f) noexcept {
+    catch_exception(f, invokeCatchingExnsLog, p);
+  }
+
  protected:
   /**
    * Returns true if the KeepAlive is constructed from an executor that does
@@ -237,6 +243,13 @@ class Executor {
   template <typename ExecutorT>
   static bool isKeepAliveDummy(const KeepAlive<ExecutorT>& keepAlive) {
     return keepAlive.storage_ & KeepAlive<ExecutorT>::kDummyFlag;
+  }
+
+  static bool keepAliveAcquire(Executor* executor) {
+    return executor->keepAliveAcquire();
+  }
+  static void keepAliveRelease(Executor* executor) {
+    return executor->keepAliveRelease();
   }
 
   // Acquire a keep alive token. Should return false if keep-alive mechanism
@@ -255,6 +268,8 @@ class Executor {
   }
 
  private:
+  static void invokeCatchingExnsLog(char const* prefix) noexcept;
+
   template <typename ExecutorT>
   static KeepAlive<ExecutorT> makeKeepAliveDummy(ExecutorT* executor) {
     static_assert(
@@ -290,14 +305,16 @@ Executor::KeepAlive<ExecutorT> getKeepAliveToken(
 }
 
 struct ExecutorBlockingContext {
-  StringPiece name;
+  bool forbid;
+  bool allowTerminationOnBlocking;
+  Executor* ex = nullptr;
+  StringPiece tag;
 };
 static_assert(
     std::is_standard_layout<ExecutorBlockingContext>::value,
     "non-standard layout");
 
 struct ExecutorBlockingList {
-  bool forbid;
   ExecutorBlockingList* prev;
   ExecutorBlockingContext curr;
 };
@@ -308,13 +325,17 @@ static_assert(
 class ExecutorBlockingGuard {
  public:
   struct PermitTag {};
-  struct ForbidTag {};
+  struct TrackTag {};
+  struct ProhibitTag {};
 
   ~ExecutorBlockingGuard();
   ExecutorBlockingGuard() = delete;
 
   explicit ExecutorBlockingGuard(PermitTag) noexcept;
-  explicit ExecutorBlockingGuard(ForbidTag, StringPiece name) noexcept;
+  explicit ExecutorBlockingGuard(
+      TrackTag, Executor* ex, StringPiece tag) noexcept;
+  explicit ExecutorBlockingGuard(
+      ProhibitTag, Executor* ex, StringPiece tag) noexcept;
 
   ExecutorBlockingGuard(ExecutorBlockingGuard&&) = delete;
   ExecutorBlockingGuard(ExecutorBlockingGuard const&) = delete;

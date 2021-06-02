@@ -25,6 +25,7 @@ namespace test {
 
 class MockAsyncTransport : public AsyncTransport {
  public:
+  MOCK_METHOD1(setEventCallback, void(EventRecvmsgCallback*));
   MOCK_METHOD1(setReadCB, void(ReadCallback*));
   MOCK_CONST_METHOD0(getReadCallback, ReadCallback*());
   MOCK_CONST_METHOD0(getReadCB, ReadCallback*());
@@ -69,8 +70,7 @@ class MockAsyncTransport : public AsyncTransport {
   MOCK_CONST_METHOD0(getWrappedTransport, AsyncTransport*());
   MOCK_CONST_METHOD0(isReplaySafe, bool());
   MOCK_METHOD1(
-      setReplaySafetyCallback,
-      void(AsyncTransport::ReplaySafetyCallback*));
+      setReplaySafetyCallback, void(AsyncTransport::ReplaySafetyCallback*));
   MOCK_CONST_METHOD0(getSecurityProtocol, std::string());
 };
 

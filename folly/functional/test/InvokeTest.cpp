@@ -72,7 +72,7 @@ struct Obj {
 void swap(Obj&, Obj&) noexcept {} // no-op
 } // namespace swappable
 
-struct AltSwappable;
+struct AltSwappable {};
 struct AltSwappableRet {};
 namespace unswappable {
 FOLLY_MAYBE_UNUSED AltSwappableRet swap(AltSwappable&, AltSwappable&);
@@ -298,6 +298,24 @@ TEST_F(InvokeTest, static_member_invoke) {
   EXPECT_FALSE((traits::is_nothrow_invocable_r_v<int, int>));
 }
 
+TEST_F(InvokeTest, static_member_no_invoke) {
+  struct HasNoStat {};
+
+  using traits = folly::invoke_traits<stat_invoker<HasNoStat>>;
+
+  EXPECT_FALSE((traits::is_invocable_v<>));
+  EXPECT_FALSE((traits::is_invocable_v<int>));
+
+  EXPECT_FALSE((traits::is_invocable_r_v<int>));
+  EXPECT_FALSE((traits::is_invocable_r_v<int, int>));
+
+  EXPECT_FALSE((traits::is_nothrow_invocable_v<>));
+  EXPECT_FALSE((traits::is_nothrow_invocable_v<int>));
+
+  EXPECT_FALSE((traits::is_nothrow_invocable_r_v<int>));
+  EXPECT_FALSE((traits::is_nothrow_invocable_r_v<int, int>));
+}
+
 namespace {
 
 struct TestCustomisationPointFn {
@@ -312,14 +330,12 @@ struct TestCustomisationPointFn {
 FOLLY_DEFINE_CPO(TestCustomisationPointFn, testCustomisationPoint)
 
 struct TypeA {
-  constexpr friend int
-  tag_invoke(folly::cpo_t<testCustomisationPoint>, const TypeA&, int value) {
+  constexpr friend int tag_invoke(
+      folly::cpo_t<testCustomisationPoint>, const TypeA&, int value) {
     return value * 2;
   }
   constexpr friend bool tag_invoke(
-      folly::cpo_t<testCustomisationPoint>,
-      const TypeA&,
-      bool value) noexcept {
+      folly::cpo_t<testCustomisationPoint>, const TypeA&, bool value) noexcept {
     return !value;
   }
 };

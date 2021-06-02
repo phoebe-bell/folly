@@ -20,6 +20,8 @@
 #include <memory>
 #include <thread>
 
+#include <folly/Traits.h>
+#include <folly/container/test/TrackingTypes.h>
 #include <folly/hash/Hash.h>
 #include <folly/portability/GFlags.h>
 #include <folly/portability/GTest.h>
@@ -42,8 +44,10 @@ template <template <
     typename,
     typename,
     typename,
-    template <typename> class,
-    class> class Impl>
+    template <typename>
+    class,
+    class>
+          class Impl>
 struct MapFactory {
   template <
       typename KeyType,
@@ -162,6 +166,9 @@ TYPED_TEST_P(ConcurrentHashMapTest, EmplaceTest) {
   foomap.emplace(1, foo());
   EXPECT_EQ(foo::moved, 1);
   EXPECT_EQ(foo::copied, 0);
+  // Reset the counters. Repeated tests are allowed
+  foo::moved = 0;
+  foo::copied = 0;
 }
 
 TYPED_TEST_P(ConcurrentHashMapTest, MapInsertIteratorValueTest) {
@@ -191,6 +198,27 @@ TYPED_TEST_P(ConcurrentHashMapTest, MapResizeTest) {
   if (res != foomap.cend()) {
     EXPECT_EQ(0, res->second);
   }
+  foomap.reserve(0);
+}
+
+TYPED_TEST_P(ConcurrentHashMapTest, ReserveTest) {
+  CHM<uint64_t, uint64_t> foomap;
+  int64_t insert_count = 0;
+  int64_t actual_count = 0;
+
+  for (int64_t i = 0; i < 1000; i++) {
+    if (i % 100 == 0) {
+      foomap.reserve(i + 100);
+    }
+    foomap.insert(std::make_pair(i, i));
+    insert_count++;
+  }
+
+  for (auto it = foomap.begin(); it != foomap.cend(); ++it) {
+    actual_count++;
+  }
+
+  EXPECT_EQ(insert_count, actual_count);
 }
 
 // Ensure we can insert objects without copy constructors.
@@ -483,6 +511,27 @@ TYPED_TEST_P(ConcurrentHashMapTest, EraseStressTest) {
           }
           EXPECT_EQ(k, result->second);
         }
+      }
+    }));
+  }
+  for (auto& t : threads) {
+    join;
+  }
+}
+
+TYPED_TEST_P(ConcurrentHashMapTest, TryEmplaceEraseStressTest) {
+  DeterministicSchedule sched(DeterministicSchedule::uniform(FLAGS_seed));
+  std::atomic<int> iterations{10000};
+  std::vector<std::thread> threads;
+  unsigned int num_threads = 32;
+  threads.reserve(num_threads);
+  folly::ConcurrentHashMap<int, int> map;
+  for (uint32_t t = 0; t < num_threads; t++) {
+    threads.push_back(lib::thread([&]() {
+      while (--iterations >= 0) {
+        auto it = map.try_emplace(1, 101);
+        map.erase(1);
+        EXPECT_EQ(it.first->second, 101);
       }
     }));
   }
@@ -830,6 +879,112 @@ TYPED_TEST_P(ConcurrentHashMapTest, IteratorLoop) {
   EXPECT_EQ(count, kNum);
 }
 
+namespace {
+template <typename T, typename Arg>
+using detector_find = decltype(std::declval<T>().find(std::declval<Arg>()));
+
+template <typename T, typename Arg>
+using detector_erase = decltype(std::declval<T>().erase(std::declval<Arg>()));
+} // namespace
+
+TYPED_TEST_P(ConcurrentHashMapTest, HeterogeneousLookup) {
+  using Hasher = folly::transparent<folly::hasher<folly::StringPiece>>;
+  using KeyEqual = folly::transparent<std::equal_to<folly::StringPiece>>;
+  using M = ConcurrentHashMap<std::string, bool, Hasher, KeyEqual>;
+
+  constexpr auto hello = "hello"_sp;
+  constexpr auto buddy = "buddy"_sp;
+  constexpr auto world = "world"_sp;
+
+  M map;
+  map.emplace(hello, true);
+  map.emplace(world, false);
+
+  auto checks = [hello, buddy](auto& ref) {
+    // find
+    EXPECT_TRUE(ref.end() == ref.find(buddy));
+    EXPECT_EQ(hello, ref.find(hello)->first);
+
+    // at
+    EXPECT_TRUE(ref.at(hello));
+    EXPECT_THROW(ref.at(buddy), std::out_of_range);
+
+    // invocability checks
+    static_assert(
+        !is_detected_v<detector_find, decltype(ref), int>,
+        "there shouldn't be a find() overload for this string map with an int param");
+  };
+
+  checks(map);
+  checks(folly::as_const(map));
+}
+
+TYPED_TEST_P(ConcurrentHashMapTest, HeterogeneousInsert) {
+  using Hasher = folly::transparent<folly::hasher<folly::StringPiece>>;
+  using KeyEqual = folly::transparent<std::equal_to<folly::StringPiece>>;
+  using P = std::pair<StringPiece, std::string>;
+  using CP = std::pair<const StringPiece, std::string>;
+
+  ConcurrentHashMap<std::string, std::string, Hasher, KeyEqual> map;
+  P p{"foo", "hello"};
+  StringPiece foo{"foo"};
+  StringPiece bar{"bar"};
+
+  map.insert("foo", "hello");
+  map.insert(foo, "hello");
+  // TODO(T31574848): the list-initialization below does not work on libstdc++
+  // versions (e.g., GCC < 6) with no implementation of N4387 ("perfect
+  // initialization" for pairs and tuples).
+  //   StringPiece sp{"foo"};
+  //   map.insert({sp, "hello"});
+  map.insert({"foo", "hello"});
+  map.insert(P("foo", "hello"));
+  map.insert(CP("foo", "hello"));
+  map.insert(std::move(p));
+  map.insert_or_assign("foo", "hello");
+  map.insert_or_assign(StringPiece{"foo"}, "hello");
+
+  map.erase(StringPiece{"foo"});
+  map.erase(foo);
+  map.erase("");
+  EXPECT_TRUE(map.empty());
+
+  map.insert("foo", "hello");
+  map.insert("bar", "world");
+  map.erase_if_equal(StringPiece{"foo"}, "hello");
+  map.erase_key_if(bar, [](const std::string& s) { return s == "world"; });
+  map.erase("");
+  EXPECT_TRUE(map.empty());
+
+  map.insert("foo", "baz");
+  EXPECT_TRUE(map.assign(foo, "hello2"));
+  auto mbIt = map.assign_if_equal("foo", "hello2", "hello");
+  EXPECT_TRUE(mbIt);
+  EXPECT_EQ(mbIt.value()->second, "hello");
+  EXPECT_EQ(map[foo], "hello");
+  auto it = map.find(foo);
+  map.erase(it);
+  EXPECT_TRUE(map.empty());
+
+  map.try_emplace(foo);
+  map.try_emplace(foo, "hello");
+  map.try_emplace(StringPiece{"foo"}, "hello");
+  map.try_emplace(foo, "hello");
+  map.try_emplace(foo);
+  map.try_emplace("foo");
+  map.try_emplace("foo", "hello");
+  map.try_emplace("bar", /* count */ 20, 'x');
+  EXPECT_EQ(map[bar], std::string(20, 'x'));
+
+  map.emplace(StringPiece{"foo"}, "hello");
+  map.emplace("foo", "hello");
+
+  // invocability checks
+  static_assert(
+      !is_detected_v<detector_erase, decltype(map), int>,
+      "there shouldn't be an erase() overload for this string map with an int param");
+}
+
 REGISTER_TYPED_TEST_CASE_P(
     ConcurrentHashMapTest,
     MapTest,
@@ -837,6 +992,7 @@ REGISTER_TYPED_TEST_CASE_P(
     MoveTest,
     EmplaceTest,
     MapResizeTest,
+    ReserveTest,
     MapNoCopiesTest,
     MapMovableKeysTest,
     MapUpdateTest,
@@ -858,13 +1014,16 @@ REGISTER_TYPED_TEST_CASE_P(
     EraseStressTest,
     EraseTest,
     ForEachLoop,
+    TryEmplaceEraseStressTest,
     IterateStressTest,
     RefcountTest,
     UpdateStressTest,
     assignStressTest,
     insertStressTest,
     IteratorMove,
-    IteratorLoop);
+    IteratorLoop,
+    HeterogeneousLookup,
+    HeterogeneousInsert);
 
 using folly::detail::concurrenthashmap::bucket::BucketTable;
 
@@ -877,6 +1036,4 @@ typedef ::testing::Types<MapFactory<BucketTable>> MapFactoryTypes;
 #endif
 
 INSTANTIATE_TYPED_TEST_CASE_P(
-    MapFactoryTypesInstantiation,
-    ConcurrentHashMapTest,
-    MapFactoryTypes);
+    MapFactoryTypesInstantiation, ConcurrentHashMapTest, MapFactoryTypes);

@@ -17,6 +17,7 @@
 #pragma once
 
 #include <sys/types.h>
+
 #include <chrono>
 #include <string>
 
@@ -53,12 +54,7 @@ class LogMessage {
       folly::StringPiece functionName,
       folly::StringPiece msg)
       : LogMessage(
-            category,
-            level,
-            filename,
-            lineNumber,
-            functionName,
-            msg.str()) {}
+            category, level, filename, lineNumber, functionName, msg.str()) {}
 
   /**
    * Construct a LogMessage with an explicit timestamp.

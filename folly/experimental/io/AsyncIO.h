@@ -52,6 +52,8 @@ class AsyncIOOp : public AsyncBaseOp {
 
   void toStream(std::ostream& os) const override;
 
+  const iocb& getIocb() const { return iocb_; }
+
  private:
   iocb iocb_;
 };
@@ -74,11 +76,13 @@ class AsyncIO : public AsyncBase {
   AsyncIO& operator=(const AsyncIO&) = delete;
   ~AsyncIO() override;
 
- private:
   void initializeContext() override;
+
+ protected:
   int submitOne(AsyncBase::Op* op) override;
   int submitRange(Range<AsyncBase::Op**> ops) override;
 
+ private:
   Range<AsyncBase::Op**> doWait(
       WaitType type,
       size_t minRequests,

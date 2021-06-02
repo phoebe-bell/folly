@@ -15,17 +15,19 @@
  */
 
 #include <folly/experimental/symbolizer/StackTrace.h>
+#include <folly/tracing/AsyncStack.h>
 
 #include <memory>
 
 #include <folly/CppAttributes.h>
 #include <folly/Portability.h>
 #include <folly/portability/Config.h>
+#include <folly/tracing/AsyncStack.h>
 
 #if FOLLY_HAVE_LIBUNWIND
 // Must be first to ensure that UNW_LOCAL_ONLY is defined
 #define UNW_LOCAL_ONLY 1
-#include <libunwind.h>
+#include <folly/portability/Libunwind.h>
 #endif
 
 #if FOLLY_HAVE_BACKTRACE
@@ -120,7 +122,6 @@ ssize_t getStackTraceInPlace(
 }
 
 #endif // FOLLY_HAVE_LIBUNWIND
-
 } // namespace
 
 ssize_t getStackTraceSafe(
@@ -162,5 +163,142 @@ ssize_t getStackTraceHeap(
   return -1;
 #endif
 }
+
+namespace {
+// Helper struct for manually walking the stack using stack frame pointers
+struct StackFrame {
+  StackFrame* parentFrame;
+  void* returnAddress;
+};
+
+size_t walkNormalStack(
+    uintptr_t* addresses,
+    size_t maxAddresses,
+    StackFrame* normalStackFrame,
+    StackFrame* normalStackFrameStop) {
+  size_t numFrames = 0;
+  while (numFrames < maxAddresses && normalStackFrame != nullptr) {
+    auto* normalStackFrameNext = normalStackFrame->parentFrame;
+    if (normalStackFrameStop != nullptr &&
+        normalStackFrameNext == normalStackFrameStop) {
+      // Reached end of normal stack, need to transition to the async stack.
+      // Do not include the return address in the stack trace that points
+      // to the frame that registered the AsyncStackRoot.
+      // Use the return address from the AsyncStackFrame as the current frame's
+      // return address rather than the return address from the normal
+      // stack frame, which would be the address of the executor function
+      // that invoked the callback.
+      break;
+    }
+    addresses[numFrames++] =
+        reinterpret_cast<std::uintptr_t>(normalStackFrame->returnAddress);
+    normalStackFrame = normalStackFrameNext;
+  }
+  return numFrames;
+}
+
+struct WalkAsyncStackResult {
+  // Number of frames added in this walk
+  size_t numFrames{0};
+  // Normal stack frame to start the next normal stack walk
+  StackFrame* normalStackFrame{nullptr};
+  StackFrame* normalStackFrameStop{nullptr};
+  // Async stack frame to start the next async stack walk after the next
+  // normal stack walk
+  AsyncStackFrame* asyncStackFrame{nullptr};
+};
+
+WalkAsyncStackResult walkAsyncStack(
+    uintptr_t* addresses,
+    size_t maxAddresses,
+    AsyncStackFrame* asyncStackFrame) {
+  WalkAsyncStackResult result;
+  while (result.numFrames < maxAddresses && asyncStackFrame != nullptr) {
+    addresses[result.numFrames++] =
+        reinterpret_cast<std::uintptr_t>(asyncStackFrame->getReturnAddress());
+
+    auto* asyncStackFrameNext = asyncStackFrame->getParentFrame();
+    if (asyncStackFrameNext == nullptr) {
+      // Reached end of async-stack.
+      // Check if there is an AsyncStackRoot and if so, whether there
+      // is an associated stack frame that indicates the normal stack
+      // frame we should continue walking at.
+      const auto* asyncStackRoot = asyncStackFrame->getStackRoot();
+      if (asyncStackRoot == nullptr) {
+        // This is a detached async stack. We are done
+        break;
+      }
+
+      // Get the normal stack frame holding this async root.
+      result.normalStackFrame =
+          reinterpret_cast<StackFrame*>(asyncStackRoot->getStackFramePointer());
+      if (result.normalStackFrame == nullptr) {
+        // No associated normal stack frame for this async stack root.
+        // This means we should treat this as a top-level/detached
+        // stack and not try to walk any further.
+        break;
+      }
+      // Skip to the parent stack-frame pointer
+      result.normalStackFrame = result.normalStackFrame->parentFrame;
+
+      // Check if there is a higher-level AsyncStackRoot that defines
+      // the stop point we should stop walking normal stack frames at.
+      // If there is no higher stack root then we will walk to the
+      // top of the normal stack (normalStackFrameStop == nullptr).
+      // Otherwise we record the frame pointer that we should stop
+      // at and walk normal stack frames until we hit that frame.
+      // Also get the async stack frame where the next async stack walk
+      // should begin after the next normal stack walk finishes.
+      asyncStackRoot = asyncStackRoot->getNextRoot();
+      if (asyncStackRoot != nullptr) {
+        result.normalStackFrameStop = reinterpret_cast<StackFrame*>(
+            asyncStackRoot->getStackFramePointer());
+        result.asyncStackFrame = asyncStackRoot->getTopFrame();
+      }
+    }
+    asyncStackFrame = asyncStackFrameNext;
+  }
+  return result;
+}
+} // namespace
+
+ssize_t getAsyncStackTraceSafe(uintptr_t* addresses, size_t maxAddresses) {
+  size_t numFrames = 0;
+  const auto* asyncStackRoot = tryGetCurrentAsyncStackRoot();
+  if (asyncStackRoot == nullptr) {
+    // No async operation in progress. Return empty stack
+    return numFrames;
+  }
+
+  // Start by walking the normal stack until we get to the frame right before
+  // the frame that holds the async root.
+  auto* normalStackFrame =
+      reinterpret_cast<StackFrame*>(FOLLY_ASYNC_STACK_FRAME_POINTER());
+  auto* normalStackFrameStop =
+      reinterpret_cast<StackFrame*>(asyncStackRoot->getStackFramePointer());
+  if (numFrames < maxAddresses) {
+    addresses[numFrames++] =
+        reinterpret_cast<std::uintptr_t>(FOLLY_ASYNC_STACK_RETURN_ADDRESS());
+  }
+  auto* asyncStackFrame = asyncStackRoot->getTopFrame();
+
+  while (numFrames < maxAddresses &&
+         (normalStackFrame != nullptr || asyncStackFrame != nullptr)) {
+    numFrames += walkNormalStack(
+        addresses + numFrames,
+        maxAddresses - numFrames,
+        normalStackFrame,
+        normalStackFrameStop);
+
+    auto walkAsyncStackResult = walkAsyncStack(
+        addresses + numFrames, maxAddresses - numFrames, asyncStackFrame);
+    numFrames += walkAsyncStackResult.numFrames;
+    normalStackFrame = walkAsyncStackResult.normalStackFrame;
+    normalStackFrameStop = walkAsyncStackResult.normalStackFrameStop;
+    asyncStackFrame = walkAsyncStackResult.asyncStackFrame;
+  }
+  return numFrames;
+}
+
 } // namespace symbolizer
 } // namespace folly

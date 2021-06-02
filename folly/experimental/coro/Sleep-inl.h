@@ -20,6 +20,8 @@
 #include <folly/experimental/coro/Baton.h>
 #include <folly/experimental/coro/CurrentExecutor.h>
 
+#if FOLLY_HAS_COROUTINES
+
 namespace folly {
 namespace coro {
 
@@ -43,7 +45,7 @@ inline Task<void> sleep(Duration d, Timekeeper* tk) {
     co_await baton;
   }
   if (cancelled) {
-    co_yield co_error(OperationCancelled());
+    co_yield co_cancelled;
   }
   co_yield co_result(std::move(result));
 }
@@ -58,3 +60,5 @@ inline Task<void> sleepReturnEarlyOnCancel(Duration d, Timekeeper* tk) {
 
 } // namespace coro
 } // namespace folly
+
+#endif // FOLLY_HAS_COROUTINES

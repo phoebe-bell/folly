@@ -16,18 +16,18 @@
 
 #pragma once
 
-#include <folly/Optional.h>
-#include <folly/io/async/AsyncTimeout.h>
-#include <folly/io/async/DelayedDestruction.h>
-#include <folly/io/async/HHWheelTimer-fwd.h>
-
-#include <boost/intrusive/list.hpp>
-#include <glog/logging.h>
-
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <memory>
+
+#include <boost/intrusive/list.hpp>
+#include <glog/logging.h>
+
+#include <folly/Optional.h>
+#include <folly/io/async/AsyncTimeout.h>
+#include <folly/io/async/DelayedDestruction.h>
+#include <folly/io/async/HHWheelTimer-fwd.h>
 
 namespace folly {
 
@@ -284,9 +284,7 @@ class HHWheelTimerBase : private folly::AsyncTimeout,
   int64_t timeToWheelTicks(Duration t) { return t.count() / interval_.count(); }
 
   bool cascadeTimers(
-      int bucket,
-      int tick,
-      std::chrono::steady_clock::time_point curTime);
+      int bucket, int tick, std::chrono::steady_clock::time_point curTime);
   void scheduleTimeoutInternal(Duration timeout);
 
   int64_t expireTick_;

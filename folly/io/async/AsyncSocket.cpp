@@ -16,6 +16,15 @@
 
 #include <folly/io/async/AsyncSocket.h>
 
+#include <sys/types.h>
+
+#include <cerrno>
+#include <climits>
+#include <sstream>
+#include <thread>
+
+#include <boost/preprocessor/control/if.hpp>
+
 #include <folly/ExceptionWrapper.h>
 #include <folly/Format.h>
 #include <folly/Portability.h>
@@ -30,14 +39,8 @@
 #include <folly/portability/SysUio.h>
 #include <folly/portability/Unistd.h>
 
-#include <boost/preprocessor/control/if.hpp>
-#include <sys/types.h>
-#include <cerrno>
-#include <climits>
-#include <sstream>
-#include <thread>
-
 #if defined(__linux__)
+#include <linux/if_packet.h>
 #include <linux/sockios.h>
 #include <sys/ioctl.h>
 #endif
@@ -73,6 +76,43 @@ static AsyncSocketException const& getSocketShutdownForWritesEx() {
       AsyncSocketException::END_OF_FILE, "socket shutdown for writes");
   return ex;
 }
+
+namespace {
+#if FOLLY_HAVE_SO_TIMESTAMPING
+const sock_extended_err* FOLLY_NULLABLE
+cmsgToSockExtendedErr(const cmsghdr& cmsg) {
+  if ((cmsg.cmsg_level == SOL_IP && cmsg.cmsg_type == IP_RECVERR) ||
+      (cmsg.cmsg_level == SOL_IPV6 && cmsg.cmsg_type == IPV6_RECVERR) ||
+      (cmsg.cmsg_level == SOL_PACKET &&
+       cmsg.cmsg_type == PACKET_TX_TIMESTAMP)) {
+    return reinterpret_cast<const sock_extended_err*>(CMSG_DATA(&cmsg));
+  }
+  (void)cmsg;
+  return nullptr;
+}
+
+const sock_extended_err* FOLLY_NULLABLE
+cmsgToSockExtendedErrTimestamping(const cmsghdr& cmsg) {
+  const auto serr = cmsgToSockExtendedErr(cmsg);
+  if (serr && serr->ee_errno == ENOMSG &&
+      serr->ee_origin == SO_EE_ORIGIN_TIMESTAMPING) {
+    return serr;
+  }
+  (void)cmsg;
+  return nullptr;
+}
+
+const scm_timestamping* FOLLY_NULLABLE
+cmsgToScmTimestamping(const cmsghdr& cmsg) {
+  if (cmsg.cmsg_level == SOL_SOCKET && cmsg.cmsg_type == SCM_TIMESTAMPING) {
+    return reinterpret_cast<const struct scm_timestamping*>(CMSG_DATA(&cmsg));
+  }
+  (void)cmsg;
+  return nullptr;
+}
+
+#endif // FOLLY_HAVE_SO_TIMESTAMPING
+} // namespace
 
 // TODO: It might help performance to provide a version of BytesWriteRequest
 // that users could derive from, so we can avoid the extra allocation for each
@@ -247,8 +287,7 @@ class AsyncSocket::BytesWriteRequest : public AsyncSocket::WriteRequest {
 };
 
 int AsyncSocket::SendMsgParamsCallback::getDefaultFlags(
-    folly::WriteFlags flags,
-    bool zeroCopyEnabled) noexcept {
+    folly::WriteFlags flags, bool zeroCopyEnabled) noexcept {
   int msg_flags = MSG_DONTWAIT;
 
 #ifdef MSG_NOSIGNAL // Linux-only
@@ -274,14 +313,197 @@ int AsyncSocket::SendMsgParamsCallback::getDefaultFlags(
   return msg_flags;
 }
 
+void AsyncSocket::SendMsgParamsCallback::getAncillaryData(
+    folly::WriteFlags flags,
+    void* data,
+    const bool byteEventsEnabled) noexcept {
+  auto ancillaryDataSize = getAncillaryDataSize(flags, byteEventsEnabled);
+  if (!ancillaryDataSize) {
+    return;
+  }
+#if FOLLY_HAVE_SO_TIMESTAMPING
+  CHECK_NOTNULL(data);
+  // this function only handles ancillary data for timestamping
+  //
+  // if getAncillaryDataSize() is overridden and returning a size different
+  // than what we expect, then this function needs to be overridden too, in
+  // order to avoid conflict with how cmsg / msg are written
+  CHECK_EQ(CMSG_LEN(sizeof(uint32_t)), ancillaryDataSize);
+
+  uint32_t sofFlags = 0;
+  if (byteEventsEnabled && isSet(flags, WriteFlags::TIMESTAMP_TX)) {
+    sofFlags = sofFlags | folly::netops::SOF_TIMESTAMPING_TX_SOFTWARE;
+  }
+  if (byteEventsEnabled && isSet(flags, WriteFlags::TIMESTAMP_ACK)) {
+    sofFlags = sofFlags | folly::netops::SOF_TIMESTAMPING_TX_ACK;
+  }
+  if (byteEventsEnabled && isSet(flags, WriteFlags::TIMESTAMP_SCHED)) {
+    sofFlags = sofFlags | folly::netops::SOF_TIMESTAMPING_TX_SCHED;
+  }
+
+  msghdr msg;
+  msg.msg_control = data;
+  msg.msg_controllen = ancillaryDataSize;
+  struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
+  CHECK_NOTNULL(cmsg);
+  cmsg->cmsg_level = SOL_SOCKET;
+  cmsg->cmsg_type = SO_TIMESTAMPING;
+  cmsg->cmsg_len = CMSG_LEN(sizeof(uint32_t));
+  memcpy(CMSG_DATA(cmsg), &sofFlags, sizeof(sofFlags));
+#else
+  (void)data;
+#endif // FOLLY_HAVE_SO_TIMESTAMPING
+  return;
+}
+
+uint32_t AsyncSocket::SendMsgParamsCallback::getAncillaryDataSize(
+    folly::WriteFlags flags, const bool byteEventsEnabled) noexcept {
+#ifdef FOLLY_HAVE_MSG_ERRQUEUE
+  if (WriteFlags::NONE != (flags & kWriteFlagsForTimestamping) &&
+      byteEventsEnabled) {
+    return CMSG_LEN(sizeof(uint32_t));
+  }
+#else
+  (void)flags;
+  (void)byteEventsEnabled;
+#endif
+  return 0;
+}
+
+folly::Optional<AsyncSocket::ByteEvent>
+AsyncSocket::ByteEventHelper::processCmsg(
+    const cmsghdr& cmsg, const size_t rawBytesWritten) {
+#if FOLLY_HAVE_SO_TIMESTAMPING
+  if (!byteEventsEnabled || maybeEx.has_value()) {
+    return folly::none;
+  }
+  if (!maybeTsState_.has_value()) {
+    maybeTsState_ = TimestampState();
+  }
+  auto& state = maybeTsState_.value();
+  if (auto serrTs = cmsgToSockExtendedErrTimestamping(cmsg)) {
+    if (state.serrReceived) {
+      // already have this part of the message pending
+      throw Exception("already have serr event");
+    }
+    state.serrReceived = true;
+    state.typeRaw = serrTs->ee_info;
+    state.byteOffsetKernel = serrTs->ee_data;
+  } else if (auto scmTs = cmsgToScmTimestamping(cmsg)) {
+    if (state.scmTsReceived) {
+      throw Exception("already have scmTs event");
+    }
+    state.scmTsReceived = true;
+
+    auto timespecToDuration =
+        [](const timespec& ts) -> folly::Optional<std::chrono::nanoseconds> {
+      std::chrono::nanoseconds duration = std::chrono::seconds(ts.tv_sec) +
+          std::chrono::nanoseconds(ts.tv_nsec);
+      if (duration == duration.zero()) {
+        return folly::none;
+      }
+      return duration;
+    };
+    // ts[0] -> software timestamp
+    // ts[1] -> hardware timestamp transformed to userspace time (deprecated)
+    // ts[2] -> hardware timestamp
+    state.maybeSoftwareTs = timespecToDuration(scmTs->ts[0]);
+    state.maybeHardwareTs = timespecToDuration(scmTs->ts[2]);
+  }
+
+  // if we have both components needed for a complete timestamp, build it
+  if (state.serrReceived && state.scmTsReceived) {
+    // cleanup state so that we're ready for next timestamp
+    TimestampState completeState = state;
+    maybeTsState_ = folly::none;
+
+    // map the type
+    folly::Optional<ByteEvent::Type> tsType;
+    switch (completeState.typeRaw) {
+      case folly::netops::SCM_TSTAMP_SND: {
+        tsType = ByteEvent::Type::TX;
+        break;
+      }
+      case folly::netops::SCM_TSTAMP_ACK: {
+        tsType = ByteEvent::Type::ACK;
+        break;
+      }
+      case folly::netops::SCM_TSTAMP_SCHED: {
+        tsType = ByteEvent::Type::SCHED;
+        break;
+      }
+      default:
+        break; // unknown, maybe something new
+    }
+    if (!tsType) {
+      // it's a timestamp, but not one that we're set up to handle
+      // we've cleared our state, loop back around
+      return folly::none;
+    }
+
+    // Calculate the byte offset.
+    //
+    // See documentation for SOF_TIMESTAMPING_OPT_ID for details.
+    //
+    // In summary, two things we have to consider:
+    //
+    //   (1) The byte stream offset is relative:
+    //       Socket timestamps include the byte stream offset for which the
+    //       timestamp applies. There may have been bytes transferred before the
+    //       fd was controlled by AsyncSocket. As a result, we don't know the
+    //       socket byte stream offset when we enable timestamping.
+    //
+    //       To get around this, we set SOF_TIMESTAMPING_OPT_ID when we enable
+    //       timestamping via setsockopt. This flag causes the kernel to reset
+    //       the offset it uses for timestamps to 0. This allows us to determine
+    //       an offset relative to the number of bytes that had been written to
+    //       the socket since timestamps were enabled.
+    //
+    //       Note that offsets begin at zero; if only a single byte is written
+    //       after timestamping is enabled, the offset included in the kernel
+    //       cmsg will be 0.
+    //
+    //   (2) The byte stream offset is a uint32_t:
+    //       Because the kernel uses a uint32_t to store and communicate the
+    //       byte stream offset, the offset will wrap every ~4GB. When we get a
+    //       timestamp, we need to figure out which byte it is for. We assume
+    //       that there will never be more than ~4GB of bytes sent between us
+    //       requesting timestamping for a byte and receiving the timestamp;
+    //       this is a realistic assumption given CWND and TCP buffer sizes. We
+    //       then calculate assuming that the counter has not wrapped since we
+    //       sent the byte that we are getting the timestamp for. If the counter
+    //       has wrapped, we detect it, and go back one position.
+    const uint64_t bytesPerOffsetWrap =
+        static_cast<uint64_t>(std::numeric_limits<uint32_t>::max()) + 1;
+    size_t byteOffset = rawBytesWritten -
+        (rawBytesWritten % bytesPerOffsetWrap) +
+        completeState.byteOffsetKernel + rawBytesWrittenWhenByteEventsEnabled;
+    if (byteOffset > rawBytesWritten) {
+      // kernel's uint32_t var wrapped around; go back one wrap
+      CHECK_GE(byteOffset, bytesPerOffsetWrap);
+      byteOffset = byteOffset - bytesPerOffsetWrap;
+    }
+
+    ByteEvent event = {};
+    event.type = tsType.value();
+    event.offset = byteOffset;
+    event.maybeSoftwareTs = state.maybeSoftwareTs;
+    event.maybeHardwareTs = state.maybeHardwareTs;
+    return event;
+  }
+#else
+  (void)cmsg;
+  (void)rawBytesWritten;
+#endif // FOLLY_HAVE_SO_TIMESTAMPING
+  return folly::none;
+}
+
 namespace {
 AsyncSocket::SendMsgParamsCallback defaultSendMsgParamsCallback;
 
 // Based on flags, signal the transparent handler to disable certain functions
 void disableTransparentFunctions(
-    NetworkSocket fd,
-    bool noTransparentTls,
-    bool noTSocks) {
+    NetworkSocket fd, bool noTransparentTls, bool noTSocks) {
   (void)fd;
   (void)noTransparentTls;
   (void)noTSocks;
@@ -343,7 +565,8 @@ AsyncSocket::AsyncSocket(
 AsyncSocket::AsyncSocket(
     EventBase* evb,
     NetworkSocket fd,
-    uint32_t zeroCopyBufId)
+    uint32_t zeroCopyBufId,
+    const SocketAddress* peerAddress)
     : zeroCopyBufId_(zeroCopyBufId),
       eventBase_(evb),
       writeTimeout_(this, evb),
@@ -356,13 +579,20 @@ AsyncSocket::AsyncSocket(
   disableTransparentFunctions(fd_, noTransparentTls_, noTSocks_);
   setCloseOnExec();
   state_ = StateEnum::ESTABLISHED;
+  if (peerAddress) {
+    addr_ = *peerAddress;
+  }
 }
 
 AsyncSocket::AsyncSocket(AsyncSocket* oldAsyncSocket)
     : AsyncSocket(
           oldAsyncSocket->getEventBase(),
           oldAsyncSocket->detachNetworkSocket(),
-          oldAsyncSocket->getZeroCopyBufId()) {
+          oldAsyncSocket->getZeroCopyBufId(),
+          &oldAsyncSocket->addr_) {
+  appBytesWritten_ = oldAsyncSocket->appBytesWritten_;
+  rawBytesWritten_ = oldAsyncSocket->rawBytesWritten_;
+  byteEventHelper_ = std::move(oldAsyncSocket->byteEventHelper_);
   preReceivedData_ = std::move(oldAsyncSocket->preReceivedData_);
 
   // inform lifecycle observers to give them an opportunity to unsubscribe from
@@ -393,12 +623,14 @@ void AsyncSocket::init() {
   maxReadsPerEvent_ = 16;
   connectCallback_ = nullptr;
   errMessageCallback_ = nullptr;
+  readAncillaryDataCallback_ = nullptr;
   readCallback_ = nullptr;
   writeReqHead_ = nullptr;
   writeReqTail_ = nullptr;
   wShutdownSocketSet_.reset();
   appBytesWritten_ = 0;
   appBytesReceived_ = 0;
+  rawBytesWritten_ = 0;
   totalAppBytesScheduledForWrite_ = 0;
   sendMsgParamCallback_ = &defaultSendMsgParamsCallback;
 }
@@ -475,7 +707,7 @@ void AsyncSocket::setShutdownSocketSet(
 }
 
 void AsyncSocket::setCloseOnExec() {
-  int rv = netops::set_socket_close_on_exec(fd_);
+  int rv = netops_->set_socket_close_on_exec(fd_);
   if (rv != 0) {
     auto errnoCopy = errno;
     throw AsyncSocketException(
@@ -490,7 +722,8 @@ void AsyncSocket::connect(
     const folly::SocketAddress& address,
     int timeout,
     const SocketOptionMap& options,
-    const folly::SocketAddress& bindAddr) noexcept {
+    const folly::SocketAddress& bindAddr,
+    const std::string& ifName) noexcept {
   DestructorGuard dg(this);
   eventBase_->dcheckIsInEventBaseThread();
 
@@ -519,7 +752,7 @@ void AsyncSocket::connect(
     // constant (PF_xxx) rather than an address family (AF_xxx), but the
     // distinction is mainly just historical.  In pretty much all
     // implementations the PF_foo and AF_foo constants are identical.
-    fd_ = netops::socket(address.getFamily(), SOCK_STREAM, 0);
+    fd_ = netops_->socket(address.getFamily(), SOCK_STREAM, 0);
     if (fd_ == NetworkSocket()) {
       auto errnoCopy = errno;
       throw AsyncSocketException(
@@ -536,7 +769,7 @@ void AsyncSocket::connect(
     setCloseOnExec();
 
     // Put the socket in non-blocking mode
-    int rv = netops::set_socket_non_blocking(fd_);
+    int rv = netops_->set_socket_non_blocking(fd_);
     if (rv == -1) {
       auto errnoCopy = errno;
       throw AsyncSocketException(
@@ -573,10 +806,30 @@ void AsyncSocket::connect(
     VLOG(5) << "AsyncSocket::connect(this=" << this << ", evb=" << eventBase_
             << ", fd=" << fd_ << ", host=" << address.describe().c_str();
 
+    // bind the socket to the interface
+#if defined(__linux__)
+    if (!ifName.empty() &&
+        netops_->setsockopt(
+            fd_,
+            SOL_SOCKET,
+            SO_BINDTODEVICE,
+            ifName.c_str(),
+            ifName.length())) {
+      auto errnoCopy = errno;
+      doClose();
+      throw AsyncSocketException(
+          AsyncSocketException::NOT_OPEN,
+          "failed to bind to device: " + ifName,
+          errnoCopy);
+    }
+#else
+    (void)ifName;
+#endif
+
     // bind the socket
     if (bindAddr != anyAddress()) {
       int one = 1;
-      if (netops::setsockopt(
+      if (netops_->setsockopt(
               fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one))) {
         auto errnoCopy = errno;
         doClose();
@@ -588,7 +841,7 @@ void AsyncSocket::connect(
 
       bindAddr.getAddress(&addrStorage);
 
-      if (netops::bind(fd_, saddr, bindAddr.getActualSize()) != 0) {
+      if (netops_->bind(fd_, saddr, bindAddr.getActualSize()) != 0) {
         auto errnoCopy = errno;
         doClose();
         throw AsyncSocketException(
@@ -638,6 +891,7 @@ void AsyncSocket::connect(
   // yet, so we don't have to register for any events at the moment.
   VLOG(8) << "AsyncSocket::connect succeeded immediately; this=" << this;
   assert(errMessageCallback_ == nullptr);
+  assert(readAncillaryDataCallback_ == nullptr);
   assert(readCallback_ == nullptr);
   assert(writeReqHead_ == nullptr);
   if (state_ != StateEnum::FAST_OPEN) {
@@ -647,7 +901,7 @@ void AsyncSocket::connect(
 }
 
 int AsyncSocket::socketConnect(const struct sockaddr* saddr, socklen_t len) {
-  int rv = netops::connect(fd_, saddr, len);
+  int rv = netops_->connect(fd_, saddr, len);
   if (rv < 0) {
     auto errnoCopy = errno;
     if (errnoCopy == EINPROGRESS) {
@@ -806,6 +1060,19 @@ AsyncSocket::ErrMessageCallback* AsyncSocket::getErrMessageCallback() const {
   return errMessageCallback_;
 }
 
+void AsyncSocket::setReadAncillaryDataCB(ReadAncillaryDataCallback* callback) {
+  VLOG(6) << "AsyncSocket::setReadAncillaryDataCB() this=" << this
+          << ", fd=" << fd_ << ", callback=" << callback
+          << ", state=" << state_;
+
+  readAncillaryDataCallback_ = callback;
+}
+
+AsyncSocket::ReadAncillaryDataCallback*
+AsyncSocket::getReadAncillaryDataCallback() const {
+  return readAncillaryDataCallback_;
+}
+
 void AsyncSocket::setSendMsgParamCB(SendMsgParamsCallback* callback) {
   sendMsgParamCallback_ = callback;
 }
@@ -914,9 +1181,14 @@ bool AsyncSocket::setZeroCopy(bool enable) {
       return false;
     }
 
+    // No-op, bail out early
+    if (enable == zeroCopyEnabled_) {
+      return true;
+    }
+
     int val = enable ? 1 : 0;
     int ret =
-        netops::setsockopt(fd_, SOL_SOCKET, SO_ZEROCOPY, &val, sizeof(val));
+        netops_->setsockopt(fd_, SOL_SOCKET, SO_ZEROCOPY, &val, sizeof(val));
 
     // if enable == false, set zeroCopyEnabled_ = false regardless
     // if SO_ZEROCOPY is set or not
@@ -931,7 +1203,7 @@ bool AsyncSocket::setZeroCopy(bool enable) {
     if (ret) {
       val = 0;
       socklen_t optlen = sizeof(val);
-      ret = netops::getsockopt(fd_, SOL_SOCKET, SO_ZEROCOPY, &val, &optlen);
+      ret = netops_->getsockopt(fd_, SOL_SOCKET, SO_ZEROCOPY, &val, &optlen);
 
       if (!ret) {
         enable = val != 0;
@@ -976,8 +1248,7 @@ void AsyncSocket::adjustZeroCopyFlags(folly::WriteFlags& flags) {
 }
 
 void AsyncSocket::addZeroCopyBuf(
-    std::unique_ptr<folly::IOBuf>&& buf,
-    ReleaseIOBufCallback* cb) {
+    std::unique_ptr<folly::IOBuf>&& buf, ReleaseIOBufCallback* cb) {
   uint32_t id = getNextZeroCopyBufId();
   folly::IOBuf* ptr = buf.get();
 
@@ -1013,8 +1284,7 @@ void AsyncSocket::releaseZeroCopyBuf(uint32_t id) {
 }
 
 void AsyncSocket::setZeroCopyBuf(
-    std::unique_ptr<folly::IOBuf>&& buf,
-    ReleaseIOBufCallback* cb) {
+    std::unique_ptr<folly::IOBuf>&& buf, ReleaseIOBufCallback* cb) {
   folly::IOBuf* ptr = buf.get();
   auto& p = idZeroCopyBufInfoMap_[ptr];
   CHECK(p.buf_.get() == nullptr);
@@ -1063,11 +1333,116 @@ void AsyncSocket::processZeroCopyMsg(const cmsghdr& cmsg) {
 #endif
 }
 
+void AsyncSocket::enableByteEvents() {
+  if (!byteEventHelper_) {
+    byteEventHelper_ = std::make_unique<ByteEventHelper>();
+  }
+
+  if (byteEventHelper_->byteEventsEnabled ||
+      byteEventHelper_->maybeEx.has_value()) {
+    return;
+  }
+
+  try {
+#if FOLLY_HAVE_SO_TIMESTAMPING
+    // make sure we have a connected IP socket that supports error queues
+    // (Unix sockets do not support error queues)
+    if (NetworkSocket() == fd_ || !good()) {
+      throw AsyncSocketException(
+          AsyncSocketException::INVALID_STATE,
+          withAddr("failed to enable byte events: "
+                   "socket is not open or not in a good state"));
+    }
+    folly::SocketAddress addr = {};
+    try {
+      // explicitly fetch local address (instead of using cache)
+      // to ensure socket is currently healthy
+      addr.setFromLocalAddress(fd_);
+    } catch (const std::system_error&) {
+      throw AsyncSocketException(
+          AsyncSocketException::INVALID_STATE,
+          withAddr("failed to enable byte events: "
+                   "socket is not open or not in a good state"));
+    }
+    const auto family = addr.getFamily();
+    if (family != AF_INET && family != AF_INET6) {
+      throw AsyncSocketException(
+          AsyncSocketException::NOT_SUPPORTED,
+          withAddr("failed to enable byte events: socket type not supported"));
+    }
+
+    // check if timestamping is already enabled on the socket by another source
+    {
+      uint32_t flags = 0;
+      socklen_t len = sizeof(flags);
+      const auto ret =
+          getSockOptVirtual(SOL_SOCKET, SO_TIMESTAMPING, &flags, &len);
+      int getSockOptErrno = errno;
+      if (0 != ret) {
+        throw AsyncSocketException(
+            AsyncSocketException::INTERNAL_ERROR,
+            withAddr("failed to enable byte events: "
+                     "timestamps may not be supported for this socket type "
+                     "or socket be closed"),
+            getSockOptErrno);
+      }
+      if (0 != flags) {
+        throw AsyncSocketException(
+            AsyncSocketException::INTERNAL_ERROR,
+            withAddr("failed to enable byte events: "
+                     "timestamps may have already been enabled"),
+            getSockOptErrno);
+      }
+    }
+
+    // enable control messages for software and hardware timestamps
+    // WriteFlags will determine which messages are generated
+    //
+    // SOF_TIMESTAMPING_OPT_ID: see discussion in ByteEventHelper::processCmsg
+    // SOF_TIMESTAMPING_OPT_TSONLY: only get timestamps, not original packet
+    // SOF_TIMESTAMPING_SOFTWARE: get software timestamps if generated
+    // SOF_TIMESTAMPING_RAW_HARDWARE: get hardware timestamps if generated
+    // SOF_TIMESTAMPING_OPT_TX_SWHW: get both sw + hw timestamps if generated
+    const uint32_t flags =
+        (folly::netops::SOF_TIMESTAMPING_OPT_ID |
+         folly::netops::SOF_TIMESTAMPING_OPT_TSONLY |
+         folly::netops::SOF_TIMESTAMPING_SOFTWARE |
+         folly::netops::SOF_TIMESTAMPING_RAW_HARDWARE |
+         folly::netops::SOF_TIMESTAMPING_OPT_TX_SWHW);
+    socklen_t len = sizeof(flags);
+    const auto ret =
+        setSockOptVirtual(SOL_SOCKET, SO_TIMESTAMPING, &flags, len);
+    int setSockOptErrno = errno;
+    if (ret == 0) {
+      byteEventHelper_->byteEventsEnabled = true;
+      byteEventHelper_->rawBytesWrittenWhenByteEventsEnabled =
+          getRawBytesWritten();
+      for (const auto& observer : lifecycleObservers_) {
+        if (observer->getConfig().byteEvents) {
+          observer->byteEventsEnabled(this);
+        }
+      }
+      return;
+    }
+
+    // failed
+    throw AsyncSocketException(
+        AsyncSocketException::INTERNAL_ERROR,
+        withAddr("failed to enable byte events: setsockopt failed"),
+        setSockOptErrno);
+#endif // FOLLY_HAVE_SO_TIMESTAMPING
+    // unsupported by platform
+    throw AsyncSocketException(
+        AsyncSocketException::NOT_SUPPORTED,
+        withAddr("failed to enable byte events: platform not supported"));
+
+  } catch (const AsyncSocketException& ex) {
+    failByteEvents(ex);
+  }
+}
+
 void AsyncSocket::write(
-    WriteCallback* callback,
-    const void* buf,
-    size_t bytes,
-    WriteFlags flags) {
+    WriteCallback* callback, const void* buf, size_t bytes, WriteFlags flags) {
   iovec op;
   op.iov_base = const_cast<void*>(buf);
   op.iov_len = bytes;
@@ -1075,10 +1450,7 @@ void AsyncSocket::write(
 }
 
 void AsyncSocket::writev(
-    WriteCallback* callback,
-    const iovec* vec,
-    size_t count,
-    WriteFlags flags) {
+    WriteCallback* callback, const iovec* vec, size_t count, WriteFlags flags) {
   size_t totalBytes = 0;
   for (size_t i = 0; i < count; ++i) {
     totalBytes += vec[i].iov_len;
@@ -1087,9 +1459,7 @@ void AsyncSocket::writev(
 }
 
 void AsyncSocket::writeChain(
-    WriteCallback* callback,
-    unique_ptr<IOBuf>&& buf,
-    WriteFlags flags) {
+    WriteCallback* callback, unique_ptr<IOBuf>&& buf, WriteFlags flags) {
   adjustZeroCopyFlags(flags);
 
   // adjustZeroCopyFlags can set zeroCopyEnabled_ to true
@@ -1487,7 +1857,7 @@ void AsyncSocket::shutdownWriteNow() {
       }
 
       // Shutdown writes on the file descriptor
-      netops::shutdown(fd_, SHUT_WR);
+      netops_->shutdown(fd_, SHUT_WR);
 
       // Immediately fail all write requests
       failAllWrites(getSocketShutdownForWritesEx());
@@ -1541,7 +1911,7 @@ bool AsyncSocket::readable() const {
   fds[0].fd = fd_;
   fds[0].events = POLLIN;
   fds[0].revents = 0;
-  int rc = netops::poll(fds, 1, 0);
+  int rc = netops_->poll(fds, 1, 0);
   return rc == 1;
 }
 
@@ -1553,7 +1923,7 @@ bool AsyncSocket::writable() const {
   fds[0].fd = fd_;
   fds[0].events = POLLOUT;
   fds[0].revents = 0;
-  int rc = netops::poll(fds, 1, 0);
+  int rc = netops_->poll(fds, 1, 0);
   return rc == 1;
 }
 
@@ -1572,7 +1942,7 @@ bool AsyncSocket::hangup() const {
   fds[0].fd = fd_;
   fds[0].events = POLLRDHUP | POLLHUP;
   fds[0].revents = 0;
-  netops::poll(fds, 1, 0);
+  netops_->poll(fds, 1, 0);
   return (fds[0].revents & (POLLRDHUP | POLLHUP)) != 0;
 #else
   return false;
@@ -1671,8 +2041,7 @@ void AsyncSocket::cachePeerAddress() const {
 }
 
 void AsyncSocket::applyOptions(
-    const SocketOptionMap& options,
-    SocketOptionKey::ApplyPos pos) {
+    const SocketOptionMap& options, SocketOptionKey::ApplyPos pos) {
   auto result = applySocketOptions(fd_, options, pos);
   if (result != 0) {
     throw AsyncSocketException(
@@ -1709,7 +2078,7 @@ int AsyncSocket::setNoDelay(bool noDelay) {
   }
 
   int value = noDelay ? 1 : 0;
-  if (netops::setsockopt(
+  if (netops_->setsockopt(
           fd_, IPPROTO_TCP, TCP_NODELAY, &value, sizeof(value)) != 0) {
     int errnoCopy = errno;
     VLOG(2) << "failed to update TCP_NODELAY option on AsyncSocket " << this
@@ -1732,7 +2101,7 @@ int AsyncSocket::setCongestionFlavor(const std::string& cname) {
     return EINVAL;
   }
 
-  if (netops::setsockopt(
+  if (netops_->setsockopt(
           fd_,
           IPPROTO_TCP,
           TCP_CONGESTION,
@@ -1758,7 +2127,7 @@ int AsyncSocket::setQuickAck(bool quickack) {
 
 #ifdef TCP_QUICKACK // Linux-only
   int value = quickack ? 1 : 0;
-  if (netops::setsockopt(
+  if (netops_->setsockopt(
           fd_, IPPROTO_TCP, TCP_QUICKACK, &value, sizeof(value)) != 0) {
     int errnoCopy = errno;
     VLOG(2) << "failed to update TCP_QUICKACK option on AsyncSocket" << this
@@ -1780,7 +2149,7 @@ int AsyncSocket::setSendBufSize(size_t bufsize) {
     return EINVAL;
   }
 
-  if (netops::setsockopt(
+  if (netops_->setsockopt(
           fd_, SOL_SOCKET, SO_SNDBUF, &bufsize, sizeof(bufsize)) != 0) {
     int errnoCopy = errno;
     VLOG(2) << "failed to update SO_SNDBUF option on AsyncSocket" << this
@@ -1799,7 +2168,7 @@ int AsyncSocket::setRecvBufSize(size_t bufsize) {
     return EINVAL;
   }
 
-  if (netops::setsockopt(
+  if (netops_->setsockopt(
           fd_, SOL_SOCKET, SO_RCVBUF, &bufsize, sizeof(bufsize)) != 0) {
     int errnoCopy = errno;
     VLOG(2) << "failed to update SO_RCVBUF option on AsyncSocket" << this
@@ -1866,7 +2235,7 @@ int AsyncSocket::setTCPProfile(int profd) {
     return EINVAL;
   }
 
-  if (netops::setsockopt(
+  if (netops_->setsockopt(
           fd_, SOL_SOCKET, SO_SET_NAMESPACE, &profd, sizeof(int)) != 0) {
     int errnoCopy = errno;
     VLOG(2) << "failed to set socket namespace option on AsyncSocket" << this
@@ -1928,28 +2297,84 @@ void AsyncSocket::ioReady(uint16_t events) noexcept {
   }
 }
 
-AsyncSocket::ReadResult
-AsyncSocket::performRead(void** buf, size_t* buflen, size_t* /* offset */) {
-  VLOG(5) << "AsyncSocket::performRead() this=" << this << ", buf=" << *buf
-          << ", buflen=" << *buflen;
+AsyncSocket::ReadResult AsyncSocket::performRead(
+    void** buf, size_t* buflen, size_t* /* offset */) {
+  struct iovec iov;
+
+  // Data buffer pointer and length
+  iov.iov_base = *buf;
+  iov.iov_len = *buflen;
+
+  return performReadInternal(&iov, 1);
+}
+
+AsyncSocket::ReadResult AsyncSocket::performReadv(
+    struct iovec* iovs, size_t num) {
+  return performReadInternal(iovs, num);
+}
+
+AsyncSocket::ReadResult AsyncSocket::performReadInternal(
+    struct iovec* iovs, size_t num) {
+  VLOG(5) << "AsyncSocket::performReadInternal() this=" << this
+          << ", iovs=" << iovs << ", num=" << num;
+
+  if (!num) {
+    return ReadResult(READ_ERROR);
+  }
 
   if (preReceivedData_ && !preReceivedData_->empty()) {
-    VLOG(5) << "AsyncSocket::performRead() this=" << this
+    VLOG(5) << "AsyncSocket::performReadInternal() this=" << this
             << ", reading pre-received data";
 
-    io::Cursor cursor(preReceivedData_.get());
-    auto len = cursor.pullAtMost(*buf, *buflen);
+    ssize_t len = 0;
+    for (size_t i = 0; (i < num) && (!preReceivedData_->empty()); ++i) {
+      io::Cursor cursor(preReceivedData_.get());
+      auto ret = cursor.pullAtMost(iovs[i].iov_base, iovs[i].iov_len);
+      len += ret;
 
-    IOBufQueue queue;
-    queue.append(std::move(preReceivedData_));
-    queue.trimStart(len);
-    preReceivedData_ = queue.move();
+      IOBufQueue queue;
+      queue.append(std::move(preReceivedData_));
+      queue.trimStart(ret);
+      preReceivedData_ = queue.move();
+    }
 
     appBytesReceived_ += len;
     return ReadResult(len);
   }
 
-  ssize_t bytes = netops::recv(fd_, *buf, *buflen, MSG_DONTWAIT);
+  ssize_t bytes = 0;
+
+  struct msghdr msg;
+
+  if (readAncillaryDataCallback_ == nullptr && num == 1) {
+    bytes = netops_->recv(fd_, iovs[0].iov_base, iovs[0].iov_len, MSG_DONTWAIT);
+  } else {
+    if (readAncillaryDataCallback_) {
+      // Ancillary data buffer and length
+      msg.msg_control =
+          readAncillaryDataCallback_->getAncillaryDataCtrlBuffer().data();
+      msg.msg_controllen =
+          readAncillaryDataCallback_->getAncillaryDataCtrlBuffer().size();
+    } else {
+      msg.msg_control = nullptr;
+      msg.msg_controllen = 0;
+    }
+
+    // Dest address info
+    msg.msg_name = nullptr;
+    msg.msg_namelen = 0;
+
+    // Array of data buffers (scatter/gather)
+    msg.msg_iov = iovs;
+    msg.msg_iovlen = num;
+
+    bytes = netops::recvmsg(fd_, &msg, 0);
+  }
+
+  if (readAncillaryDataCallback_ && (bytes > 0)) {
+    readAncillaryDataCallback_->ancillaryData(msg);
+  }
+
   if (bytes < 0) {
     if (errno == EAGAIN || errno == EWOULDBLOCK) {
       // No more data to read right now.
@@ -1964,9 +2389,15 @@ AsyncSocket::performRead(void** buf, size_t* buflen, size_t* /* offset */) {
 }
 
 void AsyncSocket::prepareReadBuffer(void** buf, size_t* buflen) {
-  // no matter what, buffer should be preapared for non-ssl socket
+  // no matter what, buffer should be prepared for non-ssl socket
   CHECK(readCallback_);
   readCallback_->getReadBuffer(buf, buflen);
+}
+
+size_t AsyncSocket::prepareReadBuffers(struct iovec* iovs, size_t num) {
+  // no matter what, buffers should be prepared for non-ssl socket
+  CHECK(readCallback_);
+  return readCallback_->getReadBuffers(iovs, num);
 }
 
 size_t AsyncSocket::handleErrMessages() noexcept {
@@ -1974,9 +2405,11 @@ size_t AsyncSocket::handleErrMessages() noexcept {
   // supporting per-socket error queues.
   VLOG(5) << "AsyncSocket::handleErrMessages() this=" << this << ", fd=" << fd_
           << ", state=" << state_;
-  if (errMessageCallback_ == nullptr && idZeroCopyBufPtrMap_.empty()) {
+  if (errMessageCallback_ == nullptr && idZeroCopyBufPtrMap_.empty() &&
+      (!byteEventHelper_ || !byteEventHelper_->byteEventsEnabled)) {
     VLOG(7) << "AsyncSocket::handleErrMessages(): "
-            << "no callback installed - exiting.";
+            << "no err message callback installed and "
+            << "ByteEvents not enabled - exiting.";
     return 0;
   }
 
@@ -2000,7 +2433,7 @@ size_t AsyncSocket::handleErrMessages() noexcept {
   size_t num = 0;
   // the socket may be closed by errMessage callback, so check on each iteration
   while (fd_ != NetworkSocket()) {
-    ret = netops::recvmsg(fd_, &msg, MSG_ERRQUEUE);
+    ret = netops_->recvmsg(fd_, &msg, MSG_ERRQUEUE);
     VLOG(5) << "AsyncSocket::handleErrMessages(): recvmsg returned " << ret;
 
     if (ret < 0) {
@@ -2024,10 +2457,55 @@ size_t AsyncSocket::handleErrMessages() noexcept {
       ++num;
       if (isZeroCopyMsg(*cmsg)) {
         processZeroCopyMsg(*cmsg);
-      } else {
-        if (errMessageCallback_) {
-          errMessageCallback_->errMessage(*cmsg);
+        continue;
+      }
+
+      // try to process it as a ByteEvent and forward to observers
+      //
+      // observers cannot throw and thus we expect only exceptions from
+      // ByteEventHelper, but we guard against other cases for safety
+      if (byteEventHelper_) {
+        try {
+          if (const auto maybeByteEvent =
+                  byteEventHelper_->processCmsg(*cmsg, getRawBytesWritten())) {
+            const auto& byteEvent = maybeByteEvent.value();
+            for (const auto& observer : lifecycleObservers_) {
+              if (observer->getConfig().byteEvents) {
+                observer->byteEvent(this, byteEvent);
+              }
+            }
+          }
+        } catch (const ByteEventHelper::Exception& behEx) {
+          // rewrap the ByteEventHelper::Exception with extra information
+          AsyncSocketException ex(
+              AsyncSocketException::INTERNAL_ERROR,
+              withAddr(
+                  string("AsyncSocket::handleErrMessages(), "
+                         "internal exception during ByteEvent processing: ") +
+                  behEx.what()));
+          failByteEvents(ex);
+        } catch (const std::exception& ex) {
+          AsyncSocketException tex(
+              AsyncSocketException::UNKNOWN,
+              string("AsyncSocket::handleErrMessages(), "
+                     "unhandled exception during ByteEvent processing, "
+                     "threw exception: ") +
+                  ex.what());
+          failByteEvents(tex);
+        } catch (...) {
+          AsyncSocketException tex(
+              AsyncSocketException::UNKNOWN,
+              string("AsyncSocket::handleErrMessages(), "
+                     "unhandled exception during ByteEvent processing, "
+                     "threw non-exception type"));
+          failByteEvents(tex);
         }
+      }
+
+      // even if it is a timestamp, hand it off to the errMessageCallback,
+      // the application may want it as well.
+      if (errMessageCallback_) {
+        errMessageCallback_->errMessage(*cmsg);
       }
     }
   }
@@ -2053,22 +2531,36 @@ void AsyncSocket::addLifecycleObserver(
   if (eventBase_) {
     eventBase_->dcheckIsInEventBaseThread();
   }
-  lifecycleObservers_.push_back(observer);
+
+  // adding the same observer multiple times is not allowed
+  auto& observers = lifecycleObservers_;
+  CHECK(
+      std::find(observers.begin(), observers.end(), observer) ==
+      observers.end());
+
+  observers.push_back(observer);
   observer->observerAttach(this);
+  if (observer->getConfig().byteEvents) {
+    if (byteEventHelper_ && byteEventHelper_->maybeEx.has_value()) {
+      observer->byteEventsUnavailable(this, *byteEventHelper_->maybeEx);
+    } else if (byteEventHelper_ && byteEventHelper_->byteEventsEnabled) {
+      observer->byteEventsEnabled(this);
+    } else if (state_ == StateEnum::ESTABLISHED) {
+      enableByteEvents(); // try to enable now
+    }
+    // do nothing right now; wait until we're connected
+  }
 }
 
 bool AsyncSocket::removeLifecycleObserver(
     AsyncTransport::LifecycleObserver* observer) {
-  const auto eraseIt = std::remove(
-      lifecycleObservers_.begin(), lifecycleObservers_.end(), observer);
-  if (eraseIt == lifecycleObservers_.end()) {
+  auto& observers = lifecycleObservers_;
+  auto it = std::find(observers.begin(), observers.end(), observer);
+  if (it == observers.end()) {
     return false;
   }
-
-  for (auto it = eraseIt; it != lifecycleObservers_.end(); it++) {
-    (*it)->observerDetach(this);
-  }
-  lifecycleObservers_.erase(eraseIt, lifecycleObservers_.end());
+  observer->observerDetach(this);
+  observers.erase(it);
   return true;
 }
 
@@ -2110,12 +2602,22 @@ void AsyncSocket::handleRead() noexcept {
   size_t numReads = maxReadsPerEvent_ ? maxReadsPerEvent_ : size_t(-1);
   EventBase* originalEventBase = eventBase_;
   while (readCallback_ && eventBase_ == originalEventBase && numReads--) {
-    // Get the buffer to read into.
+    auto readMode = readCallback_->getReadMode();
+    // Get the buffer(s) to read into.
     void* buf = nullptr;
-    size_t buflen = 0, offset = 0;
+    size_t buflen = 0, offset = 0, num = 0;
+    static constexpr size_t kNumIov = 16;
+    std::array<struct iovec, kNumIov> iovs;
+
     try {
-      prepareReadBuffer(&buf, &buflen);
-      VLOG(5) << "prepareReadBuffer() buf=" << buf << ", buflen=" << buflen;
+      if (readMode == AsyncReader::ReadCallback::ReadMode::ReadVec) {
+        num = prepareReadBuffers(iovs.data(), iovs.size());
+        VLOG(5) << "prepareReadBuffers() bufs=" << iovs.data()
+                << ", num=" << num;
+      } else {
+        prepareReadBuffer(&buf, &buflen);
+        VLOG(5) << "prepareReadBuffer() buf=" << buf << ", buflen=" << buflen;
+      }
     } catch (const AsyncSocketException& ex) {
       return failRead(__func__, ex);
     } catch (const std::exception& ex) {
@@ -2132,7 +2634,7 @@ void AsyncSocket::handleRead() noexcept {
           "non-exception type");
       return failRead(__func__, ex);
     }
-    if (buf == nullptr || buflen == 0) {
+    if ((num == 0) && (buf == nullptr || buflen == 0)) {
       AsyncSocketException ex(
           AsyncSocketException::BAD_ARGS,
           "ReadCallback::getReadBuffer() returned "
@@ -2141,7 +2643,9 @@ void AsyncSocket::handleRead() noexcept {
     }
 
     // Perform the read
-    auto readResult = performRead(&buf, &buflen, &offset);
+    auto readResult = (readMode == AsyncReader::ReadCallback::ReadMode::ReadVec)
+        ? performReadv(iovs.data(), num)
+        : performRead(&buf, &buflen, &offset);
     auto bytesRead = readResult.readReturn;
     VLOG(4) << "this=" << this << ", AsyncSocket::handleRead() got "
             << bytesRead << " bytes";
@@ -2288,7 +2792,7 @@ void AsyncSocket::handleWrite() noexcept {
             }
           } else {
             // Reads are still enabled, so we are only doing a half-shutdown
-            netops::shutdown(fd_, SHUT_WR);
+            netops_->shutdown(fd_, SHUT_WR);
           }
         }
       }
@@ -2413,7 +2917,7 @@ void AsyncSocket::handleConnect() noexcept {
   // Call getsockopt() to check if the connect succeeded
   int error;
   socklen_t len = sizeof(error);
-  int rv = netops::getsockopt(fd_, SOL_SOCKET, SO_ERROR, &error, &len);
+  int rv = netops_->getsockopt(fd_, SOL_SOCKET, SO_ERROR, &error, &len);
   if (rv != 0) {
     auto errnoCopy = errno;
     AsyncSocketException ex(
@@ -2443,7 +2947,7 @@ void AsyncSocket::handleConnect() noexcept {
     // are still connecting we just abort the connect rather than waiting for
     // it to complete.
     assert((shutdownFlags_ & SHUT_READ) == 0);
-    netops::shutdown(fd_, SHUT_WR);
+    netops_->shutdown(fd_, SHUT_WR);
     shutdownFlags_ |= SHUT_WRITE;
   }
 
@@ -2503,16 +3007,73 @@ void AsyncSocket::timeoutExpired() noexcept {
   }
 }
 
-ssize_t
-AsyncSocket::tfoSendMsg(NetworkSocket fd, struct msghdr* msg, int msg_flags) {
+ssize_t AsyncSocket::tfoSendMsg(
+    NetworkSocket fd, struct msghdr* msg, int msg_flags) {
   return detail::tfo_sendmsg(fd, msg, msg_flags);
 }
 
 AsyncSocket::WriteResult AsyncSocket::sendSocketMessage(
-    NetworkSocket fd,
-    struct msghdr* msg,
-    int msg_flags) {
+    const iovec* vec, size_t count, WriteFlags flags) {
+  const bool byteEventsEnabled =
+      (byteEventHelper_ && byteEventHelper_->byteEventsEnabled &&
+       !byteEventHelper_->maybeEx.has_value());
+
+  struct msghdr msg = {};
+  msg.msg_name = nullptr;
+  msg.msg_namelen = 0;
+  msg.msg_iov = const_cast<struct iovec*>(vec);
+  msg.msg_iovlen = std::min<size_t>(count, kIovMax);
+  msg.msg_flags = 0; // ignored, must forward flags via sendmsg parameter
+  msg.msg_control = nullptr;
+  msg.msg_controllen =
+      sendMsgParamCallback_->getAncillaryDataSize(flags, byteEventsEnabled);
+  CHECK_GE(
+      AsyncSocket::SendMsgParamsCallback::maxAncillaryDataSize,
+      msg.msg_controllen);
+
+  if (msg.msg_controllen != 0) {
+    msg.msg_control = reinterpret_cast<char*>(alloca(msg.msg_controllen));
+    sendMsgParamCallback_->getAncillaryData(
+        flags, msg.msg_control, byteEventsEnabled);
+  }
+  int msg_flags = sendMsgParamCallback_->getFlags(flags, zeroCopyEnabled_);
+
+  const auto prewriteRawBytesWritten = getRawBytesWritten();
+  auto writeResult = sendSocketMessage(fd_, &msg, msg_flags);
+  if (writeResult.writeReturn > 0 && byteEventsEnabled &&
+      isSet(flags, WriteFlags::TIMESTAMP_WRITE)) {
+    CHECK_GT(getRawBytesWritten(), prewriteRawBytesWritten); // sanity check
+    ByteEvent byteEvent = {};
+    byteEvent.type = ByteEvent::Type::WRITE;
+    byteEvent.offset = getRawBytesWritten() - 1;
+    byteEvent.maybeWriteFlags = flags;
+    for (const auto& observer : lifecycleObservers_) {
+      if (observer->getConfig().byteEvents) {
+        observer->byteEvent(this, byteEvent);
+      }
+    }
+  }
+
+  if (writeResult.writeReturn < 0 && zeroCopyEnabled_ && errno == ENOBUFS) {
+    // workaround for running with zerocopy enabled but without a big enough
+    // memlock value - see ulimit -l
+    zeroCopyEnabled_ = false;
+    zeroCopyReenableCounter_ = zeroCopyReenableThreshold_;
+    msg_flags = sendMsgParamCallback_->getFlags(flags, zeroCopyEnabled_);
+    writeResult = sendSocketMessage(fd_, &msg, msg_flags);
+  }
+
+  return writeResult;
+}
+
+AsyncSocket::WriteResult AsyncSocket::sendSocketMessage(
+    NetworkSocket fd, struct msghdr* msg, int msg_flags) {
   ssize_t totalWritten = 0;
+  SCOPE_EXIT {
+    if (totalWritten > 0) {
+      rawBytesWritten_ += totalWritten;
+    }
+  };
   if (state_ == StateEnum::FAST_OPEN) {
     sockaddr_storage addr;
     auto len = addr_.getAddress(&addr);
@@ -2572,7 +3133,7 @@ AsyncSocket::WriteResult AsyncSocket::sendSocketMessage(
               AsyncSocketException::UNKNOWN, "No more free local ports"));
     }
   } else {
-    totalWritten = netops::sendmsg(fd, msg, msg_flags);
+    totalWritten = netops_->sendmsg(fd, msg, msg_flags);
   }
   return WriteResult(totalWritten);
 }
@@ -2583,40 +3144,8 @@ AsyncSocket::WriteResult AsyncSocket::performWrite(
     WriteFlags flags,
     uint32_t* countWritten,
     uint32_t* partialWritten) {
-  // We use sendmsg() instead of writev() so that we can pass in MSG_NOSIGNAL
-  // We correctly handle EPIPE errors, so we never want to receive SIGPIPE
-  // (since it may terminate the program if the main program doesn't explicitly
-  // ignore it).
-  struct msghdr msg;
-  msg.msg_name = nullptr;
-  msg.msg_namelen = 0;
-  msg.msg_iov = const_cast<iovec*>(vec);
-  msg.msg_iovlen = std::min<size_t>(count, kIovMax);
-  msg.msg_flags = 0;
-  msg.msg_controllen = sendMsgParamCallback_->getAncillaryDataSize(flags);
-  CHECK_GE(
-      AsyncSocket::SendMsgParamsCallback::maxAncillaryDataSize,
-      msg.msg_controllen);
-
-  if (msg.msg_controllen != 0) {
-    msg.msg_control = reinterpret_cast<char*>(alloca(msg.msg_controllen));
-    sendMsgParamCallback_->getAncillaryData(flags, msg.msg_control);
-  } else {
-    msg.msg_control = nullptr;
-  }
-  int msg_flags = sendMsgParamCallback_->getFlags(flags, zeroCopyEnabled_);
-
-  auto writeResult = sendSocketMessage(fd_, &msg, msg_flags);
+  auto writeResult = sendSocketMessage(vec, count, flags);
   auto totalWritten = writeResult.writeReturn;
-  if (totalWritten < 0 && zeroCopyEnabled_ && errno == ENOBUFS) {
-    // workaround for running with zerocopy enabled but without a big enough
-    // memlock value - see ulimit -l
-    zeroCopyEnabled_ = false;
-    zeroCopyReenableCounter_ = zeroCopyReenableThreshold_;
-    msg_flags = sendMsgParamCallback_->getFlags(flags, zeroCopyEnabled_);
-    writeResult = sendSocketMessage(fd_, &msg, msg_flags);
-    totalWritten = writeResult.writeReturn;
-  }
   if (totalWritten < 0) {
     bool tryAgain = (errno == EAGAIN);
 #ifdef __APPLE__
@@ -2769,7 +3298,7 @@ void AsyncSocket::fail(const char* fn, const AsyncSocketException& ex) {
           << ", state=" << state_ << " host=" << addr_.describe()
           << "): failed in " << fn << "(): " << ex.what();
   startFail();
-  finishFail();
+  finishFail(ex);
 }
 
 void AsyncSocket::failConnect(const char* fn, const AsyncSocketException& ex) {
@@ -2794,12 +3323,11 @@ void AsyncSocket::failRead(const char* fn, const AsyncSocketException& ex) {
     callback->readErr(ex);
   }
 
-  finishFail();
+  finishFail(ex);
 }
 
 void AsyncSocket::failErrMessageRead(
-    const char* fn,
-    const AsyncSocketException& ex) {
+    const char* fn, const AsyncSocketException& ex) {
   VLOG(5) << "AsyncSocket(this=" << this << ", fd=" << fd_
           << ", state=" << state_ << " host=" << addr_.describe()
           << "): failed while reading message in " << fn << "(): " << ex.what();
@@ -2811,7 +3339,7 @@ void AsyncSocket::failErrMessageRead(
     callback->errMessageError(ex);
   }
 
-  finishFail();
+  finishFail(ex);
 }
 
 void AsyncSocket::failWrite(const char* fn, const AsyncSocketException& ex) {
@@ -2834,7 +3362,7 @@ void AsyncSocket::failWrite(const char* fn, const AsyncSocketException& ex) {
     }
   }
 
-  finishFail();
+  finishFail(ex);
 }
 
 void AsyncSocket::failWrite(
@@ -2856,7 +3384,7 @@ void AsyncSocket::failWrite(
   }
 
   if (closeOnFailedWrite_) {
-    finishFail();
+    finishFail(ex);
   }
 }
 
@@ -2876,6 +3404,17 @@ void AsyncSocket::failAllWrites(const AsyncSocketException& ex) {
 
   // All pending writes have failed - reset totalAppBytesScheduledForWrite_
   totalAppBytesScheduledForWrite_ = appBytesWritten_;
+}
+
+void AsyncSocket::failByteEvents(const AsyncSocketException& ex) {
+  CHECK(byteEventHelper_) << "failByteEvents called without ByteEventHelper";
+  byteEventHelper_->maybeEx = ex;
+  // inform any observers that want ByteEvents
+  for (const auto& observer : lifecycleObservers_) {
+    if (observer->getConfig().byteEvents) {
+      observer->byteEventsUnavailable(this, ex);
+    }
+  }
 }
 
 void AsyncSocket::invalidState(ConnectCallback* callback) {
@@ -2905,7 +3444,7 @@ void AsyncSocket::invalidState(ConnectCallback* callback) {
     if (callback) {
       callback->connectErr(ex);
     }
-    finishFail();
+    finishFail(ex);
   }
 }
 
@@ -2928,11 +3467,13 @@ void AsyncSocket::invalidState(ErrMessageCallback* callback) {
     if (callback) {
       callback->errMessageError(ex);
     }
-    finishFail();
+    finishFail(ex);
   }
 }
 
 void AsyncSocket::invokeConnectErr(const AsyncSocketException& ex) {
+  VLOG(5) << "AsyncSocket(this=" << this << ", fd=" << fd_
+          << "): connect err invoked with ex: " << ex.what();
   connectEndTime_ = std::chrono::steady_clock::now();
   if (connectCallback_) {
     ConnectCallback* callback = connectCallback_;
@@ -2942,9 +3483,16 @@ void AsyncSocket::invokeConnectErr(const AsyncSocketException& ex) {
 }
 
 void AsyncSocket::invokeConnectSuccess() {
+  VLOG(5) << "AsyncSocket(this=" << this << ", fd=" << fd_
+          << "): connect success invoked";
   connectEndTime_ = std::chrono::steady_clock::now();
-  for (const auto& cb : lifecycleObservers_) {
-    cb->connect(this);
+  bool enableByteEventsForObserver = false;
+  for (const auto& observer : lifecycleObservers_) {
+    observer->connect(this);
+    enableByteEventsForObserver |= ((observer->getConfig().byteEvents) ? 1 : 0);
+  }
+  if (enableByteEventsForObserver) {
+    enableByteEvents();
   }
   if (connectCallback_) {
     ConnectCallback* callback = connectCallback_;
@@ -2971,7 +3519,7 @@ void AsyncSocket::invalidState(ReadCallback* callback) {
     if (callback) {
       callback->readErr(ex);
     }
-    finishFail();
+    finishFail(ex);
   }
 }
 
@@ -2991,7 +3539,7 @@ void AsyncSocket::invalidState(WriteCallback* callback) {
     if (callback) {
       callback->writeErr(0, ex);
     }
-    finishFail();
+    finishFail(ex);
   }
 }
 
@@ -3005,7 +3553,7 @@ void AsyncSocket::doClose() {
   if (const auto shutdownSocketSet = wShutdownSocketSet_.lock()) {
     shutdownSocketSet->close(fd_);
   } else {
-    netops::close(fd_);
+    netops_->close(fd_);
   }
   fd_ = NetworkSocket();
 
@@ -3016,8 +3564,7 @@ void AsyncSocket::doClose() {
 }
 
 std::ostream& operator<<(
-    std::ostream& os,
-    const AsyncSocket::StateEnum& state) {
+    std::ostream& os, const AsyncSocket::StateEnum& state) {
   os << static_cast<int>(state);
   return os;
 }

@@ -16,7 +16,6 @@
 
 #pragma once
 
-#include <glog/logging.h>
 #include <atomic>
 #include <cassert>
 #include <cinttypes>
@@ -26,6 +25,8 @@
 #include <limits>
 #include <memory>
 #include <type_traits>
+
+#include <glog/logging.h>
 
 #include <folly/FBString.h>
 #include <folly/FBVector.h>
@@ -277,8 +278,7 @@ class IOBuf {
    * no more than maxBufCapacity to each buffer.
    */
   static std::unique_ptr<IOBuf> createChain(
-      size_t totalCapacity,
-      std::size_t maxBufCapacity);
+      size_t totalCapacity, std::size_t maxBufCapacity);
 
   /**
    * Uses folly::goodMallocSize() to figure out what the largest capacity would
@@ -291,8 +291,7 @@ class IOBuf {
    * for example figure out whether a given IOBuf can be usefully compacted.
    */
   static size_t goodSize(
-      size_t minCapacity,
-      CombinedOption combined = CombinedOption::DEFAULT);
+      size_t minCapacity, CombinedOption combined = CombinedOption::DEFAULT);
 
   /**
    * Create a new IOBuf pointing to an existing data buffer.
@@ -315,6 +314,9 @@ class IOBuf {
    * In the second version, the user specifies the valid length of data
    * in the buffer
    *
+   * In the third version, the user specifies the offset to the valid data
+   * and the length of valid data in the buffer.
+   *
    * On error, std::bad_alloc will be thrown.  If freeOnError is true (the
    * default) the buffer will be freed before throwing the error.
    */
@@ -325,7 +327,7 @@ class IOBuf {
       void* userData = nullptr,
       bool freeOnError = true) {
     return takeOwnership(
-        buf, capacity, capacity, freeFn, userData, freeOnError);
+        buf, capacity, 0, capacity, freeFn, userData, freeOnError);
   }
   IOBuf(
       TakeOwnershipOp op,
@@ -334,11 +336,32 @@ class IOBuf {
       FreeFunction freeFn = nullptr,
       void* userData = nullptr,
       bool freeOnError = true)
-      : IOBuf(op, buf, capacity, capacity, freeFn, userData, freeOnError) {}
+      : IOBuf(op, buf, capacity, 0, capacity, freeFn, userData, freeOnError) {}
 
   static std::unique_ptr<IOBuf> takeOwnership(
       void* buf,
       std::size_t capacity,
+      std::size_t length,
+      FreeFunction freeFn = nullptr,
+      void* userData = nullptr,
+      bool freeOnError = true) {
+    return takeOwnership(
+        buf, capacity, 0, length, freeFn, userData, freeOnError);
+  }
+  IOBuf(
+      TakeOwnershipOp op,
+      void* buf,
+      std::size_t capacity,
+      std::size_t length,
+      FreeFunction freeFn = nullptr,
+      void* userData = nullptr,
+      bool freeOnError = true)
+      : IOBuf(op, buf, capacity, 0, length, freeFn, userData, freeOnError) {}
+
+  static std::unique_ptr<IOBuf> takeOwnership(
+      void* buf,
+      std::size_t capacity,
+      std::size_t offset,
       std::size_t length,
       FreeFunction freeFn = nullptr,
       void* userData = nullptr,
@@ -347,6 +370,7 @@ class IOBuf {
       TakeOwnershipOp,
       void* buf,
       std::size_t capacity,
+      std::size_t offset,
       std::size_t length,
       FreeFunction freeFn = nullptr,
       void* userData = nullptr,
@@ -399,8 +423,7 @@ class IOBuf {
    * On error, std::bad_alloc will be thrown.
    */
   static std::unique_ptr<IOBuf> wrapBuffer(
-      const void* buf,
-      std::size_t capacity);
+      const void* buf, std::size_t capacity);
   static std::unique_ptr<IOBuf> wrapBuffer(ByteRange br) {
     return wrapBuffer(br.data(), br.size());
   }
@@ -410,8 +433,7 @@ class IOBuf {
    * heap-allocating it.
    */
   static IOBuf wrapBufferAsValue(
-      const void* buf,
-      std::size_t capacity) noexcept;
+      const void* buf, std::size_t capacity) noexcept;
   static IOBuf wrapBufferAsValue(ByteRange br) noexcept {
     return wrapBufferAsValue(br.data(), br.size());
   }
@@ -430,9 +452,7 @@ class IOBuf {
       std::size_t headroom = 0,
       std::size_t minTailroom = 0);
   static std::unique_ptr<IOBuf> copyBuffer(
-      ByteRange br,
-      std::size_t headroom = 0,
-      std::size_t minTailroom = 0) {
+      ByteRange br, std::size_t headroom = 0, std::size_t minTailroom = 0) {
     return copyBuffer(br.data(), br.size(), headroom, minTailroom);
   }
   IOBuf(
@@ -1138,8 +1158,7 @@ class IOBuf {
    * Returns ByteRange that points to the data IOBuf stores.
    */
   ByteRange coalesceWithHeadroomTailroom(
-      std::size_t newHeadroom,
-      std::size_t newTailroom) {
+      std::size_t newHeadroom, std::size_t newTailroom) {
     if (isChained()) {
       coalesceAndReallocate(
           newHeadroom, computeChainDataLength(), this, newTailroom);
@@ -1222,8 +1241,7 @@ class IOBuf {
    * headroom and tailroom for the new IOBuf.
    */
   std::unique_ptr<IOBuf> cloneCoalescedWithHeadroomTailroom(
-      std::size_t newHeadroom,
-      std::size_t newTailroom) const;
+      std::size_t newHeadroom, std::size_t newTailroom) const;
 
   /**
    * Similar to cloneCoalesced(). But returns IOBuf by value rather than
@@ -1236,8 +1254,7 @@ class IOBuf {
    * to set a headroom and tailroom for the new IOBuf.
    */
   IOBuf cloneCoalescedAsValueWithHeadroomTailroom(
-      std::size_t newHeadroom,
-      std::size_t newTailroom) const;
+      std::size_t newHeadroom, std::size_t newTailroom) const;
 
   /**
    * Similar to Clone(). But use other as the head node. Other nodes in the
@@ -1415,8 +1432,7 @@ class IOBuf {
 
     using ObserverCb = folly::FunctionRef<void(SharedInfoObserverEntryBase&)>;
     static void invokeAndDeleteEachObserver(
-        SharedInfoObserverEntryBase* observerListHead,
-        ObserverCb cb) noexcept;
+        SharedInfoObserverEntryBase* observerListHead, ObserverCb cb) noexcept;
 
     // A pointer to a function to call to free the buffer when the refcount
     // hits 0.  If this is null, free() will be used instead.
@@ -1457,10 +1473,7 @@ class IOBuf {
   // newLength must be the entire length of the buffers between this and
   // end (no truncation)
   void coalesceAndReallocate(
-      size_t newHeadroom,
-      size_t newLength,
-      IOBuf* end,
-      size_t newTailroom);
+      size_t newHeadroom, size_t newLength, IOBuf* end, size_t newTailroom);
   void coalesceAndReallocate(size_t newLength, IOBuf* end) {
     coalesceAndReallocate(headroom(), newLength, end, end->prev_->tailroom());
   }
@@ -1511,8 +1524,7 @@ class IOBuf {
   uintptr_t flagsAndSharedInfo_{0};
 
   static inline uintptr_t packFlagsAndSharedInfo(
-      uintptr_t flags,
-      SharedInfo* info) noexcept {
+      uintptr_t flags, SharedInfo* info) noexcept {
     uintptr_t uinfo = reinterpret_cast<uintptr_t>(info);
     DCHECK_EQ(flags & ~kFlagMask, 0u);
     DCHECK_EQ(uinfo & kFlagMask, 0u);
@@ -1545,8 +1557,7 @@ class IOBuf {
   }
 
   inline void setFlagsAndSharedInfo(
-      uintptr_t flags,
-      SharedInfo* info) noexcept {
+      uintptr_t flags, SharedInfo* info) noexcept {
     flagsAndSharedInfo_ = packFlagsAndSharedInfo(flags, info);
   }
 
@@ -1596,8 +1607,7 @@ struct IOBufCompare {
     return &a == &b ? ordering::eq : impl(a, b);
   }
   ordering operator()(
-      const std::unique_ptr<IOBuf>& a,
-      const std::unique_ptr<IOBuf>& b) const {
+      const std::unique_ptr<IOBuf>& a, const std::unique_ptr<IOBuf>& b) const {
     return operator()(a.get(), b.get());
   }
   ordering operator()(const IOBuf* a, const IOBuf* b) const {
@@ -1671,16 +1681,12 @@ inline std::unique_ptr<IOBuf> IOBuf::copyBuffer(
 }
 
 inline std::unique_ptr<IOBuf> IOBuf::copyBuffer(
-    const std::string& buf,
-    std::size_t headroom,
-    std::size_t minTailroom) {
+    const std::string& buf, std::size_t headroom, std::size_t minTailroom) {
   return copyBuffer(buf.data(), buf.size(), headroom, minTailroom);
 }
 
 inline std::unique_ptr<IOBuf> IOBuf::maybeCopyBuffer(
-    const std::string& buf,
-    std::size_t headroom,
-    std::size_t minTailroom) {
+    const std::string& buf, std::size_t headroom, std::size_t minTailroom) {
   if (buf.empty()) {
     return nullptr;
   }

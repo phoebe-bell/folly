@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
+#include <folly/futures/Retrying.h>
+
 #include <algorithm>
 #include <atomic>
 #include <vector>
 
-#include <folly/futures/Retrying.h>
 #include <folly/futures/test/TestExecutor.h>
 #include <folly/portability/GTest.h>
 #include <folly/portability/SysResource.h>
@@ -32,10 +33,7 @@ using namespace folly;
 // max_duration.
 template <typename D, typename F>
 void multiAttemptExpectDurationWithin(
-    size_t num_tries,
-    D min_duration,
-    D max_duration,
-    const F& func) {
+    size_t num_tries, D min_duration, D max_duration, const F& func) {
   vector<thread> threads(num_tries);
   vector<D> durations(num_tries, D::min());
   for (size_t i = 0; i < num_tries; ++i) {
@@ -109,7 +107,7 @@ TEST(RetryingTest, future_factory_throws) {
                     })
                     .wait()
                     .result();
-  EXPECT_THROW(result.throwIfFailed(), ThrownException);
+  EXPECT_THROW(result.throwUnlessValue(), ThrownException);
 }
 
 TEST(RetryingTest, future_factory_throws_unsafe) {
@@ -130,7 +128,7 @@ TEST(RetryingTest, future_factory_throws_unsafe) {
                     })
                     .wait()
                     .result();
-  EXPECT_THROW(result.throwIfFailed(), ThrownException);
+  EXPECT_THROW(result.throwUnlessValue(), ThrownException);
 }
 
 TEST(RetryingTest, policy_throws) {
@@ -203,35 +201,26 @@ TEST(RetryingTest, policy_semi_future) {
 }
 
 TEST(RetryingTest, policy_basic) {
-  auto r = futures::retrying(
-               futures::retryingPolicyBasic(3),
-               [](size_t n) {
-                 return n < 2 ? makeFuture<size_t>(runtime_error("ha"))
-                              : makeFuture(n);
-               })
-               .wait();
+  auto r =
+      futures::retrying(futures::retryingPolicyBasic(3), [](size_t n) {
+        return n < 2 ? makeFuture<size_t>(runtime_error("ha")) : makeFuture(n);
+      }).wait();
   EXPECT_EQ(2, r.value());
 }
 
 TEST(RetryingTest, policy_basic_unsafe) {
-  auto r = futures::retryingUnsafe(
-               futures::retryingPolicyBasic(3),
-               [](size_t n) {
-                 return n < 2 ? makeFuture<size_t>(runtime_error("ha"))
-                              : makeFuture(n);
-               })
-               .wait();
+  auto r =
+      futures::retryingUnsafe(futures::retryingPolicyBasic(3), [](size_t n) {
+        return n < 2 ? makeFuture<size_t>(runtime_error("ha")) : makeFuture(n);
+      }).wait();
   EXPECT_EQ(2, r.value());
 }
 
 TEST(RetryingTest, semifuture_policy_basic) {
-  auto r = futures::retrying(
-               futures::retryingPolicyBasic(3),
-               [](size_t n) {
-                 return n < 2 ? makeSemiFuture<size_t>(runtime_error("ha"))
-                              : makeSemiFuture(n);
-               })
-               .wait();
+  auto r = futures::retrying(futures::retryingPolicyBasic(3), [](size_t n) {
+             return n < 2 ? makeSemiFuture<size_t>(runtime_error("ha"))
+                          : makeSemiFuture(n);
+           }).wait();
   EXPECT_EQ(2, r.value());
 }
 
@@ -363,7 +352,7 @@ TEST(RetryingTest, large_retries) {
     });
   };
 
-  vector<Future<LargeReturn>> futures;
+  vector<SemiFuture<LargeReturn>> futures;
   for (auto idx = 0; idx < 40; ++idx) {
     futures.emplace_back(futures::retrying(
         [&executor](size_t, const exception_wrapper&) {

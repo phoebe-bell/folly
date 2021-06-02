@@ -16,14 +16,15 @@
 
 #pragma once
 
-#include <folly/Synchronized.h>
-#include <folly/container/F14Map.h>
-#include <folly/synchronization/Hazptr.h>
-
 #include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
+
+#include <folly/Synchronized.h>
+#include <folly/container/F14Map.h>
+#include <folly/synchronization/Hazptr.h>
 
 namespace folly {
 
@@ -126,6 +127,8 @@ class RequestData {
   std::atomic<int> keepAliveCounter_{0};
 };
 
+using RequestDataItem = std::pair<RequestToken, std::unique_ptr<RequestData>>;
+
 // If you do not call create() to create a unique request context,
 // this default request context will always be returned, and is never
 // copied between threads.
@@ -138,8 +141,7 @@ class RequestContext {
 
   // copy ctor is disabled, use copyAsRoot/copyAsChild instead.
   static std::shared_ptr<RequestContext> copyAsRoot(
-      const RequestContext& ctx,
-      intptr_t rootid);
+      const RequestContext& ctx, intptr_t rootid);
   static std::shared_ptr<RequestContext> copyAsChild(const RequestContext& ctx);
 
   // Create a unique request context for this request.
@@ -170,11 +172,9 @@ class RequestContext {
   // used, will print a warning message for the first time, clear the existing
   // RequestData instance for "val", and **not** add "data".
   void setContextData(
-      const RequestToken& token,
-      std::unique_ptr<RequestData> data);
+      const RequestToken& token, std::unique_ptr<RequestData> data);
   void setContextData(
-      const std::string& val,
-      std::unique_ptr<RequestData> data) {
+      const std::string& val, std::unique_ptr<RequestData> data) {
     setContextData(RequestToken(val), std::move(data));
   }
 
@@ -182,11 +182,9 @@ class RequestContext {
   // string identifier "val". If the same string identifier has already been
   // used, return false and do nothing. Otherwise add "data" and return true.
   bool setContextDataIfAbsent(
-      const RequestToken& token,
-      std::unique_ptr<RequestData> data);
+      const RequestToken& token, std::unique_ptr<RequestData> data);
   bool setContextDataIfAbsent(
-      const std::string& val,
-      std::unique_ptr<RequestData> data) {
+      const std::string& val, std::unique_ptr<RequestData> data) {
     return setContextDataIfAbsent(RequestToken(val), std::move(data));
   }
 
@@ -250,8 +248,7 @@ class RequestContext {
  private:
   static StaticContext& getStaticContext();
   static std::shared_ptr<RequestContext> setContextHelper(
-      std::shared_ptr<RequestContext>& newCtx,
-      StaticContext& staticCtx);
+      std::shared_ptr<RequestContext>& newCtx, StaticContext& staticCtx);
 
   // Start shallow copy guard implementation details:
   // All methods are private to encourage proper use
@@ -405,17 +402,27 @@ struct ShallowCopyRequestContextScopeGuard {
    * "clearRequestData" then "setRequestData" after the guard.
    */
   ShallowCopyRequestContextScopeGuard(
-      const RequestToken& token,
-      std::unique_ptr<RequestData> data)
+      const RequestToken& token, std::unique_ptr<RequestData> data)
       : ShallowCopyRequestContextScopeGuard() {
     RequestContext::get()->overwriteContextData(token, std::move(data), true);
   }
   ShallowCopyRequestContextScopeGuard(
-      const std::string& val,
-      std::unique_ptr<RequestData> data)
+      const std::string& val, std::unique_ptr<RequestData> data)
       : ShallowCopyRequestContextScopeGuard() {
     RequestContext::get()->overwriteContextData(val, std::move(data), true);
   }
+
+  /**
+   * Shallow copy then overwrite multiple RequestData instances
+   *
+   * Helper constructor which is more efficient than using multiple scope guards
+   * Accepts iterators to a container of <string/RequestToken, RequestData
+   * pointer> pairs
+   */
+  template <typename... Item>
+  explicit ShallowCopyRequestContextScopeGuard(
+      RequestDataItem&& first, Item&&... rest)
+      : ShallowCopyRequestContextScopeGuard(MultiTag{}, first, rest...) {}
 
   ~ShallowCopyRequestContextScopeGuard() {
     RequestContext::setContext(std::move(prev_));
@@ -431,6 +438,19 @@ struct ShallowCopyRequestContextScopeGuard {
       ShallowCopyRequestContextScopeGuard&&) = delete;
 
  private:
+  struct MultiTag {};
+  template <typename... Item>
+  explicit ShallowCopyRequestContextScopeGuard(MultiTag, Item&... item)
+      : ShallowCopyRequestContextScopeGuard() {
+    auto rc = RequestContext::get();
+    auto go = [&](RequestDataItem& i) {
+      rc->overwriteContextData(i.first, std::move(i.second), true);
+    };
+
+    using _ = int[];
+    void(_{0, (go(item), 0)...});
+  }
+
   std::shared_ptr<RequestContext> prev_;
 };
 

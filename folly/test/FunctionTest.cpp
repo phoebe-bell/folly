@@ -14,16 +14,15 @@
  * limitations under the License.
  */
 
+#include <folly/Function.h>
+
 #include <array>
 #include <cstdarg>
-
-#include <folly/Function.h>
 
 #include <folly/Memory.h>
 #include <folly/portability/GTest.h>
 
 using folly::Function;
-using folly::FunctionRef;
 
 namespace {
 int func_int_int_add_25(int x) {
@@ -68,8 +67,7 @@ struct CallableButNotCopyable {
 // TEST =====================================================================
 // Test constructibility and non-constructibility for some tricky conversions
 static_assert(
-    !std::is_assignable<Function<void()>, CallableButNotCopyable>::value,
-    "");
+    !std::is_assignable<Function<void()>, CallableButNotCopyable>::value, "");
 static_assert(
     !std::is_constructible<Function<void()>, CallableButNotCopyable&>::value,
     "");
@@ -83,11 +81,9 @@ static_assert(
     "");
 
 static_assert(
-    !std::is_assignable<Function<void()>, CallableButNotCopyable>::value,
-    "");
+    !std::is_assignable<Function<void()>, CallableButNotCopyable>::value, "");
 static_assert(
-    !std::is_assignable<Function<void()>, CallableButNotCopyable&>::value,
-    "");
+    !std::is_assignable<Function<void()>, CallableButNotCopyable&>::value, "");
 static_assert(
     !std::is_assignable<Function<void() const>, CallableButNotCopyable>::value,
     "");
@@ -175,12 +171,10 @@ static_assert(
     "");
 
 static_assert(
-    !std::is_constructible<Function<int const&()>, int (*)()>::value,
-    "");
+    !std::is_constructible<Function<int const&()>, int (*)()>::value, "");
 
 static_assert(
-    !std::is_constructible<Function<int const&() const>, int (*)()>::value,
-    "");
+    !std::is_constructible<Function<int const&() const>, int (*)()>::value, "");
 
 #if FOLLY_HAVE_NOEXCEPT_FUNCTION_TYPE
 static_assert(
@@ -192,6 +186,8 @@ static_assert(
         value,
     "");
 #endif
+
+static_assert(std::is_nothrow_destructible<Function<int(int)>>::value, "");
 
 // TEST =====================================================================
 // InvokeFunctor & InvokeReference
@@ -269,7 +265,7 @@ TEST(Function, Emptiness_T) {
   // models std::function
   struct NullptrTestableInSitu {
     int res;
-    explicit NullptrTestableInSitu(std::nullptr_t) : res(1) {}
+    FOLLY_MAYBE_UNUSED explicit NullptrTestableInSitu(std::nullptr_t);
     explicit NullptrTestableInSitu(int i) : res(i) {}
     CastableToBool operator==(std::nullptr_t) const { return res % 3 != 1; }
     int operator()(int in) const { return res * in; }
@@ -298,12 +294,6 @@ TEST(Function, Emptiness_T) {
   EXPECT_NE(nullptr, m);
   EXPECT_TRUE(m);
   EXPECT_EQ(428, m(107));
-
-  auto noopfun = [] {};
-  EXPECT_EQ(nullptr, FunctionRef<void()>(nullptr));
-  EXPECT_NE(nullptr, FunctionRef<void()>(noopfun));
-  EXPECT_EQ(FunctionRef<void()>(nullptr), nullptr);
-  EXPECT_NE(FunctionRef<void()>(noopfun), nullptr);
 }
 
 // TEST =====================================================================

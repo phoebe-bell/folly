@@ -20,6 +20,7 @@
 #include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -45,9 +46,7 @@ using folly::PicoSpinLock;
 #endif
 
 DEFINE_int64(
-    stress_test_seconds,
-    2,
-    "Number of seconds for which to run stress tests");
+    stress_test_seconds, 2, "Number of seconds for which to run stress tests");
 
 namespace {
 
@@ -248,13 +247,11 @@ struct SimpleBarrier {
 } // namespace
 
 TEST(SmallLocks, MicroLock) {
-  volatile uint64_t counters[4] = {0, 0, 0, 0};
+  volatile uint64_t counter = 0;
   std::vector<std::thread> threads;
   static const unsigned nrThreads = 20;
   static const unsigned iterPerThread = 10000;
   SimpleBarrier startBarrier;
-
-  assert(iterPerThread % 4 == 0);
 
   // Embed the lock in a larger structure to ensure that we do not
   // affect bits outside the ones MicroLock is defined to affect.
@@ -291,16 +288,15 @@ TEST(SmallLocks, MicroLock) {
     threads.emplace_back([&] {
       startBarrier.wait();
       for (unsigned iter = 0; iter < iterPerThread; ++iter) {
-        unsigned slotNo = iter % 4;
-        x.alock.lock(slotNo);
-        counters[slotNo] += 1;
+        x.alock.lock();
+        counter += 1;
         // The occasional sleep makes it more likely that we'll
         // exercise the futex-wait path inside MicroLock.
         if (iter % 1000 == 0) {
           struct timespec ts = {0, 10000};
           (void)nanosleep(&ts, nullptr);
         }
-        x.alock.unlock(slotNo);
+        x.alock.unlock();
       }
     });
   }
@@ -316,9 +312,7 @@ TEST(SmallLocks, MicroLock) {
   EXPECT_EQ(x.a, 'a');
   EXPECT_EQ(x.b, (uint8_t)(origB + iterPerThread / 2));
   EXPECT_EQ(x.d, (uint8_t)(origD + iterPerThread / 2));
-  for (unsigned i = 0; i < 4; ++i) {
-    EXPECT_EQ(counters[i], ((uint64_t)nrThreads * iterPerThread) / 4);
-  }
+  EXPECT_EQ(counter, ((uint64_t)nrThreads * iterPerThread));
 }
 
 TEST(SmallLocks, MicroLockTryLock) {
@@ -327,6 +321,53 @@ TEST(SmallLocks, MicroLockTryLock) {
   EXPECT_TRUE(lock.try_lock());
   EXPECT_FALSE(lock.try_lock());
   lock.unlock();
+}
+
+TEST(SmallLocks, MicroLockWithData) {
+  MicroLock lock;
+  lock.init();
+  EXPECT_EQ(lock.load(std::memory_order_relaxed), 0);
+
+  EXPECT_EQ(lock.lockAndLoad(), 0);
+  lock.unlockAndStore(42);
+  EXPECT_EQ(lock.load(std::memory_order_relaxed), 42);
+
+  EXPECT_EQ(lock.lockAndLoad(), 42);
+  lock.unlock();
+  EXPECT_EQ(lock.load(std::memory_order_relaxed), 42);
+
+  lock.store(12, std::memory_order_relaxed);
+  {
+    MicroLock::LockGuardWithData guard{lock};
+    EXPECT_EQ(guard.loadedValue(), 12);
+    EXPECT_EQ(lock.load(std::memory_order_relaxed), 12);
+    guard.storeValue(24);
+    // Should not have immediate effect
+    EXPECT_EQ(guard.loadedValue(), 12);
+    EXPECT_EQ(lock.load(std::memory_order_relaxed), 12);
+  }
+  EXPECT_EQ(lock.load(std::memory_order_relaxed), 24);
+
+  // Drop the two most significant bits
+  lock.lock();
+  lock.unlockAndStore(0b10011001);
+  EXPECT_EQ(lock.load(std::memory_order_relaxed), 0b00011001);
+  lock.store(0b11101110, std::memory_order_relaxed);
+  EXPECT_EQ(lock.load(std::memory_order_relaxed), 0b00101110);
+}
+
+TEST(SmallLocks, MicroLockDataAlignment) {
+  struct alignas(uint32_t) Thing {
+    uint8_t padding1[2];
+    MicroLock lock;
+    uint8_t padding2;
+  } thing;
+  auto& lock = thing.lock;
+  lock.init();
+
+  EXPECT_EQ(lock.lockAndLoad(), 0);
+  lock.unlockAndStore(60);
+  EXPECT_EQ(lock.load(std::memory_order_relaxed), 60);
 }
 
 namespace {

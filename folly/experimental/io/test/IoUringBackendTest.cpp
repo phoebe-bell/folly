@@ -28,6 +28,10 @@
 #include <folly/io/async/test/EventBaseTestLib.h>
 #include <folly/portability/GTest.h>
 
+#ifndef RESOLVE_IN_ROOT
+#define RESOLVE_IN_ROOT 0x10
+#endif
+
 // IoUringBackend specific tests
 namespace {
 class AlignedBuf {
@@ -235,6 +239,18 @@ std::unique_ptr<folly::EventBase> getEventBase(
   } catch (const folly::IoUringBackend::NotAvailable&) {
     return nullptr;
   }
+}
+
+std::unique_ptr<folly::EventBase> getEventBase() {
+  static constexpr size_t kBackendCapacity = 32;
+  static constexpr size_t kBackendMaxSubmit = 16;
+  static constexpr size_t kBackendMaxGet = 8;
+  folly::PollIoBackend::Options options;
+  options.setCapacity(kBackendCapacity)
+      .setMaxSubmit(kBackendMaxSubmit)
+      .setMaxGet(kBackendMaxGet)
+      .setUseRegisteredFds(false);
+  return getEventBase(options);
 }
 
 void testEventFD(bool overflow, bool persist, bool asyncRead) {
@@ -477,6 +493,164 @@ void testAsyncUDPRecvmsg(bool useRegisteredFds) {
 }
 } // namespace
 
+TEST(IoUringBackend, FailCreateNoRetry) {
+  bool bSuccess = true;
+  try {
+    folly::IoUringBackend::Options options;
+    options.setCapacity(256 * 1024);
+    options.setMinCapacity(0);
+    folly::IoUringBackend backend(options);
+  } catch (const folly::IoUringBackend::NotAvailable&) {
+    bSuccess = false;
+  }
+  CHECK(!bSuccess);
+}
+
+TEST(IoUringBackend, SuccessCreateRetry) {
+  bool bSuccess = true;
+  try {
+    folly::IoUringBackend::Options options;
+    options.setCapacity(256 * 1024);
+    options.setMinCapacity(16);
+    options.setMaxSubmit(8);
+    folly::IoUringBackend backend(options);
+  } catch (const folly::IoUringBackend::NotAvailable&) {
+    bSuccess = false;
+  }
+  CHECK(bSuccess);
+}
+
+TEST(IoUringBackend, OpenAt) {
+  auto evbPtr = getEventBase();
+  SKIP_IF(!evbPtr) << "Backend not available";
+
+  auto* backendPtr = dynamic_cast<folly::IoUringBackend*>(evbPtr->getBackend());
+  CHECK(!!backendPtr);
+
+  auto dirPath = folly::fs::temp_directory_path();
+  auto path = folly::fs::unique_path();
+  auto filePath = dirPath / path;
+
+  int dfd = ::open(dirPath.string().c_str(), O_DIRECTORY | O_RDONLY, 0666);
+  CHECK_GE(dfd, 0);
+
+  SCOPE_EXIT {
+    ::close(dfd);
+    ::unlink(filePath.string().c_str());
+  };
+
+  folly::IoUringBackend::FileOpCallback openCb = [&](int res) {
+    evbPtr->terminateLoopSoon();
+    CHECK_GE(res, 0);
+    CHECK_EQ(0, ::close(res));
+  };
+
+  backendPtr->queueOpenat(
+      dfd,
+      path.string().c_str(),
+      O_RDWR | O_CREAT | O_EXCL,
+      0666,
+      std::move(openCb));
+
+  evbPtr->loopForever();
+}
+
+TEST(IoUringBackend, OpenAt2) {
+  auto evbPtr = getEventBase();
+  SKIP_IF(!evbPtr) << "Backend not available";
+
+  auto* backendPtr = dynamic_cast<folly::IoUringBackend*>(evbPtr->getBackend());
+  CHECK(!!backendPtr);
+
+  auto dirPath = folly::fs::temp_directory_path();
+  auto path = folly::fs::unique_path();
+  auto filePath = dirPath / path;
+
+  int dfd = ::open(dirPath.string().c_str(), O_DIRECTORY | O_RDONLY, 0666);
+  CHECK_GE(dfd, 0);
+
+  SCOPE_EXIT {
+    ::close(dfd);
+    ::unlink(filePath.string().c_str());
+  };
+
+  folly::IoUringBackend::FileOpCallback openCb = [&](int res) {
+    evbPtr->terminateLoopSoon();
+    CHECK_GE(res, 0);
+    CHECK_EQ(0, ::close(res));
+  };
+
+  struct open_how how = {};
+  how.flags = O_RDWR | O_CREAT | O_EXCL;
+  how.mode = 0666;
+  how.resolve = RESOLVE_IN_ROOT;
+
+  backendPtr->queueOpenat2(dfd, path.string().c_str(), &how, std::move(openCb));
+}
+
+TEST(IoUringBackend, Close) {
+  auto evbPtr = getEventBase();
+  SKIP_IF(!evbPtr) << "Backend not available";
+
+  auto* backendPtr = dynamic_cast<folly::IoUringBackend*>(evbPtr->getBackend());
+  CHECK(!!backendPtr);
+
+  auto path = folly::fs::temp_directory_path();
+  path /= folly::fs::unique_path();
+
+  int fd = ::open(path.string().c_str(), O_RDWR | O_CREAT | O_EXCL, 0666);
+  CHECK_GE(fd, 0);
+
+  SCOPE_EXIT {
+    if (fd >= 0) {
+      ::close(fd);
+    }
+    ::unlink(path.string().c_str());
+  };
+
+  folly::IoUringBackend::FileOpCallback closeCb = [&](int res) {
+    evbPtr->terminateLoopSoon();
+    CHECK_EQ(res, 0);
+    fd = -1;
+  };
+
+  backendPtr->queueClose(fd, std::move(closeCb));
+
+  evbPtr->loopForever();
+
+  CHECK_EQ(fd, -1);
+}
+
+TEST(IoUringBackend, Fallocate) {
+  auto evbPtr = getEventBase();
+  SKIP_IF(!evbPtr) << "Backend not available";
+
+  auto* backendPtr = dynamic_cast<folly::IoUringBackend*>(evbPtr->getBackend());
+  CHECK(!!backendPtr);
+
+  auto path = folly::fs::temp_directory_path();
+  path /= folly::fs::unique_path();
+
+  int fd = ::open(path.string().c_str(), O_RDWR | O_CREAT | O_EXCL, 0666);
+  CHECK_GE(fd, 0);
+
+  SCOPE_EXIT {
+    if (fd >= 0) {
+      ::close(fd);
+      ::unlink(path.string().c_str());
+    }
+  };
+
+  folly::IoUringBackend::FileOpCallback fallocateCb = [&](int res) {
+    CHECK_EQ(res, 0);
+    evbPtr->terminateLoopSoon();
+  };
+
+  backendPtr->queueFallocate(fd, 0, 0, 4096, std::move(fallocateCb));
+
+  evbPtr->loopForever();
+}
+
 TEST(IoUringBackend, AsyncUDPRecvmsgNoRegisterFd) {
   testAsyncUDPRecvmsg(false);
 }
@@ -554,10 +728,10 @@ TEST(IoUringBackend, RegisteredFds) {
   CHECK(!record);
 
   std::vector<folly::IoUringBackend::FdRegistrationRecord*> records;
-  // we use kBackendCapacity -1 since we can have the timerFd
-  // already using one fd
-  records.reserve(kBackendCapacity - 1);
-  for (size_t i = 0; i < kBackendCapacity - 1; i++) {
+  // we use kBackendCapacity since the timerFd
+  // allocates it only on the first loop
+  records.reserve(kBackendCapacity);
+  for (size_t i = 0; i < kBackendCapacity; i++) {
     record = backendReg->registerFd(eventFd);
     CHECK(record);
     records.emplace_back(record);
@@ -873,6 +1047,110 @@ TEST(IoUringBackend, FileWriteMany) {
   EXPECT_EQ(bFsync, true);
 }
 
+TEST(IoUringBackend, SendmsgRecvmsg) {
+  static constexpr size_t kBackendCapacity = 256;
+  static constexpr size_t kBackendMaxSubmit = 32;
+  static constexpr size_t kBackendMaxGet = 32;
+
+  folly::PollIoBackend::Options options;
+  options.setCapacity(kBackendCapacity)
+      .setMaxSubmit(kBackendMaxSubmit)
+      .setMaxGet(kBackendMaxGet)
+      .setUseRegisteredFds(false);
+  auto evbPtr = getEventBase(options);
+  SKIP_IF(!evbPtr) << "Backend not available";
+
+  auto* backendPtr = dynamic_cast<folly::IoUringBackend*>(evbPtr->getBackend());
+  CHECK(!!backendPtr);
+
+  // we want raw sockets
+  auto sendFd = ::socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
+  CHECK_GT(sendFd, 0);
+  auto recvFd = ::socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
+  CHECK_GT(sendFd, 0);
+
+  folly::SocketAddress addr("::1", 0);
+
+  sockaddr_storage addrStorage;
+  addr.getAddress(&addrStorage);
+  auto& saddr = reinterpret_cast<sockaddr&>(addrStorage);
+  auto ret = ::bind(sendFd, &saddr, addr.getActualSize());
+  CHECK_EQ(ret, 0);
+  ret = ::bind(recvFd, &saddr, addr.getActualSize());
+  CHECK_EQ(ret, 0);
+
+  folly::SocketAddress sendAddr;
+  folly::SocketAddress recvAddr;
+  sendAddr.setFromLocalAddress(folly::NetworkSocket(sendFd));
+  recvAddr.setFromLocalAddress(folly::NetworkSocket(recvFd));
+
+  bool sendDone = false;
+  bool recvDone = false;
+
+  static constexpr size_t kNumBytes = 64;
+  static std::array<char, kNumBytes> sendBuf, recvBuf;
+
+  folly::IoUringBackend::FileOpCallback sendCb = [&](int res) {
+    CHECK_EQ(res, kNumBytes);
+    CHECK(!sendDone);
+    sendDone = true;
+
+    if (recvDone) {
+      evbPtr->terminateLoopSoon();
+    }
+  };
+
+  folly::IoUringBackend::FileOpCallback recvCb = [&](int res) {
+    CHECK_EQ(res, kNumBytes);
+    CHECK(!recvDone);
+    recvDone = true;
+
+    CHECK_EQ(::memcmp(sendBuf.data(), recvBuf.data(), kNumBytes), 0);
+
+    if (sendDone) {
+      evbPtr->terminateLoopSoon();
+    }
+  };
+
+  struct msghdr sendMsg = {};
+  struct msghdr recvMsg = {};
+  struct iovec sendIov, recvIov;
+  sendIov.iov_base = sendBuf.data();
+  sendIov.iov_len = sendBuf.size();
+
+  recvIov.iov_base = recvBuf.data();
+  recvIov.iov_len = recvBuf.size();
+
+  recvAddr.getAddress(&addrStorage);
+
+  sendMsg.msg_iov = &sendIov;
+  sendMsg.msg_iovlen = 1;
+
+  sendMsg.msg_name = reinterpret_cast<void*>(&addrStorage);
+  sendMsg.msg_namelen = recvAddr.getActualSize();
+
+  sendMsg.msg_iov = &sendIov;
+  sendMsg.msg_iovlen = 1;
+
+  recvMsg.msg_iov = &recvIov;
+  recvMsg.msg_iovlen = 1;
+
+  ::memset(sendBuf.data(), 0xAB, sendBuf.size());
+  ::memset(recvBuf.data(), 0x0, recvBuf.size());
+
+  CHECK_NE(::memcmp(sendBuf.data(), recvBuf.data(), kNumBytes), 0);
+
+  backendPtr->queueRecvmsg(recvFd, &recvMsg, 0, std::move(recvCb));
+  backendPtr->queueSendmsg(sendFd, &sendMsg, 0, std::move(sendCb));
+
+  evbPtr->loopForever();
+
+  CHECK(sendDone && recvDone);
+
+  ::close(sendFd);
+  ::close(recvFd);
+}
+
 namespace folly {
 namespace test {
 static constexpr size_t kCapacity = 32;
@@ -927,28 +1205,113 @@ struct IoUringPollCQBackendProvider {
   }
 };
 
+// SQ/CQ polling
+struct IoUringPollSQCQBackendProvider {
+  static std::unique_ptr<folly::EventBaseBackendBase> getBackend() {
+    try {
+      folly::PollIoBackend::Options options;
+      options.setCapacity(kCapacity)
+          .setMaxSubmit(kMaxSubmit)
+          .setMaxGet(kMaxGet)
+          .setUseRegisteredFds(false)
+          .setFlags(
+              folly::PollIoBackend::Options::Flags::POLL_SQ |
+              folly::PollIoBackend::Options::Flags::POLL_CQ);
+      return std::make_unique<folly::IoUringBackend>(options);
+    } catch (const IoUringBackend::NotAvailable&) {
+      return nullptr;
+    }
+  }
+};
+
+REGISTER_TYPED_TEST_CASE_P(
+    EventBaseTest,
+    ReadEvent,
+    ReadPersist,
+    ReadImmediate,
+    WriteEvent,
+    WritePersist,
+    WriteImmediate,
+    ReadWrite,
+    WriteRead,
+    ReadWriteSimultaneous,
+    ReadWritePersist,
+    ReadPartial,
+    WritePartial,
+    DestroyingHandler,
+    RunAfterDelay,
+    RunAfterDelayDestruction,
+    BasicTimeouts,
+    ReuseTimeout,
+    RescheduleTimeout,
+    CancelTimeout,
+    DestroyingTimeout,
+    ScheduledFn,
+    ScheduledFnAt,
+    RunInThread,
+    RunInEventBaseThreadAndWait,
+    RunImmediatelyOrRunInEventBaseThreadAndWaitCross,
+    RunImmediatelyOrRunInEventBaseThreadAndWaitWithin,
+    RunImmediatelyOrRunInEventBaseThreadNotLooping,
+    RepeatedRunInLoop,
+    RunInLoopNoTimeMeasurement,
+    RunInLoopStopLoop,
+    messageAvailableException,
+    TryRunningAfterTerminate,
+    CancelRunInLoop,
+    LoopTermination,
+    CallbackOrderTest,
+    AlwaysEnqueueCallbackOrderTest,
+    IdleTime,
+    ThisLoop,
+    EventBaseThreadLoop,
+    EventBaseThreadName,
+    RunBeforeLoop,
+    RunBeforeLoopWait,
+    StopBeforeLoop,
+    RunCallbacksOnDestruction,
+    LoopKeepAlive,
+    LoopKeepAliveInLoop,
+    LoopKeepAliveWithLoopForever,
+    LoopKeepAliveShutdown,
+    LoopKeepAliveAtomic,
+    LoopKeepAliveCast);
+
+REGISTER_TYPED_TEST_CASE_P(
+    EventBaseTest1,
+    DrivableExecutorTest,
+    IOExecutorTest,
+    RequestContextTest,
+    CancelLoopCallbackRequestContextTest,
+    TestStarvation,
+    RunOnDestructionBasic,
+    RunOnDestructionCancelled,
+    RunOnDestructionAfterHandleDestroyed,
+    RunOnDestructionAddCallbackWithinCallback,
+    InternalExternalCallbackOrderTest,
+    pidCheck,
+    EventBaseExecutionObserver);
+
 // Instantiate the non registered fd tests
 INSTANTIATE_TYPED_TEST_CASE_P(IoUring, EventBaseTest, IoUringBackendProvider);
 INSTANTIATE_TYPED_TEST_CASE_P(IoUring, EventBaseTest1, IoUringBackendProvider);
 
 // Instantiate the registered fd tests
 INSTANTIATE_TYPED_TEST_CASE_P(
-    IoUringRegFd,
-    EventBaseTest,
-    IoUringRegFdBackendProvider);
+    IoUringRegFd, EventBaseTest, IoUringRegFdBackendProvider);
 INSTANTIATE_TYPED_TEST_CASE_P(
-    IoUringRegFd,
-    EventBaseTest1,
-    IoUringRegFdBackendProvider);
+    IoUringRegFd, EventBaseTest1, IoUringRegFdBackendProvider);
 
 // Instantiate the poll CQ tests
 INSTANTIATE_TYPED_TEST_CASE_P(
-    IoUringPollCQ,
-    EventBaseTest,
-    IoUringPollCQBackendProvider);
+    IoUringPollCQ, EventBaseTest, IoUringPollCQBackendProvider);
 INSTANTIATE_TYPED_TEST_CASE_P(
-    IoUringPollCQ,
-    EventBaseTest1,
-    IoUringPollCQBackendProvider);
+    IoUringPollCQ, EventBaseTest1, IoUringPollCQBackendProvider);
+
+// Instantiate the poll SQ/CQ tests
+INSTANTIATE_TYPED_TEST_CASE_P(
+    IoUringPollSQCQ, EventBaseTest, IoUringPollCQBackendProvider);
+INSTANTIATE_TYPED_TEST_CASE_P(
+    IoUringPollSQCQ, EventBaseTest1, IoUringPollCQBackendProvider);
 } // namespace test
 } // namespace folly

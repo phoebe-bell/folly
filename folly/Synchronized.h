@@ -34,6 +34,7 @@
 #include <folly/Utility.h>
 #include <folly/container/Foreach.h>
 #include <folly/functional/ApplyTuple.h>
+
 #include <glog/logging.h>
 
 #include <array>
@@ -565,11 +566,12 @@ struct Synchronized : public SynchronizedBase<
       std::piecewise_construct_t,
       std::tuple<DatumArgs...> datumArgs,
       std::tuple<MutexArgs...> mutexArgs)
-      : Synchronized{std::piecewise_construct,
-                     std::move(datumArgs),
-                     std::move(mutexArgs),
-                     std::make_index_sequence<sizeof...(DatumArgs)>{},
-                     std::make_index_sequence<sizeof...(MutexArgs)>{}} {}
+      : Synchronized{
+            std::piecewise_construct,
+            std::move(datumArgs),
+            std::move(mutexArgs),
+            std::make_index_sequence<sizeof...(DatumArgs)>{},
+            std::make_index_sequence<sizeof...(MutexArgs)>{}} {}
 
   /**
    * Copy assignment operator; deprecated
@@ -896,10 +898,11 @@ auto makeSynchronizedLocker(
       Synchronized,
       LockFuncType,
       TryLockFuncType,
-      std::decay_t<Args>...>{synchronized,
-                             std::forward<LockFunc>(lockFunc),
-                             std::forward<TryLockFunc>(tryLockFunc),
-                             std::forward<Args>(args)...};
+      std::decay_t<Args>...>{
+      synchronized,
+      std::forward<LockFunc>(lockFunc),
+      std::forward<TryLockFunc>(tryLockFunc),
+      std::forward<Args>(args)...};
 }
 
 /**
@@ -1719,8 +1722,8 @@ template <class Sync1, class Sync2>
 std::pair<detail::LockedPtrType<Sync1>, detail::LockedPtrType<Sync2>>
 acquireLockedPair(Sync1& l1, Sync2& l2) {
   auto lockedPtrs = acquireLocked(l1, l2);
-  return {std::move(std::get<0>(lockedPtrs)),
-          std::move(std::get<1>(lockedPtrs))};
+  return {
+      std::move(std::get<0>(lockedPtrs)), std::move(std::get<1>(lockedPtrs))};
 }
 
 /************************************************************************
@@ -1778,7 +1781,7 @@ struct [[deprecated(
   FOLLY_MSVC_DISABLE_WARNING(4459) /* declaration hides global */         \
   FOLLY_GCC_DISABLE_NEW_SHADOW_WARNINGS                                   \
   if (bool SYNCHRONIZED_VAR(state) = false) {                             \
-    ::folly::detail::SYNCHRONIZED_macro_is_deprecated{};                  \
+    (void)::folly::detail::SYNCHRONIZED_macro_is_deprecated{};            \
   } else                                                                  \
     for (auto SYNCHRONIZED_VAR(lockedPtr) =                               \
              (FB_VA_GLUE(FB_ARG_2_OR_1, (__VA_ARGS__))).contextualLock(); \
@@ -1813,7 +1816,7 @@ struct [[deprecated(
  */
 #define SYNCHRONIZED_DUAL(n1, e1, n2, e2)                                      \
   if (bool SYNCHRONIZED_VAR(state) = false) {                                  \
-    ::folly::detail::SYNCHRONIZED_macro_is_deprecated{};                       \
+    (void)::folly::detail::SYNCHRONIZED_macro_is_deprecated{};                 \
   } else                                                                       \
     for (auto SYNCHRONIZED_VAR(ptrs) = acquireLockedPair(e1, e2);              \
          !SYNCHRONIZED_VAR(state);                                             \

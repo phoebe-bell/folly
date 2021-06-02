@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+#include <folly/logging/AsyncFileWriter.h>
+
 #include <thread>
 
 #include <folly/Conv.h>
@@ -27,7 +29,6 @@
 #include <folly/futures/Promise.h>
 #include <folly/init/Init.h>
 #include <folly/lang/SafeAssert.h>
-#include <folly/logging/AsyncFileWriter.h>
 #include <folly/logging/Init.h>
 #include <folly/logging/LoggerDB.h>
 #include <folly/logging/xlog.h>
@@ -116,9 +117,7 @@ namespace {
 static std::vector<std::string>* internalWarnings;
 
 void handleLoggingError(
-    StringPiece /* file */,
-    int /* lineNumber */,
-    std::string&& msg) {
+    StringPiece /* file */, int /* lineNumber */, std::string&& msg) {
   internalWarnings->emplace_back(std::move(msg));
 }
 } // namespace
@@ -272,8 +271,7 @@ static constexpr StringPiece kMsgSuffix{
 class ReadStats {
  public:
   ReadStats()
-      : deadline_{steady_clock::now() +
-                  milliseconds{FLAGS_async_discard_timeout_msec}},
+      : deadline_{steady_clock::now() + milliseconds{FLAGS_async_discard_timeout_msec}},
         readSleepUS_{static_cast<uint64_t>(
             std::min(int64_t{0}, FLAGS_async_discard_read_sleep_usec))} {}
 
@@ -546,10 +544,7 @@ void readThread(folly::File&& file, ReadStats* stats) {
  * writeThread() writes a series of messages to the AsyncFileWriter
  */
 void writeThread(
-    AsyncFileWriter* writer,
-    size_t id,
-    uint32_t flags,
-    ReadStats* readStats) {
+    AsyncFileWriter* writer, size_t id, uint32_t flags, ReadStats* readStats) {
   size_t msgID = 0;
   while (true) {
     ++msgID;

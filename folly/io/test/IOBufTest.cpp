@@ -15,12 +15,12 @@
  */
 
 #include <folly/io/IOBuf.h>
-#include <folly/io/TypedIOBuf.h>
 
 #include <cstddef>
 #include <random>
 
 #include <folly/Range.h>
+#include <folly/io/TypedIOBuf.h>
 #include <folly/memory/Malloc.h>
 #include <folly/portability/GTest.h>
 
@@ -73,10 +73,8 @@ TEST(IOBuf, Simple) {
 }
 
 void testAllocSize(uint32_t requestedCapacity) {
-  auto expectedSize = IOBuf::goodSize(requestedCapacity);
   unique_ptr<IOBuf> iobuf(IOBuf::create(requestedCapacity));
   EXPECT_GE(iobuf->capacity(), requestedCapacity);
-  EXPECT_EQ(iobuf->capacity(), expectedSize);
 }
 
 TEST(IOBuf, AllocSizes) {
@@ -169,6 +167,21 @@ TEST(IOBuf, TakeOwnership) {
     fbstring str = iobuf->moveToFbString();
     EXPECT_EQ(str, "A");
   }
+
+  deleteCount = 0;
+  uint32_t size6 = 100;
+  uint8_t* buf6 = new uint8_t[size6];
+  uint32_t offset6 = 48;
+  uint32_t length6 = 48;
+  unique_ptr<IOBuf> iobuf6(IOBuf::takeOwnership(
+      buf6, size6, offset6, length6, deleteArrayBuffer, &deleteCount));
+  EXPECT_EQ(buf6 + offset6, iobuf6->data());
+  EXPECT_EQ(length6, iobuf6->length());
+  EXPECT_EQ(buf6, iobuf6->buffer());
+  EXPECT_EQ(size6, iobuf6->capacity());
+  EXPECT_EQ(0, deleteCount);
+  iobuf6.reset();
+  EXPECT_EQ(1, deleteCount);
 }
 
 TEST(IOBuf, GetUserData) {
@@ -246,6 +259,17 @@ TEST(IOBuf, WrapBuffer) {
   EXPECT_EQ(size4, iobuf4.length());
   EXPECT_EQ(buf4.get(), iobuf4.buffer());
   EXPECT_EQ(size4, iobuf4.capacity());
+
+  if (folly::kIsSanitizeAddress) {
+    const uint32_t size5 = 100;
+    uint8_t buf5[size5];
+    EXPECT_DEATH(IOBuf::wrapBuffer(buf5, size5 + 1), "asan_region_is_poisoned");
+
+    const uint32_t size6 = 100;
+    std::vector<uint8_t> buf6(size6);
+    EXPECT_DEATH(
+        IOBuf::wrapBuffer(buf6.data(), size6 + 1), "asan_region_is_poisoned");
+  }
 }
 
 TEST(IOBuf, CreateCombined) {
@@ -981,7 +1005,7 @@ TEST_P(MoveToFbStringTest, Simple) {
   }
 }
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     MoveToFbString,
     MoveToFbStringTest,
     ::testing::Combine(
@@ -989,10 +1013,7 @@ INSTANTIATE_TEST_CASE_P(
         ::testing::Values(1, 2, 10), // element count
         ::testing::Bool(), // shared
         ::testing::Values(
-            CREATE,
-            TAKE_OWNERSHIP_MALLOC,
-            TAKE_OWNERSHIP_CUSTOM,
-            USER_OWNED)));
+            CREATE, TAKE_OWNERSHIP_MALLOC, TAKE_OWNERSHIP_CUSTOM, USER_OWNED)));
 
 TEST(IOBuf, getIov) {
   uint32_t fillSeed = 0xdeadbeef;

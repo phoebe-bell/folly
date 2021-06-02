@@ -18,12 +18,7 @@
 #define __STDC_FORMAT_MACROS 1
 #endif
 
-#include <boost/lexical_cast.hpp>
-#include <glog/logging.h>
-
 #include <folly/Conv.h>
-#include <folly/container/Foreach.h>
-#include <folly/portability/GTest.h>
 
 #include <algorithm>
 #include <cinttypes>
@@ -32,56 +27,14 @@
 #include <stdexcept>
 #include <tuple>
 
+#include <boost/lexical_cast.hpp>
+#include <glog/logging.h>
+
+#include <folly/container/Foreach.h>
+#include <folly/portability/GTest.h>
+
 using namespace std;
 using namespace folly;
-
-TEST(Conv, digits10) {
-  char buffer[100];
-  uint64_t power;
-
-  // first, some basic sniff tests
-  EXPECT_EQ(1, digits10(0));
-  EXPECT_EQ(1, digits10(1));
-  EXPECT_EQ(1, digits10(9));
-  EXPECT_EQ(2, digits10(10));
-  EXPECT_EQ(2, digits10(99));
-  EXPECT_EQ(3, digits10(100));
-  EXPECT_EQ(3, digits10(999));
-  EXPECT_EQ(4, digits10(1000));
-  EXPECT_EQ(4, digits10(9999));
-  EXPECT_EQ(20, digits10(18446744073709551615ULL));
-
-  // try the first X nonnegatives.
-  // Covers some more cases of 2^p, 10^p
-  for (uint64_t i = 0; i < 100000; i++) {
-    snprintf(buffer, sizeof(buffer), "%" PRIu64, i);
-    EXPECT_EQ(strlen(buffer), digits10(i));
-  }
-
-  // try powers of 2
-  power = 1;
-  for (int p = 0; p < 64; p++) {
-    snprintf(buffer, sizeof(buffer), "%" PRIu64, power);
-    EXPECT_EQ(strlen(buffer), digits10(power));
-    snprintf(buffer, sizeof(buffer), "%" PRIu64, power - 1);
-    EXPECT_EQ(strlen(buffer), digits10(power - 1));
-    snprintf(buffer, sizeof(buffer), "%" PRIu64, power + 1);
-    EXPECT_EQ(strlen(buffer), digits10(power + 1));
-    power *= 2;
-  }
-
-  // try powers of 10
-  power = 1;
-  for (int p = 0; p < 20; p++) {
-    snprintf(buffer, sizeof(buffer), "%" PRIu64, power);
-    EXPECT_EQ(strlen(buffer), digits10(power));
-    snprintf(buffer, sizeof(buffer), "%" PRIu64, power - 1);
-    EXPECT_EQ(strlen(buffer), digits10(power - 1));
-    snprintf(buffer, sizeof(buffer), "%" PRIu64, power + 1);
-    EXPECT_EQ(strlen(buffer), digits10(power + 1));
-    power *= 10;
-  }
-}
 
 // Test to<T>(T)
 TEST(Conv, Type2Type) {
@@ -156,8 +109,8 @@ void testIntegral2String() {}
 
 template <class String, class Int, class... Ints>
 void testIntegral2String() {
-  typedef typename make_unsigned<Int>::type Uint;
-  typedef typename make_signed<Int>::type Sint;
+  typedef folly::make_unsigned_t<Int> Uint;
+  typedef folly::make_signed_t<Int> Sint;
 
   Uint value = 123;
   EXPECT_EQ(to<String>(value), "123");
@@ -243,8 +196,8 @@ void testString2Integral() {}
 
 template <class String, class Int, class... Ints>
 void testString2Integral() {
-  typedef typename make_unsigned<Int>::type Uint;
-  typedef typename make_signed<Int>::type Sint;
+  typedef folly::make_unsigned_t<Int> Uint;
+  typedef folly::make_signed_t<Int> Sint;
 
   // Unsigned numbers small enough to fit in a signed type
   static const String strings[] = {
@@ -427,6 +380,7 @@ void testString2Integral() {
 TEST(Conv, String2Integral) {
   testString2Integral<const char*, int8_t, int16_t, int32_t, int64_t>();
   testString2Integral<std::string, int8_t, int16_t, int32_t, int64_t>();
+  testString2Integral<std::string_view, int8_t, int16_t, int32_t, int64_t>();
   testString2Integral<fbstring, int8_t, int16_t, int32_t, int64_t>();
 
   // Testing the behavior of the StringPiece* API
@@ -547,10 +501,10 @@ TEST(Conv, VariadicToDelim) {
 
 template <class String>
 void testDoubleToString() {
-  EXPECT_EQ(to<string>(0.0), "0");
-  EXPECT_EQ(to<string>(0.5), "0.5");
-  EXPECT_EQ(to<string>(10.25), "10.25");
-  EXPECT_EQ(to<string>(1.123e10), "11230000000");
+  EXPECT_EQ(to<String>(0.0), "0");
+  EXPECT_EQ(to<String>(0.5), "0.5");
+  EXPECT_EQ(to<String>(10.25), "10.25");
+  EXPECT_EQ(to<String>(1.123e10), "11230000000");
 }
 
 TEST(Conv, DoubleToString) {
@@ -902,6 +856,25 @@ TEST(Conv, FloatToBool) {
   EXPECT_EQ(to<bool>(-std::numeric_limits<double>::infinity()), true);
 }
 
+TEST(Conv, RoundTripFloatToStringToFloat) {
+  const std::array<float, 6> kTests{{
+      3.14159f,
+      12345678.f,
+      numeric_limits<float>::lowest(),
+      numeric_limits<float>::max(),
+      numeric_limits<float>::infinity(),
+      -numeric_limits<float>::infinity(),
+  }};
+
+  for (const auto& test : kTests) {
+    SCOPED_TRACE(to<string>(test));
+    EXPECT_EQ(to<float>(to<string>(test)), test);
+  }
+
+  EXPECT_TRUE(
+      std::isnan(to<float>(to<string>(numeric_limits<float>::quiet_NaN()))));
+}
+
 namespace {
 
 template <typename F>
@@ -972,6 +945,13 @@ TEST(Conv, ConversionErrorStrToFloat) {
   EXPECT_CONV_ERROR_STR(float, "\t", EMPTY_INPUT_STRING);
   EXPECT_CONV_ERROR_STR(float, "  junk", STRING_TO_FLOAT_ERROR);
   EXPECT_CONV_ERROR(to<float>("  1bla"), NON_WHITESPACE_AFTER_END, "bla");
+
+  EXPECT_CONV_ERROR_STR_NOVAL(double, StringPiece(), EMPTY_INPUT_STRING);
+  EXPECT_CONV_ERROR_STR_NOVAL(double, "", EMPTY_INPUT_STRING);
+  EXPECT_CONV_ERROR_STR(double, "  ", EMPTY_INPUT_STRING);
+  EXPECT_CONV_ERROR_STR(double, "\t", EMPTY_INPUT_STRING);
+  EXPECT_CONV_ERROR_STR(double, "  junk", STRING_TO_FLOAT_ERROR);
+  EXPECT_CONV_ERROR(to<double>("  1bla"), NON_WHITESPACE_AFTER_END, "bla");
 }
 
 TEST(Conv, ConversionErrorStrToInt) {
@@ -1196,28 +1176,77 @@ TEST(Conv, TryStringToEnum) {
   EXPECT_EQ(static_cast<A>(50), rv3.value());
 }
 
-TEST(Conv, TryStringToFloat) {
-  auto rv1 = folly::tryTo<float>("");
+template <class String>
+void tryStringToFloat() {
+  auto rv1 = folly::tryTo<float>(String(""));
   EXPECT_FALSE(rv1.hasValue());
-  auto rv2 = folly::tryTo<float>("3.14");
+  auto rv2 = folly::tryTo<float>(String("3.14"));
   EXPECT_TRUE(rv2.hasValue());
   EXPECT_NEAR(rv2.value(), 3.14, 1e-5);
   // No trailing '\0' to expose 1-byte buffer over-read
   char x = '-';
   auto rv3 = folly::tryTo<float>(folly::StringPiece(&x, 1));
   EXPECT_FALSE(rv3.hasValue());
+
+  // Exact conversion at numeric limits (8+ decimal digits)
+  auto rv4 = folly::tryTo<float>(String("-3.4028235E38"));
+  EXPECT_TRUE(rv4.hasValue());
+  EXPECT_EQ(rv4.value(), numeric_limits<float>::lowest());
+  auto rv5 = folly::tryTo<float>(String("3.40282346E38"));
+  EXPECT_TRUE(rv5.hasValue());
+  EXPECT_EQ(rv5.value(), numeric_limits<float>::max());
+
+  // Beyond numeric limits
+  // numeric_limits<float>::lowest() ~= -3.402823466E38
+  const std::array<String, 4> kOversizedInputs{{
+      "-3.403E38",
+      "-3.4029E38",
+      "-3.402824E38",
+      "-3.4028236E38",
+  }};
+  for (const auto& input : kOversizedInputs) {
+    auto rv = folly::tryTo<float>(input);
+    EXPECT_EQ(rv.value(), -numeric_limits<float>::infinity()) << input;
+  }
+
+  // NaN
+  const std::array<String, 6> kNanInputs{{
+      "nan",
+      "NaN",
+      "NAN",
+      "-nan",
+      "-NaN",
+      "-NAN",
+  }};
+  for (const auto& input : kNanInputs) {
+    auto rv = folly::tryTo<float>(input);
+    EXPECT_TRUE(std::isnan(rv.value())) << input;
+  }
 }
 
-TEST(Conv, TryStringToDouble) {
-  auto rv1 = folly::tryTo<double>("");
+TEST(Conv, TryStringToFloat) {
+  tryStringToFloat<std::string>();
+  tryStringToFloat<std::string_view>();
+  tryStringToFloat<folly::StringPiece>();
+}
+
+template <class String>
+void tryToDouble() {
+  auto rv1 = folly::tryTo<double>(String(""));
   EXPECT_FALSE(rv1.hasValue());
-  auto rv2 = folly::tryTo<double>("3.14");
+  auto rv2 = folly::tryTo<double>(String("3.14"));
   EXPECT_TRUE(rv2.hasValue());
   EXPECT_NEAR(rv2.value(), 3.14, 1e-10);
   // No trailing '\0' to expose 1-byte buffer over-read
   char y = '\t';
   auto rv4 = folly::tryTo<double>(folly::StringPiece(&y, 1));
   EXPECT_FALSE(rv4.hasValue());
+}
+
+TEST(Conv, TryStringToDouble) {
+  tryToDouble<std::string>();
+  tryToDouble<std::string_view>();
+  tryToDouble<folly::StringPiece>();
 }
 
 TEST(Conv, TryIntToInt) {
@@ -1252,60 +1281,28 @@ TEST(Conv, TryIntToFloat) {
   EXPECT_EQ(rv2.value(), 1000.0f);
 }
 
-TEST(Conv, TryPtrPairToInt) {
-  StringPiece sp1("1000000000000000000000000000000");
+template <class String>
+void tryTo() {
+  String sp1("1000000000000000000000000000000");
   auto rv1 = folly::tryTo<int>(sp1.begin(), sp1.end());
   EXPECT_FALSE(rv1.hasValue());
-  StringPiece sp2("4711");
+  String sp2("4711");
   auto rv2 = folly::tryTo<int>(sp2.begin(), sp2.end());
   EXPECT_TRUE(rv2.hasValue());
   EXPECT_EQ(rv2.value(), 4711);
-  StringPiece sp3("-4711");
+  String sp3("-4711");
   auto rv3 = folly::tryTo<int>(sp3.begin(), sp3.end());
   EXPECT_TRUE(rv3.hasValue());
   EXPECT_EQ(rv3.value(), -4711);
-  StringPiece sp4("4711");
+  String sp4("4711");
   auto rv4 = folly::tryTo<uint16_t>(sp4.begin(), sp4.end());
   EXPECT_TRUE(rv4.hasValue());
   EXPECT_EQ(rv4.value(), 4711);
 }
 
-TEST(Conv, NewUint64ToString) {
-  char buf[21];
-
-#define THE_GREAT_EXPECTATIONS(n, len)                \
-  do {                                                \
-    EXPECT_EQ((len), uint64ToBufferUnsafe((n), buf)); \
-    buf[(len)] = 0;                                   \
-    auto s = string(#n);                              \
-    s = s.substr(0, s.size() - 2);                    \
-    EXPECT_EQ(s, buf);                                \
-  } while (0)
-
-  THE_GREAT_EXPECTATIONS(0UL, 1);
-  THE_GREAT_EXPECTATIONS(1UL, 1);
-  THE_GREAT_EXPECTATIONS(12UL, 2);
-  THE_GREAT_EXPECTATIONS(123UL, 3);
-  THE_GREAT_EXPECTATIONS(1234UL, 4);
-  THE_GREAT_EXPECTATIONS(12345UL, 5);
-  THE_GREAT_EXPECTATIONS(123456UL, 6);
-  THE_GREAT_EXPECTATIONS(1234567UL, 7);
-  THE_GREAT_EXPECTATIONS(12345678UL, 8);
-  THE_GREAT_EXPECTATIONS(123456789UL, 9);
-  THE_GREAT_EXPECTATIONS(1234567890UL, 10);
-  THE_GREAT_EXPECTATIONS(12345678901UL, 11);
-  THE_GREAT_EXPECTATIONS(123456789012UL, 12);
-  THE_GREAT_EXPECTATIONS(1234567890123UL, 13);
-  THE_GREAT_EXPECTATIONS(12345678901234UL, 14);
-  THE_GREAT_EXPECTATIONS(123456789012345UL, 15);
-  THE_GREAT_EXPECTATIONS(1234567890123456UL, 16);
-  THE_GREAT_EXPECTATIONS(12345678901234567UL, 17);
-  THE_GREAT_EXPECTATIONS(123456789012345678UL, 18);
-  THE_GREAT_EXPECTATIONS(1234567890123456789UL, 19);
-  THE_GREAT_EXPECTATIONS(18446744073709551614UL, 20);
-  THE_GREAT_EXPECTATIONS(18446744073709551615UL, 20);
-
-#undef THE_GREAT_EXPECTATIONS
+TEST(Conv, TryPtrPairToInt) {
+  tryTo<string_view>();
+  tryTo<StringPiece>();
 }
 
 TEST(Conv, allocate_size) {
@@ -1334,8 +1331,7 @@ struct Dimensions {
 };
 
 Expected<StringPiece, ConversionCode> parseTo(
-    folly::StringPiece in,
-    Dimensions& out) {
+    folly::StringPiece in, Dimensions& out) {
   return parseTo(in, out.w)
       .then([](StringPiece sp) { return sp.removePrefix("x"), sp; })
       .then([&](StringPiece sp) { return parseTo(sp, out.h); });

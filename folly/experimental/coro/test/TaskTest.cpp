@@ -16,8 +16,6 @@
 
 #include <folly/Portability.h>
 
-#if FOLLY_HAS_COROUTINES
-
 #include <folly/executors/InlineExecutor.h>
 #include <folly/executors/ManualExecutor.h>
 #include <folly/experimental/coro/Baton.h>
@@ -31,6 +29,8 @@
 #include <folly/portability/GTest.h>
 
 #include <type_traits>
+
+#if FOLLY_HAS_COROUTINES
 
 using namespace folly;
 
@@ -62,8 +62,9 @@ static_assert(
     "");
 static_assert(
     std::is_same<
-        folly::coro::semi_await_result_t<decltype(
-            std::declval<folly::coro::SharedMutex&>().co_scoped_lock_shared())>,
+        folly::coro::semi_await_result_t<
+            decltype(std::declval<folly::coro::SharedMutex&>()
+                         .co_scoped_lock_shared())>,
         folly::coro::SharedLock<folly::coro::SharedMutex>>::value,
     "");
 
@@ -362,9 +363,10 @@ TEST_F(TaskTest, FutureRoundtrip) {
       std::runtime_error);
 }
 
-// NOTE: This function is unused.
+namespace {
+
 // We just want to make sure this compiles without errors or warnings.
-folly::coro::Task<void>
+FOLLY_MAYBE_UNUSED folly::coro::Task<void>
 checkAwaitingFutureOfUnitDoesntWarnAboutDiscardedResult() {
   co_await folly::makeSemiFuture();
 
@@ -372,11 +374,13 @@ checkAwaitingFutureOfUnitDoesntWarnAboutDiscardedResult() {
   co_await folly::futures::sleep(1ms);
 }
 
-folly::coro::Task<int&> returnIntRef(int& value) {
-  co_return value;
-}
+} // namespace
 
 TEST_F(TaskTest, TaskOfLvalueReference) {
+  auto returnIntRef = [](int& value) -> folly::coro::Task<int&> {
+    co_return value;
+  };
+
   int value = 123;
   auto&& result = folly::coro::blockingWait(returnIntRef(value));
   static_assert(std::is_same_v<decltype(result), int&>);
@@ -385,6 +389,10 @@ TEST_F(TaskTest, TaskOfLvalueReference) {
 
 TEST_F(TaskTest, TaskOfLvalueReferenceAsTry) {
   folly::coro::blockingWait([]() -> folly::coro::Task<void> {
+    auto returnIntRef = [](int& value) -> folly::coro::Task<int&> {
+      co_return value;
+    };
+
     int value = 123;
     auto&& result = co_await co_awaitTry(returnIntRef(value));
     CHECK(result.hasValue());
@@ -410,13 +418,12 @@ TEST_F(TaskTest, CancellationPropagation) {
 
           // The cancellation token should implicitly propagate into the
           //
-          co_await[&]()->folly::coro::Task<void> {
+          co_await [&]() -> folly::coro::Task<void> {
             auto token3 = co_await folly::coro::co_current_cancellation_token;
             CHECK(token3 == token2);
             cancelSource.requestCancellation();
             CHECK(token3.isCancellationRequested());
-          }
-          ();
+          }();
           CHECK(token2.isCancellationRequested());
         }());
   }());
@@ -494,6 +501,12 @@ TEST_F(TaskTest, YieldTry) {
           co_await co_awaitTry(std::move(innerTaskInt)));
     }());
     EXPECT_TRUE(retInt.hasValue());
+
+    EXPECT_THROW(
+        co_await [&]() -> folly::coro::Task<int> {
+          co_yield folly::coro::co_result(folly::Try<int>());
+        }(),
+        UsingUninitializedTry);
   }());
 }
 
@@ -584,6 +597,37 @@ TEST_F(TaskTest, Moved) {
         }()),
         "task\\.coro_");
   }
+}
+
+TEST_F(TaskTest, SafePoint) {
+  folly::coro::blockingWait([]() -> folly::coro::Task<void> {
+    enum class step_type {
+      init,
+      before_continue_sp,
+      after_continue_sp,
+      before_cancel_sp,
+      after_cancel_sp,
+    };
+    step_type step = step_type::init;
+
+    folly::CancellationSource cancelSrc;
+    auto makeTask = [&]() -> folly::coro::Task<void> {
+      step = step_type::before_continue_sp;
+      co_await folly::coro::co_safe_point;
+      step = step_type::after_continue_sp;
+
+      cancelSrc.requestCancellation();
+
+      step = step_type::before_cancel_sp;
+      co_await folly::coro::co_safe_point;
+      step = step_type::after_cancel_sp;
+    };
+
+    auto result = co_await folly::coro::co_awaitTry( //
+        folly::coro::co_withCancellation(cancelSrc.getToken(), makeTask()));
+    EXPECT_THROW(result.value(), folly::OperationCancelled);
+    EXPECT_EQ(step_type::before_cancel_sp, step);
+  }());
 }
 
 #endif

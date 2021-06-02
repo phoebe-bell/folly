@@ -13,6 +13,7 @@ from .builder import (
     Boost,
     CargoBuilder,
     CMakeBuilder,
+    BistroBuilder,
     Iproute2Builder,
     MakeBuilder,
     NinjaBootstrap,
@@ -329,11 +330,11 @@ class ManifestParser(object):
                     hasher.update(value.encode("utf-8"))
 
     def is_first_party_project(self):
-        """ returns true if this is an FB first-party project """
+        """returns true if this is an FB first-party project"""
         return self.shipit_project is not None
 
     def get_required_system_packages(self, ctx):
-        """ Returns dictionary of packager system -> list of packages """
+        """Returns dictionary of packager system -> list of packages"""
         return {
             "rpm": self.get_section_as_args("rpms", ctx),
             "deb": self.get_section_as_args("debs", ctx),
@@ -420,6 +421,7 @@ class ManifestParser(object):
         ctx,
         loader,
         final_install_prefix=None,
+        extra_cmake_defines=None,
     ):
         builder = self.get("build", "builder", ctx=ctx)
         if not builder:
@@ -461,6 +463,16 @@ class ManifestParser(object):
             args = self.get_section_as_args("b2.args", ctx)
             return Boost(build_options, ctx, self, src_dir, build_dir, inst_dir, args)
 
+        if builder == "bistro":
+            return BistroBuilder(
+                build_options,
+                ctx,
+                self,
+                src_dir,
+                build_dir,
+                inst_dir,
+            )
+
         if builder == "cmake":
             defines = self.get_section_as_dict("cmake.defines", ctx)
             return CMakeBuilder(
@@ -472,6 +484,7 @@ class ManifestParser(object):
                 inst_dir,
                 defines,
                 final_install_prefix,
+                extra_cmake_defines,
             )
 
         if builder == "python-wheel":

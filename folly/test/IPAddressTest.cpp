@@ -14,12 +14,14 @@
  * limitations under the License.
  */
 
+#include <folly/IPAddress.h>
+
 #include <sys/types.h>
 
 #include <string>
 
-#include <folly/Format.h>
-#include <folly/IPAddress.h>
+#include <fmt/core.h>
+
 #include <folly/MacAddress.h>
 #include <folly/String.h>
 #include <folly/container/BitIterator.h>
@@ -40,9 +42,7 @@ struct AddressData {
   uint8_t version;
 
   AddressData(
-      const std::string& address_,
-      const ByteVector& bytes_,
-      uint8_t version_)
+      const std::string& address_, const ByteVector& bytes_, uint8_t version_)
       : address(address_), bytes(bytes_), version(version_) {}
   AddressData(const std::string& address_, uint8_t version_)
       : address(address_), bytes(), version(version_) {}
@@ -660,7 +660,7 @@ TEST(IPaddress, toInverseArpaName) {
   EXPECT_EQ("1.0.0.10.in-addr.arpa", addr_ipv4.toInverseArpaName());
   IPAddressV6 addr_ipv6("2620:0000:1cfe:face:b00c:0000:0000:0003");
   EXPECT_EQ(
-      sformat(
+      fmt::format(
           "{}.ip6.arpa",
           "3.0.0.0.0.0.0.0.0.0.0.0.c.0.0.b.e.c.a.f.e.f.c.1.0.0.0.0.0.2.6.2"),
       addr_ipv6.toInverseArpaName());
@@ -672,7 +672,7 @@ TEST(IPaddress, fromInverseArpaName) {
       IPAddressV4::fromInverseArpaName("1.0.0.10.in-addr.arpa"));
   EXPECT_EQ(
       IPAddressV6("2620:0000:1cfe:face:b00c:0000:0000:0003"),
-      IPAddressV6::fromInverseArpaName(sformat(
+      IPAddressV6::fromInverseArpaName(fmt::format(
           "{}.ip6.arpa",
           "3.0.0.0.0.0.0.0.0.0.0.0.c.0.0.b.e.c.a.f.e.f.c.1.0.0.0.0.0.2.6.2")));
 }
@@ -1444,9 +1444,7 @@ static vector<AddressFlags> flagProvider = {
     AddressFlags("224.0.0.0", 4, IS_NONROUTABLE),
     // v4 link local broadcast
     AddressFlags(
-        "255.255.255.255",
-        4,
-        IS_NONROUTABLE | IS_LINK_LOCAL_BROADCAST),
+        "255.255.255.255", 4, IS_NONROUTABLE | IS_LINK_LOCAL_BROADCAST),
 
     // non routable v6
     AddressFlags("1999::1", 6, IS_NONROUTABLE),
@@ -1535,43 +1533,33 @@ static const vector<MaskBoundaryData> maskBoundaryProvider = {
     MaskBoundaryData("2620:0:1cfe:face:b00c::1", 48, "2620:0:1cfc::", false),
 };
 
-INSTANTIATE_TEST_CASE_P(
-    IPAddress,
-    IPAddressTest,
-    ::testing::ValuesIn(validAddressProvider));
-INSTANTIATE_TEST_CASE_P(
-    IPAddress,
-    IPAddressFlagTest,
-    ::testing::ValuesIn(flagProvider));
-INSTANTIATE_TEST_CASE_P(
-    IPAddress,
-    IPAddressMappedTest,
-    ::testing::ValuesIn(mapProvider));
-INSTANTIATE_TEST_CASE_P(
-    IPAddress,
-    IPAddressCtorTest,
-    ::testing::ValuesIn(invalidAddressProvider));
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
+    IPAddress, IPAddressTest, ::testing::ValuesIn(validAddressProvider));
+INSTANTIATE_TEST_SUITE_P(
+    IPAddress, IPAddressFlagTest, ::testing::ValuesIn(flagProvider));
+INSTANTIATE_TEST_SUITE_P(
+    IPAddress, IPAddressMappedTest, ::testing::ValuesIn(mapProvider));
+INSTANTIATE_TEST_SUITE_P(
+    IPAddress, IPAddressCtorTest, ::testing::ValuesIn(invalidAddressProvider));
+INSTANTIATE_TEST_SUITE_P(
     IPAddress,
     IPAddressCtorBinaryTest,
     ::testing::ValuesIn(invalidBinaryProvider));
-INSTANTIATE_TEST_CASE_P(
-    IPAddress,
-    IPAddressMaskTest,
-    ::testing::ValuesIn(masksProvider));
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
+    IPAddress, IPAddressMaskTest, ::testing::ValuesIn(masksProvider));
+INSTANTIATE_TEST_SUITE_P(
     IPAddress,
     IPAddressMaskBoundaryTest,
     ::testing::ValuesIn(maskBoundaryProvider));
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     IPAddress,
     IPAddressByteAccessorTest,
     ::testing::ValuesIn(validAddressProvider));
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     IPAddress,
     IPAddressBitAccessorTest,
     ::testing::ValuesIn(validAddressProvider));
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     IPAddress,
     TryFromStringTest,
     ::testing::ValuesIn(TryFromStringTest::ipInOutProvider()));

@@ -32,6 +32,7 @@ using folly::AsyncUDPServerSocket;
 using folly::AsyncUDPSocket;
 using folly::EventBase;
 using folly::IOBuf;
+using namespace std::chrono_literals;
 using namespace testing;
 
 struct TestData {
@@ -308,7 +309,9 @@ class UDPClient : private AsyncUDPSocket::ReadCallback, private AsyncTimeout {
   }
 
   void sendPing() {
-    scheduleTimeout(5);
+    // this should ensure the test finishes
+    // even if the server does not reply
+    scheduleTimeout(5s);
     if (testData_.isMulti()) {
       writePing(testData_.getInBufs(), testData_.getGSOVec());
     } else {
@@ -322,8 +325,7 @@ class UDPClient : private AsyncUDPSocket::ReadCallback, private AsyncTimeout {
   }
 
   virtual void writePing(
-      const std::vector<std::unique_ptr<folly::IOBuf>>& vec,
-      const int* gso) {
+      const std::vector<std::unique_ptr<folly::IOBuf>>& vec, const int* gso) {
     socket_->writemGSO(
         folly::range(&server_, &server_ + 1), vec.data(), vec.size(), gso);
   }

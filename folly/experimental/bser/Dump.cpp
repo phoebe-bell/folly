@@ -36,8 +36,7 @@ serialization_opts::serialization_opts()
     : sort_keys(false), growth_increment(8192) {}
 
 static const dynamic* getTemplate(
-    const serialization_opts& opts,
-    dynamic const& dynArray) {
+    const serialization_opts& opts, dynamic const& dynArray) {
   if (!opts.templates.has_value()) {
     return nullptr;
   }
@@ -52,9 +51,10 @@ static const dynamic* getTemplate(
 static void bserEncodeInt(int64_t ival, QueueAppender& appender) {
   /* Return the smallest size int that can store the value */
   auto size =
-      ((ival == ((int8_t)ival))
-           ? 1
-           : (ival == ((int16_t)ival)) ? 2 : (ival == ((int32_t)ival)) ? 4 : 8);
+      ((ival == ((int8_t)ival))        ? 1
+           : (ival == ((int16_t)ival)) ? 2
+           : (ival == ((int32_t)ival)) ? 4
+                                       : 8);
 
   switch (size) {
     case 1:
@@ -189,8 +189,7 @@ static void bserEncode(
 }
 
 std::unique_ptr<folly::IOBuf> toBserIOBuf(
-    folly::dynamic const& dyn,
-    const serialization_opts& opts) {
+    folly::dynamic const& dyn, const serialization_opts& opts) {
   IOBufQueue q(IOBufQueue::cacheChainLength());
   uint8_t hdrbuf[sizeof(kMagic) + 1 + sizeof(int64_t)];
 

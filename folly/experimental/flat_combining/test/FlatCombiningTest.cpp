@@ -16,10 +16,11 @@
 
 #include <folly/experimental/flat_combining/test/FlatCombiningTestHelpers.h>
 
-#include <folly/portability/GTest.h>
-#include <glog/logging.h>
-
 #include <mutex>
+
+#include <folly/portability/GTest.h>
+
+#include <glog/logging.h>
 
 using namespace folly::test;
 
@@ -117,4 +118,4 @@ constexpr Params params[] = {
     {true, false, false, true, false}, // tc async
 };
 
-INSTANTIATE_TEST_CASE_P(Foo, FlatCombiningTest, ::testing::ValuesIn(params));
+INSTANTIATE_TEST_SUITE_P(Foo, FlatCombiningTest, ::testing::ValuesIn(params));

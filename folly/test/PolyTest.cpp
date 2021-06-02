@@ -16,13 +16,13 @@
 
 #include <folly/Poly.h>
 
+#include <array>
+
 #include <folly/Conv.h>
 #include <folly/CppAttributes.h>
 #include <folly/poly/Nullable.h>
 #include <folly/poly/Regular.h>
 #include <folly/portability/GTest.h>
-
-#include <array>
 
 using namespace folly;
 using namespace folly::poly;
@@ -728,8 +728,7 @@ struct IAddable {
   template <class Base>
   struct Interface : Base {
     friend PolySelf<Base, PolyDecay> operator+(
-        PolySelf<Base> const& a,
-        PolySelf<Base> const& b) {
+        PolySelf<Base> const& a, PolySelf<Base> const& b) {
       return folly::poly_call<0, IAddable>(a, b);
     }
   };

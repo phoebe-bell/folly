@@ -156,6 +156,12 @@ endif ()
 find_package(LibUnwind)
 list(APPEND FOLLY_LINK_LIBRARIES ${LIBUNWIND_LIBRARIES})
 list(APPEND FOLLY_INCLUDE_DIRECTORIES ${LIBUNWIND_INCLUDE_DIRS})
+if (LIBUNWIND_FOUND)
+  set(FOLLY_HAVE_LIBUNWIND ON)
+endif()
+if (CMAKE_SYSTEM_NAME MATCHES "FreeBSD")
+  list(APPEND FOLLY_LINK_LIBRARIES "execinfo")
+endif ()
 
 cmake_push_check_state()
 set(CMAKE_REQUIRED_DEFINITIONS -D_XOPEN_SOURCE)
@@ -168,7 +174,7 @@ find_package(Backtrace)
 
 set(FOLLY_HAVE_BACKTRACE ${Backtrace_FOUND})
 set(FOLLY_HAVE_DWARF ${LIBDWARF_FOUND})
-if (NOT WIN32)
+if (NOT WIN32 AND NOT APPLE)
   set(FOLLY_USE_SYMBOLIZER ON)
 endif()
 message(STATUS "Setting FOLLY_USE_SYMBOLIZER: ${FOLLY_USE_SYMBOLIZER}")
@@ -204,6 +210,56 @@ if(NOT FOLLY_CPP_ATOMIC_BUILTIN)
     )
   endif()
 endif()
+
+check_cxx_source_compiles("
+  #include <type_traits>
+  #if _GLIBCXX_RELEASE
+  int main() {}
+  #endif"
+  FOLLY_STDLIB_LIBSTDCXX
+)
+check_cxx_source_compiles("
+  #include <type_traits>
+  #if _GLIBCXX_RELEASE >= 9
+  int main() {}
+  #endif"
+  FOLLY_STDLIB_LIBSTDCXX_GE_9
+)
+check_cxx_source_compiles("
+  #include <type_traits>
+  #if _LIBCPP_VERSION
+  int main() {}
+  #endif"
+  FOLLY_STDLIB_LIBCXX
+)
+check_cxx_source_compiles("
+  #include <type_traits>
+  #if _LIBCPP_VERSION >= 9000
+  int main() {}
+  #endif"
+  FOLLY_STDLIB_LIBCXX_GE_9
+)
+check_cxx_source_compiles("
+  #include <type_traits>
+  #if _CPPLIB_VER
+  int main() {}
+  #endif"
+  FOLLY_STDLIB_LIBCPP
+)
+
+if (APPLE)
+  list (APPEND CMAKE_REQUIRED_LIBRARIES c++abi)
+  list (APPEND FOLLY_LINK_LIBRARIES c++abi)
+endif ()
+
+if (FOLLY_STDLIB_LIBSTDCXX AND NOT FOLLY_STDLIB_LIBSTDCXX_GE_9)
+  list (APPEND CMAKE_REQUIRED_LIBRARIES stdc++fs)
+  list (APPEND FOLLY_LINK_LIBRARIES stdc++fs)
+endif()
+if (FOLLY_STDLIB_LIBCXX AND NOT FOLLY_STDLIB_LIBCXX_GE_9)
+  list (APPEND CMAKE_REQUIRED_LIBRARIES c++fs)
+  list (APPEND FOLLY_LINK_LIBRARIES c++fs)
+endif ()
 
 option(
   FOLLY_LIBRARY_SANITIZE_ADDRESS

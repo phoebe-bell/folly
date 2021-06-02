@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
-#include <iostream>
-
-#include <folly/Overload.h>
 #include <folly/functional/ApplyTuple.h>
-#include <folly/portability/GTest.h>
 
 #include <array>
+#include <iostream>
 #include <memory>
 #include <utility>
+
+#include <folly/Overload.h>
+#include <folly/portability/GTest.h>
 
 namespace {
 
@@ -91,8 +91,7 @@ struct GuardObj : GuardObjBase {
 
 template <class F, class... Args>
 GuardObj<typename std::decay<F>::type, std::tuple<Args...>> guard(
-    F&& f,
-    Args&&... args) {
+    F&& f, Args&&... args) {
   return GuardObj<typename std::decay<F>::type, std::tuple<Args...>>(
       std::forward<F>(f), std::tuple<Args...>(std::forward<Args>(args)...));
 }
@@ -502,7 +501,7 @@ TEST(IsApplicableR, Basic) {
 
 TEST(IsNothrowApplicableR, Basic) {
   {
-    auto f = []() noexcept->int { return {}; };
+    auto f = []() noexcept -> int { return {}; };
     using F = decltype(f);
     EXPECT_TRUE((folly::is_nothrow_applicable_r_v<double, F, std::tuple<>>));
     EXPECT_FALSE(
